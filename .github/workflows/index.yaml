@@ -1,0 +1,97 @@
+name: terraform-azurerm-index
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Terraform AzureRM Provider version (e.g., v4.0.0). Leave empty to use latest.'
+        required: false
+        type: string
+  schedule:
+    - cron: '0 */6 * * *'
+
+permissions:
+  contents: write
+  pull-requests: read
+
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check Terraform AzureRM Provider version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            # Use manually provided version
+            latest="${{ github.event.inputs.version }}"
+            echo "Using manually provided version: $latest"
+          else
+            # Fetch latest version from repository
+            latest=$(gh api repos/hashicorp/terraform-provider-null/tags |\
+            jq -r '.[].name' | \
+            grep -E '^[vV]?[0-9]+\.[0-9]+\.[0-9]+$' | \
+            sort -V | \
+            tail -n1)
+            echo "Found latest version: $latest"
+          fi
+          echo VERSION=$latest >> $GITHUB_ENV
+  
+          # Check if current repo already has this tag
+          tag_exists=$(gh api repos/${{ github.repository }}/git/refs/tags/$latest --silent && echo "true" || echo "")
+          if [ -n "$tag_exists" ]; then
+            echo "Tag $latest already exists in this repository. Stopping workflow."
+            echo "TAG_EXISTS=true" >> $GITHUB_ENV
+            exit 0
+          fi
+
+      - name: Checkout code
+        if: ${{ env.TAG_EXISTS != 'true' }}
+        uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac #v4.0.0
+      
+      - name: Set up Go
+        if: ${{ env.TAG_EXISTS != 'true' }}
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 #v5.0.0
+        with:
+          go-version-file: 'go.mod'
+      
+      - name: Install gophon
+        if: ${{ env.TAG_EXISTS != 'true' }}
+        run: go install github.com/lonegunmanb/gophon@latest
+      
+      - name: Checkout terraform-provider-azurerm
+        if: ${{ env.TAG_EXISTS != 'true' }}
+        uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac #v4.0.0
+        with:
+          repository: hashicorp/terraform-provider-null
+          ref: ${{ env.VERSION }}
+          path: /tmp/terraform-provider-null
+      
+      - name: Clean previous index files
+        if: ${{ env.TAG_EXISTS != 'true' }}
+        run: rm -rf ./index
+      
+      - name: Generate gophon index
+        if: ${{ env.TAG_EXISTS != 'true' }}
+        run: |
+          WORKSPACE_DIR=$(pwd)
+          cd /tmp/terraform-provider-null
+          gophon -pkg=internal -base=github.com/hashicorp/terraform-provider-null -dest=$WORKSPACE_DIR/index
+      
+      - name: Commit and push index files
+        if: ${{ env.TAG_EXISTS != 'true' }}
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add ./index
+          git commit -m "Update index files for terraform-provider-azurerm ${{ env.VERSION }}"
+          git push origin main
+      - name: Create and push tag
+        if: ${{ env.TAG_EXISTS != 'true' }}
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git tag ${{ env.VERSION }}
+          git push origin ${{ env.VERSION }}
