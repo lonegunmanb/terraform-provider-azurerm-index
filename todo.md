@@ -490,11 +490,226 @@ This enhanced AST approach will **complement gophon** with more targeted indexin
 
 ### 🚧 Next Tasks (In Priority Order)
 
-#### 1. **JSON Output Generation & File Writing** (Next)
+#### 1. **Unified CRUD Method Extraction for Legacy Plugin SDK** (Next Priority)
+- [ ] **Problem**: Currently legacy plugin SDK resources only have `RegistrationMethod` set, while modern framework has all `xxxMethod` fields populated
+- [ ] **Goal**: Unify handling by analyzing legacy plugin registration method source code to extract CRUD operations
+- [ ] **Implementation Plan**:
+  - [ ] Create `ExtractLegacyResourceCRUDMethods()` function to parse `pluginsdk.Resource` return values
+  - [ ] Parse `Schema`, `CreateFunc`, `ReadFunc`, `UpdateFunc`, `DeleteFunc` fields from resource function bodies
+  - [ ] Handle both direct return and variable assignment patterns
+  - [ ] Add comprehensive tests for legacy resource CRUD extraction
+  - [ ] Update `GenerateIndividualResourceFiles()` to use extracted CRUD methods for legacy resources
+- [ ] **Expected Result**: Both legacy and modern resources will have complete method information in their JSON output
+
+#### 2. **Unified CRUD Method Extraction for Legacy Plugin SDK Data Sources** (Next)
+- [ ] Create `ExtractLegacyDataSourceMethods()` function to parse legacy data source functions
+- [ ] Parse `Schema`, `ReadFunc` fields from data source function bodies 
+- [ ] Update data source generation to include extracted methods
+
+#### 3. **JSON Output Generation & File Writing** (After CRUD extraction)
 - [ ] Add functions to generate individual JSON files for resources, data sources, and ephemeral resources
-- [ ] Create directory structure (resources/, datasources/, ephemeral/) for organized output
+- [ ] Create directory structure (resources/, datasources/) for organized output  
 - [ ] Implement file writing functionality for structured JSON indexes
 - [ ] Add tests for JSON generation and file output
+
+## Technical Implementation Plan: Legacy Plugin SDK CRUD Extraction
+
+### Current State vs Target State
+**Current**: Legacy plugin SDK resources only have `RegistrationMethod` populated:
+```json
+{
+  "terraform_type": "azurerm_key_vault",
+  "registration_method": "resourceKeyVault", 
+  "sdk_type": "legacy_pluginsdk",
+  "schema_method": "",      // Empty
+  "create_method": "",      // Empty  
+  "read_method": "",        // Empty
+  "update_method": "",      // Empty
+  "delete_method": ""       // Empty
+}
+```
+
+**Target**: Legacy plugin SDK resources have all CRUD methods populated like modern framework:
+```json
+{
+  "terraform_type": "azurerm_key_vault",
+  "registration_method": "resourceKeyVault",
+  "sdk_type": "legacy_pluginsdk", 
+  "schema_method": "keyVaultSchema",
+  "create_method": "keyVaultCreateFunc",
+  "read_method": "keyVaultReadFunc", 
+  "update_method": "keyVaultUpdateFunc",
+  "delete_method": "keyVaultDeleteFunc"
+}
+```
+
+### Legacy Plugin SDK Resource Structure Analysis
+Legacy plugin SDK resources return `*pluginsdk.Resource` structs like this:
+```go
+func resourceKeyVault() *pluginsdk.Resource {
+    return &pluginsdk.Resource{
+        CreateContext: keyVaultCreateFunc,
+        ReadContext:   keyVaultReadFunc,
+        UpdateContext: keyVaultUpdateFunc, 
+        DeleteContext: keyVaultDeleteFunc,
+        
+        Schema: map[string]*pluginsdk.Schema{
+            "name": {Type: pluginsdk.TypeString, Required: true},
+            // ... more schema fields
+        },
+        
+        Importer: &pluginsdk.ResourceImporter{
+            StateContext: keyVaultImporter,
+        },
+        
+        Timeouts: &pluginsdk.ResourceTimeout{
+            Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+            Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+            Update: pluginsdk.DefaultTimeout(30 * time.Minute), 
+            Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+        },
+    }
+}
+```
+
+### AST Parsing Strategy for Legacy Plugin SDK
+
+#### Phase 1: Function Body Analysis
+1. **Find Resource Function**: Scan the AST file for any function that returns `*pluginsdk.Resource`
+2. **Extract Return Statement**: Look for `return &pluginsdk.Resource{...}` or variable assignment patterns
+3. **Parse Composite Literal**: Extract field assignments from the struct literal
+
+#### Phase 2: CRUD Method Field Extraction  
+Extract function names/references from these fields:
+- `CreateContext` / `CreateFunc` → `create_method`
+- `ReadContext` / `ReadFunc` → `read_method` 
+- `UpdateContext` / `UpdateFunc` → `update_method`
+- `DeleteContext` / `DeleteFunc` → `delete_method`
+
+### Implementation Functions
+
+#### Core Function: `ExtractLegacyResourceCRUDMethods()`
+```go
+// LegacyResourceCRUDMethods represents CRUD methods extracted from legacy plugin SDK resources
+type LegacyResourceCRUDMethods struct {
+    CreateMethod string `json:"create_method,omitempty"`    // "keyVaultCreateFunc"
+    ReadMethod   string `json:"read_method,omitempty"`      // "keyVaultReadFunc"
+    UpdateMethod string `json:"update_method,omitempty"`    // "keyVaultUpdateFunc"
+    DeleteMethod string `json:"delete_method,omitempty"`    // "keyVaultDeleteFunc"
+}
+
+// ExtractLegacyResourceCRUDMethods analyzes a legacy plugin SDK resource function 
+// and extracts CRUD method names from the returned pluginsdk.Resource struct
+// The input ast.File should contain the registration function's source code
+// It will find any function that returns *pluginsdk.Resource and parse its CRUD methods
+func ExtractLegacyResourceCRUDMethods(node *ast.File) (*LegacyResourceCRUDMethods, error)
+```
+
+#### Supporting Functions:
+```go
+// extractFromResourceLiteral parses a pluginsdk.Resource composite literal
+// and extracts only CRUD method names
+func extractFromResourceLiteral(compLit *ast.CompositeLit) *LegacyResourceCRUDMethods
+
+// extractFunctionReference extracts function name from various AST patterns:
+// - Direct identifier: funcName
+// - Selector expression: package.FuncName  
+func extractFunctionReference(expr ast.Expr) string
+
+// findResourceFunction locates any function declaration that returns *pluginsdk.Resource
+func findResourceFunction(node *ast.File) *ast.FuncDecl
+```
+
+### AST Parsing Patterns to Handle
+
+#### Pattern 1: Direct Return
+```go
+func resourceKeyVault() *pluginsdk.Resource {
+    return &pluginsdk.Resource{
+        CreateContext: keyVaultCreateFunc,
+        ReadContext:   keyVaultReadFunc,
+        UpdateContext: keyVaultUpdateFunc,
+        DeleteContext: keyVaultDeleteFunc,
+    }
+}
+```
+
+#### Pattern 2: Variable Assignment  
+```go
+func resourceKeyVault() *pluginsdk.Resource {
+    resource := &pluginsdk.Resource{
+        CreateContext: keyVaultCreateFunc,
+        ReadContext:   keyVaultReadFunc,
+        UpdateContext: keyVaultUpdateFunc,
+        DeleteContext: keyVaultDeleteFunc,
+    }
+    return resource
+}
+```
+
+#### Focus: CRUD Fields Only
+Extract function names/references from these specific fields:
+- `CreateContext` / `CreateFunc` → `create_method`
+- `ReadContext` / `ReadFunc` → `read_method` 
+- `UpdateContext` / `UpdateFunc` → `update_method`
+- `DeleteContext` / `DeleteFunc` → `delete_method`
+
+### Integration with Current Codebase
+
+#### Workflow: 
+1. **Registration Method Parsing**: Use existing functions to get `registrationMethod` name with `Namespace`
+2. **Source Code Reading**: You read the registration function's source code and parse it into `*ast.File`
+3. **CRUD Extraction**: Pass the `*ast.File` to `ExtractLegacyResourceCRUDMethods()`
+4. **Population**: Populate the CRUD method fields in `TerraformResourceInfo`
+
+#### Update `GenerateIndividualResourceFiles()` (Conceptual):
+```go
+// For legacy resources, extract CRUD methods after getting registration mapping
+for terraformType, registrationMethod := range service.SupportedResources {
+    // YOU will read the function source code and parse to *ast.File
+    functionAST := readAndParseFunction(namespace, registrationMethod)
+    
+    // NEW: Extract CRUD methods from the registration function
+    crudMethods, err := ExtractLegacyResourceCRUDMethods(functionAST)
+    if err != nil {
+        // Log warning but continue
+        crudMethods = &LegacyResourceCRUDMethods{}
+    }
+    
+    resources[terraformType] = TerraformResourceInfo{
+        TerraformType:      terraformType,
+        StructType:         "", // Still empty for legacy
+        Namespace:          namespace,
+        RegistrationMethod: registrationMethod,
+        SDKType:            "legacy_pluginsdk",
+        // NEW: Populate CRUD methods from extraction
+        CreateMethod:       crudMethods.CreateMethod,
+        ReadMethod:         crudMethods.ReadMethod,
+        UpdateMethod:       crudMethods.UpdateMethod,
+        DeleteMethod:       crudMethods.DeleteMethod,
+    }
+}
+```
+
+### Testing Strategy
+
+#### Unit Tests for CRUD Extraction
+- Test direct return pattern parsing
+- Test variable assignment pattern parsing  
+- Test error handling for malformed functions
+- Test with different CRUD field variations (CreateContext vs CreateFunc)
+
+#### Integration Tests
+- Test with real Terraform provider function examples
+- Test error handling for missing functions
+- Test performance with various function sizes
+
+### Benefits of This Approach
+1. **Unified Data Model**: Both legacy and modern resources have complete CRUD method information
+2. **Better AI Agent Support**: AI agents can find CRUD methods for any resource type
+3. **Focused Implementation**: Only parses essential CRUD operations, keeping it simple
+4. **Clear Separation**: You handle source code reading, function focuses on AST parsing
+5. **Backward Compatible**: Doesn't break existing functionality for modern framework resources
 
 ## Next Steps
 1. ~~Review this plan~~ ✅
