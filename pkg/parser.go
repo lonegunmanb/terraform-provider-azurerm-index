@@ -14,17 +14,22 @@ type TerraformResourceMapping struct {
 
 // ExtractSupportedResourcesMappings extracts mappings from SupportedResources method in the AST
 func ExtractSupportedResourcesMappings(node *ast.File) map[string]string {
-	return extractSupportedResourcesMappings(node)
+	return extractMappingsFromMethod(node, "SupportedResources")
 }
 
-// extractSupportedResourcesMappings extracts mappings from SupportedResources method in the AST
-func extractSupportedResourcesMappings(node *ast.File) map[string]string {
+// ExtractSupportedDataSourcesMappings extracts mappings from SupportedDataSources method in the AST
+func ExtractSupportedDataSourcesMappings(node *ast.File) map[string]string {
+	return extractMappingsFromMethod(node, "SupportedDataSources")
+}
+
+// extractMappingsFromMethod extracts mappings from any method that returns map[string]*pluginsdk.Resource
+func extractMappingsFromMethod(node *ast.File, methodName string) map[string]string {
 	mappings := make(map[string]string)
 
 	ast.Inspect(node, func(n ast.Node) bool {
 		// Look for function declarations
 		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "SupportedResources" {
+		if !ok || fn.Name.Name != methodName {
 			return true
 		}
 
@@ -42,7 +47,7 @@ func extractSupportedResourcesMappings(node *ast.File) map[string]string {
 					extractFromMapLiteral(mapLit, mappings)
 				}
 
-				// Handle variable reference (like "resources" variable)
+				// Handle variable reference (like "resources" or "dataSources" variable)
 				ident, ok := result.(*ast.Ident)
 				if !ok {
 					continue
@@ -80,24 +85,29 @@ func extractSupportedResourcesMappings(node *ast.File) map[string]string {
 // extractFromMapLiteral extracts key-value pairs from a map literal
 func extractFromMapLiteral(mapLit *ast.CompositeLit, mappings map[string]string) {
 	for _, elt := range mapLit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			// Extract the key (terraform resource type)
-			var key string
-			if keyLit, ok := kv.Key.(*ast.BasicLit); ok && keyLit.Kind == token.STRING {
-				key = strings.Trim(keyLit.Value, `"`)
-			}
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		// Extract the key (terraform resource type)
+		var key string
+		if keyLit, ok := kv.Key.(*ast.BasicLit); ok && keyLit.Kind == token.STRING {
+			key = strings.Trim(keyLit.Value, `"`)
+		}
 
-			// Extract the value (function call name)
-			var value string
-			if callExpr, ok := kv.Value.(*ast.CallExpr); ok {
-				if fnIdent, ok := callExpr.Fun.(*ast.Ident); ok {
-					value = fnIdent.Name
-				}
-			}
+		// Extract the value (function call name)
+		var value string
+		callExpr, ok := kv.Value.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		if fnIdent, ok := callExpr.Fun.(*ast.Ident); ok {
+			value = fnIdent.Name
+		}
 
-			if key != "" && value != "" {
-				mappings[key] = value
-			}
+		if key != "" && value != "" {
+			mappings[key] = value
 		}
 	}
+
 }

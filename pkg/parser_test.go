@@ -109,3 +109,99 @@ func (r Registration) SupportedDataSources() map[string]*pluginsdk.Resource {
 
 	assert.Empty(t, result)
 }
+
+func TestExtractSupportedDataSourcesMappings(t *testing.T) {
+	// Test case based on the actual keyvault service example
+	source := `package keyvault
+
+// SupportedDataSources returns the supported Data Sources supported by this Service
+func (r Registration) SupportedDataSources() map[string]*pluginsdk.Resource {
+	return map[string]*pluginsdk.Resource{
+		"azurerm_key_vault_access_policy":      dataSourceKeyVaultAccessPolicy(),
+		"azurerm_key_vault_certificate":        dataSourceKeyVaultCertificate(),
+		"azurerm_key_vault_certificate_data":   dataSourceKeyVaultCertificateData(),
+		"azurerm_key_vault_certificate_issuer": dataSourceKeyVaultCertificateIssuer(),
+		"azurerm_key_vault_key":                dataSourceKeyVaultKey(),
+		"azurerm_key_vault_secret":             dataSourceKeyVaultSecret(),
+		"azurerm_key_vault_secrets":            dataSourceKeyVaultSecrets(),
+		"azurerm_key_vault":                    dataSourceKeyVault(),
+		"azurerm_key_vault_certificates":       dataSourceKeyVaultCertificates(),
+	}
+}`
+
+	expected := map[string]string{
+		"azurerm_key_vault_access_policy":      "dataSourceKeyVaultAccessPolicy",
+		"azurerm_key_vault_certificate":        "dataSourceKeyVaultCertificate",
+		"azurerm_key_vault_certificate_data":   "dataSourceKeyVaultCertificateData",
+		"azurerm_key_vault_certificate_issuer": "dataSourceKeyVaultCertificateIssuer",
+		"azurerm_key_vault_key":                "dataSourceKeyVaultKey",
+		"azurerm_key_vault_secret":             "dataSourceKeyVaultSecret",
+		"azurerm_key_vault_secrets":            "dataSourceKeyVaultSecrets",
+		"azurerm_key_vault":                    "dataSourceKeyVault",
+		"azurerm_key_vault_certificates":       "dataSourceKeyVaultCertificates",
+	}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractSupportedDataSourcesMappings(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractSupportedDataSourcesWithVariable(t *testing.T) {
+	// Test case with intermediate variable (like SupportedResources pattern)
+	source := `package resource
+
+func (r Registration) SupportedDataSources() map[string]*pluginsdk.Resource {
+	dataSources := map[string]*pluginsdk.Resource{
+		"azurerm_client_config":    dataSourceArmClientConfig(),
+		"azurerm_resource_group":   dataSourceArmResourceGroup(),
+		"azurerm_subscription":     dataSourceArmSubscription(),
+	}
+	return dataSources
+}`
+
+	expected := map[string]string{
+		"azurerm_client_config":  "dataSourceArmClientConfig",
+		"azurerm_resource_group": "dataSourceArmResourceGroup",
+		"azurerm_subscription":   "dataSourceArmSubscription",
+	}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractSupportedDataSourcesMappings(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractSupportedDataSourcesEmpty(t *testing.T) {
+	// Test case with empty SupportedDataSources method
+	source := `package resource
+
+func (r Registration) SupportedDataSources() map[string]*pluginsdk.Resource {
+	return map[string]*pluginsdk.Resource{}
+}`
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractSupportedDataSourcesMappings(node)
+	assert.Empty(t, result)
+}
+
+func TestExtractSupportedDataSourcesNoMethod(t *testing.T) {
+	// Test case with no SupportedDataSources method
+	source := `package resource
+
+func (r Registration) SupportedResources() map[string]*pluginsdk.Resource {
+	return map[string]*pluginsdk.Resource{
+		"azurerm_resource_group": resourceResourceGroup(),
+	}
+}`
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractSupportedDataSourcesMappings(node)
+	assert.Empty(t, result)
+}

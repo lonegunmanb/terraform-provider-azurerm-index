@@ -471,36 +471,32 @@ This enhanced AST approach will **complement gophon** with more targeted indexin
 
 ### ✅ Completed
 - [x] **SupportedResources parser**: Created `pkg/parser.go` with `ExtractSupportedResourcesMappings()` function
-- [x] **Unit tests**: Comprehensive test coverage for SupportedResources parsing
+- [x] **SupportedDataSources parser**: Added `ExtractSupportedDataSourcesMappings()` function with shared `extractMappingsFromMethod()` logic
+- [x] **Unit tests**: Comprehensive test coverage for both SupportedResources and SupportedDataSources parsing
 - [x] **Project structure**: Set up `pkg/` folder with proper Go module structure
+- [x] **Code refactoring**: Created reusable `extractMappingsFromMethod()` for parsing map-based registration methods
 
 ### 🚧 Next Tasks (In Priority Order)
 
-#### 1. **SupportedDataSources Parser** (Next)
-- [ ] Add `ExtractSupportedDataSourcesMappings(node *ast.File) map[string]string` function
-- [ ] Reuse existing `extractSupportedResourcesMappings` logic by making it generic
-- [ ] Create unit tests for SupportedDataSources method parsing
-- [ ] Validate against real terraform-provider-azurerm SupportedDataSources examples
-
-#### 2. **Modern SDK DataSources Parser**
+#### 1. **Modern SDK DataSources Parser** (Next)
 - [ ] Add `ExtractDataSourcesStructTypes(node *ast.File) []string` function
 - [ ] Handle slice literal parsing: `[]sdk.DataSource{StructName{}, AnotherStruct{}}`
 - [ ] Create unit tests for DataSources method parsing
 - [ ] Extract struct type names from composite literals
 
-#### 3. **Modern SDK Resources Parser**
+#### 2. **Modern SDK Resources Parser**
 - [ ] Add `ExtractResourcesStructTypes(node *ast.File) []string` function
 - [ ] Handle slice literal parsing: `[]sdk.Resource{StructName{}, AnotherStruct{}}`
 - [ ] Create unit tests for Resources method parsing
 - [ ] Extract struct type names from composite literals
 
-#### 4. **EphemeralResources Parser**
+#### 3. **EphemeralResources Parser**
 - [ ] Add `ExtractEphemeralResourcesFunctions(node *ast.File) []string` function
 - [ ] Handle function slice parsing: `[]func() ephemeral.EphemeralResource{FuncName, AnotherFunc}`
 - [ ] Create unit tests for EphemeralResources method parsing
 - [ ] Extract function names from slice literals
 
-#### 5. **Integration & Cross-Service Analysis**
+#### 4. **Integration & Cross-Service Analysis**
 - [ ] Create unified parser that handles all registration method types
 - [ ] Implement package-level scanning across all services
 - [ ] Create structured output JSON generation
@@ -509,8 +505,8 @@ This enhanced AST approach will **complement gophon** with more targeted indexin
 ## Next Steps
 1. ~~Review this plan~~ ✅
 2. ~~**Decide**: Custom AST parsing vs gophon vs hybrid approach~~ ✅ (Chose hybrid)
-3. ~~Implement Phase 1 changes~~ 🚧 (In progress - SupportedResources done)
-4. Complete remaining registration method parsers (SupportedDataSources, DataSources, Resources, EphemeralResources)
+3. ~~Implement Phase 1 changes~~ 🚧 (In progress - SupportedResources and SupportedDataSources done)
+4. Complete remaining registration method parsers (DataSources, Resources, EphemeralResources)
 5. Test with a known terraform-provider-azurerm version
 6. Implement GitHub Actions workflow adaptation
 7. Iterate and improve based on results
