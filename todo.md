@@ -481,17 +481,20 @@ This enhanced AST approach will **complement gophon** with more targeted indexin
 - [x] **Modern SDK DataSources parser**: Added `ExtractDataSourcesStructTypes()` function for parsing slice-based registration methods
 - [x] **Modern SDK Resources parser**: Added `ExtractResourcesStructTypes()` function for parsing slice-based registration methods
 - [x] **EphemeralResources parser**: Added `ExtractEphemeralResourcesFunctions()` function for parsing function slice registration methods
+- [x] **Integration & Cross-Service Analysis**: Implemented `ScanTerraformProviderServices()` function with gophon integration, structured output types, and test harness
 - [x] **Unit tests**: Comprehensive test coverage for all five parsers (legacy map-based, modern slice-based, and ephemeral function-based)
-- [x] **Project structure**: Set up `pkg/` folder with proper Go module structure
+- [x] **Integration tests**: Added `TestScanTerraformProviderServices()` with complete test harness including all registration method types
+- [x] **Project structure**: Set up `pkg/` folder with proper Go module structure and test harness under `pkg/testharness/`
 - [x] **Code refactoring**: Created reusable functions for map-based, slice-based, and function-based parsing patterns
+- [x] **Structured data types**: Implemented all Phase 3 data structures for TerraformProviderIndex, ServiceRegistration, and individual resource info types
 
 ### 🚧 Next Tasks (In Priority Order)
 
-#### 1. **Integration & Cross-Service Analysis** (Next)
-- [ ] Create unified parser that handles all registration method types
-- [ ] Implement package-level scanning across all services
-- [ ] Create structured output JSON generation
-- [ ] Add comprehensive integration tests
+#### 1. **JSON Output Generation & File Writing** (Next)
+- [ ] Add functions to generate individual JSON files for resources, data sources, and ephemeral resources
+- [ ] Create directory structure (resources/, datasources/, ephemeral/) for organized output
+- [ ] Implement file writing functionality for structured JSON indexes
+- [ ] Add tests for JSON generation and file output
 
 ## Next Steps
 1. ~~Review this plan~~ ✅
