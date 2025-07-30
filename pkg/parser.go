@@ -27,6 +27,11 @@ func ExtractDataSourcesStructTypes(node *ast.File) []string {
 	return extractStructTypesFromMethod(node, "DataSources")
 }
 
+// ExtractResourcesStructTypes extracts struct type names from Resources method in the AST
+func ExtractResourcesStructTypes(node *ast.File) []string {
+	return extractStructTypesFromMethod(node, "Resources")
+}
+
 // extractMappingsFromMethod extracts mappings from any method that returns map[string]*pluginsdk.Resource
 func extractMappingsFromMethod(node *ast.File, methodName string) map[string]string {
 	mappings := make(map[string]string)

@@ -226,11 +226,12 @@ index/
 {
   "terraform_type": "azurerm_resource_group",
   "struct_type": "ResourceGroupResource",
+  "namespace": "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource",
   "registration_method": "resourceResourceGroup",
   "sdk_type": "legacy_pluginsdk",
   "schema_method": "resourceGroupSchema",
   "create_method": "resourceGroupCreateFunc",
-  "read_method": "resourceGroupReadFunc", 
+  "read_method": "resourceGroupReadFunc",
   "update_method": "resourceGroupUpdateFunc",
   "delete_method": "resourceGroupDeleteFunc",
   "attribute_method": "resourceGroupAttributes"
@@ -242,6 +243,7 @@ index/
 {
   "terraform_type": "azurerm_client_config",
   "struct_type": "ClientConfigDataSource",
+  "namespace": "github.com/hashicorp/terraform-provider-azurerm/internal/services/client",
   "registration_method": "SupportedDataSources",
   "sdk_type": "legacy_pluginsdk",
   "schema_method": "dataSourceArmClientConfigSchema",
@@ -254,6 +256,7 @@ index/
 {
   "terraform_type": "azurerm_key_vault_certificate",
   "struct_type": "KeyVaultCertificateEphemeralResource",
+  "namespace": "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault",
   "registration_method": "EphemeralResources",
   "sdk_type": "ephemeral",
   "schema_method": "keyVaultCertificateEphemeralSchema",
@@ -269,6 +272,7 @@ index/
 type TerraformResourceInfo struct {
     TerraformType      string `json:"terraform_type"`               // "azurerm_resource_group"
     StructType         string `json:"struct_type"`                  // "ResourceGroupResource"
+    Namespace          string `json:"namespace"`                    // "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource"
     RegistrationMethod string `json:"registration_method"`          // "SupportedResources", "Resources", etc.
     SDKType            string `json:"sdk_type"`                     // "legacy_pluginsdk", "modern_sdk"
     SchemaMethod       string `json:"schema_method,omitempty"`      // "resourceGroupSchema" (optional)
@@ -282,6 +286,7 @@ type TerraformResourceInfo struct {
 type TerraformDataSourceInfo struct {
     TerraformType      string `json:"terraform_type"`               // "azurerm_client_config"
     StructType         string `json:"struct_type"`                  // "ClientConfigDataSource"
+    Namespace          string `json:"namespace"`                    // "github.com/hashicorp/terraform-provider-azurerm/internal/services/client"
     RegistrationMethod string `json:"registration_method"`          // "SupportedDataSources", "DataSources", etc.
     SDKType            string `json:"sdk_type"`                     // "legacy_pluginsdk", "modern_sdk"
     SchemaMethod       string `json:"schema_method,omitempty"`      // "dataSourceArmClientConfigSchema" (optional)
@@ -292,6 +297,7 @@ type TerraformDataSourceInfo struct {
 type TerraformEphemeralInfo struct {
     TerraformType      string `json:"terraform_type"`               // "azurerm_key_vault_certificate"
     StructType         string `json:"struct_type"`                  // "KeyVaultCertificateEphemeralResource"
+    Namespace          string `json:"namespace"`                    // "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault"
     RegistrationMethod string `json:"registration_method"`          // "EphemeralResources"
     SDKType            string `json:"sdk_type"`                     // "ephemeral"
     SchemaMethod       string `json:"schema_method,omitempty"`      // "keyVaultCertificateEphemeralSchema" (optional)
@@ -473,25 +479,20 @@ This enhanced AST approach will **complement gophon** with more targeted indexin
 - [x] **SupportedResources parser**: Created `pkg/parser.go` with `ExtractSupportedResourcesMappings()` function
 - [x] **SupportedDataSources parser**: Added `ExtractSupportedDataSourcesMappings()` function with shared `extractMappingsFromMethod()` logic
 - [x] **Modern SDK DataSources parser**: Added `ExtractDataSourcesStructTypes()` function for parsing slice-based registration methods
-- [x] **Unit tests**: Comprehensive test coverage for all three parsers (legacy map-based and modern slice-based)
+- [x] **Modern SDK Resources parser**: Added `ExtractResourcesStructTypes()` function for parsing slice-based registration methods
+- [x] **Unit tests**: Comprehensive test coverage for all four parsers (legacy map-based and modern slice-based)
 - [x] **Project structure**: Set up `pkg/` folder with proper Go module structure
 - [x] **Code refactoring**: Created reusable functions for both map-based and slice-based parsing patterns
 
 ### 🚧 Next Tasks (In Priority Order)
 
-#### 1. **Modern SDK Resources Parser** (Next)
-- [ ] Add `ExtractResourcesStructTypes(node *ast.File) []string` function
-- [ ] Handle slice literal parsing: `[]sdk.Resource{StructName{}, AnotherStruct{}}`
-- [ ] Create unit tests for Resources method parsing
-- [ ] Extract struct type names from composite literals
-
-#### 2. **EphemeralResources Parser**
+#### 1. **EphemeralResources Parser** (Next)
 - [ ] Add `ExtractEphemeralResourcesFunctions(node *ast.File) []string` function
 - [ ] Handle function slice parsing: `[]func() ephemeral.EphemeralResource{FuncName, AnotherFunc}`
 - [ ] Create unit tests for EphemeralResources method parsing
 - [ ] Extract function names from slice literals
 
-#### 3. **Integration & Cross-Service Analysis**
+#### 2. **Integration & Cross-Service Analysis**
 - [ ] Create unified parser that handles all registration method types
 - [ ] Implement package-level scanning across all services
 - [ ] Create structured output JSON generation

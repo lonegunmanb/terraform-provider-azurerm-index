@@ -298,3 +298,96 @@ func (r Registration) Resources() []sdk.Resource {
 	result := ExtractDataSourcesStructTypes(node)
 	assert.Empty(t, result)
 }
+
+func TestExtractResourcesStructTypes(t *testing.T) {
+	// Test case based on the actual keyvault service example
+	source := `package keyvault
+
+func (r Registration) Resources() []sdk.Resource {
+	return []sdk.Resource{
+		KeyVaultCertificateContactsResource{},
+	}
+}`
+
+	expected := []string{"KeyVaultCertificateContactsResource"}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractResourcesStructTypes(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractResourcesStructTypesMultiple(t *testing.T) {
+	// Test case with multiple struct types
+	source := `package service
+
+func (r Registration) Resources() []sdk.Resource {
+	return []sdk.Resource{
+		FirstResource{},
+		SecondResource{},
+		ThirdResource{},
+	}
+}`
+
+	expected := []string{"FirstResource", "SecondResource", "ThirdResource"}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractResourcesStructTypes(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractResourcesStructTypesWithVariable(t *testing.T) {
+	// Test case with intermediate variable
+	source := `package service
+
+func (r Registration) Resources() []sdk.Resource {
+	resources := []sdk.Resource{
+		ConfigResource{},
+		InfoResource{},
+	}
+	return resources
+}`
+
+	expected := []string{"ConfigResource", "InfoResource"}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractResourcesStructTypes(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractResourcesStructTypesEmpty(t *testing.T) {
+	// Test case with empty slice
+	source := `package service
+
+func (r Registration) Resources() []sdk.Resource {
+	return []sdk.Resource{}
+}`
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractResourcesStructTypes(node)
+	assert.Empty(t, result)
+}
+
+func TestExtractResourcesStructTypesNoMethod(t *testing.T) {
+	// Test case with no Resources method
+	source := `package service
+
+func (r Registration) DataSources() []sdk.DataSource {
+	return []sdk.DataSource{
+		SomeDataSource{},
+	}
+}`
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractResourcesStructTypes(node)
+	assert.Empty(t, result)
+}
