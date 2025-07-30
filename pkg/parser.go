@@ -32,6 +32,11 @@ func ExtractResourcesStructTypes(node *ast.File) []string {
 	return extractStructTypesFromMethod(node, "Resources")
 }
 
+// ExtractEphemeralResourcesFunctions extracts function names from EphemeralResources method in the AST
+func ExtractEphemeralResourcesFunctions(node *ast.File) []string {
+	return extractFunctionNamesFromMethod(node, "EphemeralResources")
+}
+
 // extractMappingsFromMethod extracts mappings from any method that returns map[string]*pluginsdk.Resource
 func extractMappingsFromMethod(node *ast.File, methodName string) map[string]string {
 	mappings := make(map[string]string)
@@ -152,6 +157,66 @@ func extractStructTypesFromMethod(node *ast.File, methodName string) []string {
 	return types
 }
 
+// extractFunctionNamesFromMethod extracts function names from any method that returns []func() ephemeral.EphemeralResource
+func extractFunctionNamesFromMethod(node *ast.File, methodName string) []string {
+	var functions []string
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		// Look for function declarations
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != methodName {
+			return true
+		}
+
+		// Look for return statements in the function body
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			returnStmt, ok := inner.(*ast.ReturnStmt)
+			if !ok {
+				return true
+			}
+
+			// Process each return expression
+			for _, result := range returnStmt.Results {
+				// Handle direct slice literal return
+				if sliceLit, ok := result.(*ast.CompositeLit); ok {
+					functions = append(functions, extractFromFunctionSliceLiteral(sliceLit)...)
+				}
+
+				// Handle variable reference (like "ephemeralResources" variable)
+				ident, ok := result.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				// Find the variable definition in the function
+				ast.Inspect(fn.Body, func(varNode ast.Node) bool {
+					assignStmt, ok := varNode.(*ast.AssignStmt)
+					if !ok {
+						return true
+					}
+					for i, lhs := range assignStmt.Lhs {
+						lhsIdent, ok := lhs.(*ast.Ident)
+						if !ok || lhsIdent.Name != ident.Name {
+							return true
+						}
+						if i >= len(assignStmt.Rhs) {
+							return true
+						}
+						if sliceLit, ok := assignStmt.Rhs[i].(*ast.CompositeLit); ok {
+							functions = append(functions, extractFromFunctionSliceLiteral(sliceLit)...)
+						}
+					}
+					return true
+				})
+			}
+			return true
+		})
+
+		return true
+	})
+
+	return functions
+}
+
 // extractFromMapLiteral extracts key-value pairs from a map literal
 func extractFromMapLiteral(mapLit *ast.CompositeLit) map[string]string {
 	mappings := make(map[string]string)
@@ -199,6 +264,18 @@ func extractFromSliceLiteral(sliceLit *ast.CompositeLit) []string {
 		}
 	}
 	return types
+}
+
+// extractFromFunctionSliceLiteral extracts function names from a slice literal
+func extractFromFunctionSliceLiteral(sliceLit *ast.CompositeLit) []string {
+	var functions []string
+	for _, elt := range sliceLit.Elts {
+		// Handle function identifiers like FuncName (without parentheses)
+		if ident, ok := elt.(*ast.Ident); ok {
+			functions = append(functions, ident.Name)
+		}
+	}
+	return functions
 }
 
 func mergeMap[TK comparable, TV any](m1, m2 map[TK]TV) map[TK]TV {

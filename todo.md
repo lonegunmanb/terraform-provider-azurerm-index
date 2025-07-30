@@ -480,19 +480,14 @@ This enhanced AST approach will **complement gophon** with more targeted indexin
 - [x] **SupportedDataSources parser**: Added `ExtractSupportedDataSourcesMappings()` function with shared `extractMappingsFromMethod()` logic
 - [x] **Modern SDK DataSources parser**: Added `ExtractDataSourcesStructTypes()` function for parsing slice-based registration methods
 - [x] **Modern SDK Resources parser**: Added `ExtractResourcesStructTypes()` function for parsing slice-based registration methods
-- [x] **Unit tests**: Comprehensive test coverage for all four parsers (legacy map-based and modern slice-based)
+- [x] **EphemeralResources parser**: Added `ExtractEphemeralResourcesFunctions()` function for parsing function slice registration methods
+- [x] **Unit tests**: Comprehensive test coverage for all five parsers (legacy map-based, modern slice-based, and ephemeral function-based)
 - [x] **Project structure**: Set up `pkg/` folder with proper Go module structure
-- [x] **Code refactoring**: Created reusable functions for both map-based and slice-based parsing patterns
+- [x] **Code refactoring**: Created reusable functions for map-based, slice-based, and function-based parsing patterns
 
 ### 🚧 Next Tasks (In Priority Order)
 
-#### 1. **EphemeralResources Parser** (Next)
-- [ ] Add `ExtractEphemeralResourcesFunctions(node *ast.File) []string` function
-- [ ] Handle function slice parsing: `[]func() ephemeral.EphemeralResource{FuncName, AnotherFunc}`
-- [ ] Create unit tests for EphemeralResources method parsing
-- [ ] Extract function names from slice literals
-
-#### 2. **Integration & Cross-Service Analysis**
+#### 1. **Integration & Cross-Service Analysis** (Next)
 - [ ] Create unified parser that handles all registration method types
 - [ ] Implement package-level scanning across all services
 - [ ] Create structured output JSON generation

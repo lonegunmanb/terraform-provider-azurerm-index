@@ -391,3 +391,96 @@ func (r Registration) DataSources() []sdk.DataSource {
 	result := ExtractResourcesStructTypes(node)
 	assert.Empty(t, result)
 }
+
+func TestExtractEphemeralResourcesFunctions(t *testing.T) {
+	// Test case based on the actual keyvault service example
+	source := `package keyvault
+
+func (r Registration) EphemeralResources() []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{
+		NewKeyVaultCertificateEphemeralResource,
+	}
+}`
+
+	expected := []string{"NewKeyVaultCertificateEphemeralResource"}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractEphemeralResourcesFunctions(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractEphemeralResourcesFunctionsMultiple(t *testing.T) {
+	// Test case with multiple function names
+	source := `package service
+
+func (r Registration) EphemeralResources() []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{
+		NewFirstEphemeralResource,
+		NewSecondEphemeralResource,
+		NewThirdEphemeralResource,
+	}
+}`
+
+	expected := []string{"NewFirstEphemeralResource", "NewSecondEphemeralResource", "NewThirdEphemeralResource"}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractEphemeralResourcesFunctions(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractEphemeralResourcesFunctionsWithVariable(t *testing.T) {
+	// Test case with intermediate variable
+	source := `package service
+
+func (r Registration) EphemeralResources() []func() ephemeral.EphemeralResource {
+	ephemeralResources := []func() ephemeral.EphemeralResource{
+		NewConfigEphemeralResource,
+		NewInfoEphemeralResource,
+	}
+	return ephemeralResources
+}`
+
+	expected := []string{"NewConfigEphemeralResource", "NewInfoEphemeralResource"}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractEphemeralResourcesFunctions(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractEphemeralResourcesFunctionsEmpty(t *testing.T) {
+	// Test case with empty slice
+	source := `package service
+
+func (r Registration) EphemeralResources() []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{}
+}`
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractEphemeralResourcesFunctions(node)
+	assert.Empty(t, result)
+}
+
+func TestExtractEphemeralResourcesFunctionsNoMethod(t *testing.T) {
+	// Test case with no EphemeralResources method
+	source := `package service
+
+func (r Registration) Resources() []sdk.Resource {
+	return []sdk.Resource{
+		SomeResource{},
+	}
+}`
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractEphemeralResourcesFunctions(node)
+	assert.Empty(t, result)
+}
