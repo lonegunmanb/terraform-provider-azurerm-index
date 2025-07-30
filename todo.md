@@ -472,31 +472,26 @@ This enhanced AST approach will **complement gophon** with more targeted indexin
 ### ✅ Completed
 - [x] **SupportedResources parser**: Created `pkg/parser.go` with `ExtractSupportedResourcesMappings()` function
 - [x] **SupportedDataSources parser**: Added `ExtractSupportedDataSourcesMappings()` function with shared `extractMappingsFromMethod()` logic
-- [x] **Unit tests**: Comprehensive test coverage for both SupportedResources and SupportedDataSources parsing
+- [x] **Modern SDK DataSources parser**: Added `ExtractDataSourcesStructTypes()` function for parsing slice-based registration methods
+- [x] **Unit tests**: Comprehensive test coverage for all three parsers (legacy map-based and modern slice-based)
 - [x] **Project structure**: Set up `pkg/` folder with proper Go module structure
-- [x] **Code refactoring**: Created reusable `extractMappingsFromMethod()` for parsing map-based registration methods
+- [x] **Code refactoring**: Created reusable functions for both map-based and slice-based parsing patterns
 
 ### 🚧 Next Tasks (In Priority Order)
 
-#### 1. **Modern SDK DataSources Parser** (Next)
-- [ ] Add `ExtractDataSourcesStructTypes(node *ast.File) []string` function
-- [ ] Handle slice literal parsing: `[]sdk.DataSource{StructName{}, AnotherStruct{}}`
-- [ ] Create unit tests for DataSources method parsing
-- [ ] Extract struct type names from composite literals
-
-#### 2. **Modern SDK Resources Parser**
+#### 1. **Modern SDK Resources Parser** (Next)
 - [ ] Add `ExtractResourcesStructTypes(node *ast.File) []string` function
 - [ ] Handle slice literal parsing: `[]sdk.Resource{StructName{}, AnotherStruct{}}`
 - [ ] Create unit tests for Resources method parsing
 - [ ] Extract struct type names from composite literals
 
-#### 3. **EphemeralResources Parser**
+#### 2. **EphemeralResources Parser**
 - [ ] Add `ExtractEphemeralResourcesFunctions(node *ast.File) []string` function
 - [ ] Handle function slice parsing: `[]func() ephemeral.EphemeralResource{FuncName, AnotherFunc}`
 - [ ] Create unit tests for EphemeralResources method parsing
 - [ ] Extract function names from slice literals
 
-#### 4. **Integration & Cross-Service Analysis**
+#### 3. **Integration & Cross-Service Analysis**
 - [ ] Create unified parser that handles all registration method types
 - [ ] Implement package-level scanning across all services
 - [ ] Create structured output JSON generation

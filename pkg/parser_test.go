@@ -205,3 +205,96 @@ func (r Registration) SupportedResources() map[string]*pluginsdk.Resource {
 	result := ExtractSupportedDataSourcesMappings(node)
 	assert.Empty(t, result)
 }
+
+func TestExtractDataSourcesStructTypes(t *testing.T) {
+	// Test case based on the actual keyvault service example
+	source := `package keyvault
+
+func (r Registration) DataSources() []sdk.DataSource {
+	return []sdk.DataSource{
+		EncryptedValueDataSource{},
+	}
+}`
+
+	expected := []string{"EncryptedValueDataSource"}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractDataSourcesStructTypes(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractDataSourcesStructTypesMultiple(t *testing.T) {
+	// Test case with multiple struct types
+	source := `package service
+
+func (r Registration) DataSources() []sdk.DataSource {
+	return []sdk.DataSource{
+		FirstDataSource{},
+		SecondDataSource{},
+		ThirdDataSource{},
+	}
+}`
+
+	expected := []string{"FirstDataSource", "SecondDataSource", "ThirdDataSource"}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractDataSourcesStructTypes(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractDataSourcesStructTypesWithVariable(t *testing.T) {
+	// Test case with intermediate variable
+	source := `package service
+
+func (r Registration) DataSources() []sdk.DataSource {
+	dataSources := []sdk.DataSource{
+		ConfigDataSource{},
+		InfoDataSource{},
+	}
+	return dataSources
+}`
+
+	expected := []string{"ConfigDataSource", "InfoDataSource"}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractDataSourcesStructTypes(node)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractDataSourcesStructTypesEmpty(t *testing.T) {
+	// Test case with empty DataSources method
+	source := `package service
+
+func (r Registration) DataSources() []sdk.DataSource {
+	return []sdk.DataSource{}
+}`
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractDataSourcesStructTypes(node)
+	assert.Empty(t, result)
+}
+
+func TestExtractDataSourcesStructTypesNoMethod(t *testing.T) {
+	// Test case with no DataSources method
+	source := `package service
+
+func (r Registration) Resources() []sdk.Resource {
+	return []sdk.Resource{
+		SomeResource{},
+	}
+}`
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result := ExtractDataSourcesStructTypes(node)
+	assert.Empty(t, result)
+}
