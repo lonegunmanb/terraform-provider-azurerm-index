@@ -555,41 +555,54 @@ func extractStringReturnValue(fn *ast.FuncDecl) string {
 	}
 
 	for _, stmt := range fn.Body.List {
-		if retStmt, ok := stmt.(*ast.ReturnStmt); ok {
-			if len(retStmt.Results) > 0 {
-				if basicLit, ok := retStmt.Results[0].(*ast.BasicLit); ok {
-					if basicLit.Kind == token.STRING {
-						// Remove quotes from string literal
-						return strings.Trim(basicLit.Value, `"`)
-					}
-				}
-			}
+		retStmt, ok := stmt.(*ast.ReturnStmt)
+		if !ok {
+			continue
+		}
+		if len(retStmt.Results) == 0 {
+			continue
+		}
+		basicLit, ok := retStmt.Results[0].(*ast.BasicLit)
+		if !ok {
+			continue
+		}
+		if basicLit.Kind == token.STRING {
+			// Remove quotes from string literal
+			return strings.Trim(basicLit.Value, `"`)
 		}
 	}
 	return ""
 }
 
-// extractTypeNameFromMetadataMethod extracts TypeName assignment from Metadata method
+// extractTypeNameFromMetadataMethod extracts TypeName assignment from Metadata method, used by ephemeral
 func extractTypeNameFromMetadataMethod(fn *ast.FuncDecl) string {
 	if fn.Body == nil {
 		return ""
 	}
 
 	for _, stmt := range fn.Body.List {
-		if assignStmt, ok := stmt.(*ast.AssignStmt); ok {
-			// Look for resp.TypeName = "something"
-			if len(assignStmt.Lhs) > 0 && len(assignStmt.Rhs) > 0 {
-				if selectorExpr, ok := assignStmt.Lhs[0].(*ast.SelectorExpr); ok {
-					if selectorExpr.Sel.Name == "TypeName" {
-						if basicLit, ok := assignStmt.Rhs[0].(*ast.BasicLit); ok {
-							if basicLit.Kind == token.STRING {
-								// Remove quotes from string literal
-								return strings.Trim(basicLit.Value, `"`)
-							}
-						}
-					}
-				}
-			}
+		assignStmt, ok := stmt.(*ast.AssignStmt)
+		if !ok {
+			continue
+		}
+		// Look for resp.TypeName = "something"
+		if len(assignStmt.Lhs) == 0 || len(assignStmt.Rhs) == 0 {
+			continue
+		}
+		selectorExpr, ok := assignStmt.Lhs[0].(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		if selectorExpr.Sel.Name != "TypeName" {
+			continue
+		}
+		basicLit, ok := assignStmt.Rhs[0].(*ast.BasicLit)
+		if !ok {
+			continue
+		}
+		if basicLit.Kind == token.STRING {
+			// Remove quotes from string literal
+			return strings.Trim(basicLit.Value, `"`)
 		}
 	}
 	return ""
