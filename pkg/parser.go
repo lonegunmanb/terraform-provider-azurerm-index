@@ -309,8 +309,8 @@ func findResourceFunction(node *ast.File) *ast.FuncDecl {
 }
 
 // extractCRUDFromFunction extracts CRUD method names from a resource function body
-func extractCRUDFromFunction(fn *ast.FuncDecl) *LegacyResourceCRUDMethods {
-	methods := &LegacyResourceCRUDMethods{}
+func extractCRUDFromFunction(fn *ast.FuncDecl) *LegacyResourceCRUDFunctions {
+	methods := &LegacyResourceCRUDFunctions{}
 
 	if fn.Body == nil {
 		return methods
@@ -474,7 +474,7 @@ func extractTerraformTypeFromResourceTypeMethod(packageInfo *gophon.PackageInfo,
 			// Check if this method belongs to our struct
 			if fn.Recv != nil && len(fn.Recv.List) > 0 {
 				var receiverTypeName string
-				
+
 				// Handle both pointer receiver (*StructName) and value receiver (StructName)
 				switch recvType := fn.Recv.List[0].Type.(type) {
 				case *ast.StarExpr:
@@ -486,7 +486,7 @@ func extractTerraformTypeFromResourceTypeMethod(packageInfo *gophon.PackageInfo,
 					// Value receiver: StructName
 					receiverTypeName = recvType.Name
 				}
-				
+
 				if receiverTypeName == structName {
 					// Found the ResourceType method for our struct
 					result = extractStringReturnValue(fn)
@@ -520,7 +520,7 @@ func extractTerraformTypeFromMetadataMethod(packageInfo *gophon.PackageInfo, str
 			// Check if this method belongs to our struct
 			if fn.Recv != nil && len(fn.Recv.List) > 0 {
 				var receiverTypeName string
-				
+
 				// Handle both pointer receiver (*StructName) and value receiver (StructName)
 				switch recvType := fn.Recv.List[0].Type.(type) {
 				case *ast.StarExpr:
@@ -532,7 +532,7 @@ func extractTerraformTypeFromMetadataMethod(packageInfo *gophon.PackageInfo, str
 					// Value receiver: StructName
 					receiverTypeName = recvType.Name
 				}
-				
+
 				if receiverTypeName == structName {
 					// Found the Metadata method for our struct
 					result = extractTypeNameFromMetadataMethod(fn)

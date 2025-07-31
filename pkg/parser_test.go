@@ -507,7 +507,7 @@ func resourceKeyVault() *pluginsdk.Resource {
 	}
 }`
 
-	expected := &LegacyResourceCRUDMethods{
+	expected := &LegacyResourceCRUDFunctions{
 		CreateMethod: "keyVaultCreateFunc",
 		ReadMethod:   "keyVaultReadFunc",
 		UpdateMethod: "keyVaultUpdateFunc",
@@ -540,7 +540,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 	return resource
 }`
 
-	expected := &LegacyResourceCRUDMethods{
+	expected := &LegacyResourceCRUDFunctions{
 		CreateMethod: "storageAccountCreateFunc",
 		ReadMethod:   "storageAccountReadFunc",
 		UpdateMethod: "storageAccountUpdateFunc",
@@ -568,7 +568,7 @@ func resourceVirtualNetwork() *pluginsdk.Resource {
 	}
 }`
 
-	expected := &LegacyResourceCRUDMethods{
+	expected := &LegacyResourceCRUDFunctions{
 		CreateMethod: "vnetCreateFunc",
 		ReadMethod:   "vnetReadFunc",
 		UpdateMethod: "vnetUpdateFunc",
@@ -596,7 +596,7 @@ func resourceVirtualMachine() *pluginsdk.Resource {
 	}
 }`
 
-	expected := &LegacyResourceCRUDMethods{
+	expected := &LegacyResourceCRUDFunctions{
 		CreateMethod: "VMCreateFunc",
 		ReadMethod:   "VMReadFunc",
 		UpdateMethod: "VMUpdateFunc",
@@ -627,7 +627,7 @@ func resourceReadOnlyResource() *pluginsdk.Resource {
 	}
 }`
 
-	expected := &LegacyResourceCRUDMethods{
+	expected := &LegacyResourceCRUDFunctions{
 		CreateMethod: "resourceCreateFunc",
 		ReadMethod:   "resourceReadFunc",
 		UpdateMethod: "", // Empty
@@ -654,7 +654,7 @@ func anotherFunction() *SomeOtherType {
 	return &SomeOtherType{}
 }`
 
-	expected := &LegacyResourceCRUDMethods{
+	expected := &LegacyResourceCRUDFunctions{
 		CreateMethod: "",
 		ReadMethod:   "",
 		UpdateMethod: "",
@@ -679,7 +679,7 @@ func resourceEmptyResource() *pluginsdk.Resource {
 	}
 }`
 
-	expected := &LegacyResourceCRUDMethods{
+	expected := &LegacyResourceCRUDFunctions{
 		CreateMethod: "",
 		ReadMethod:   "",
 		UpdateMethod: "",
