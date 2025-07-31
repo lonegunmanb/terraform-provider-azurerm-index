@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	gophon "github.com/lonegunmanb/gophon/pkg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go/ast"
@@ -44,7 +45,7 @@ func (r Registration) SupportedResources() map[string]*pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractSupportedResourcesMappings(node)
+	result := extractSupportedResourcesMappings(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -67,7 +68,7 @@ func (r Registration) SupportedResources() map[string]*pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractSupportedResourcesMappings(node)
+	result := extractSupportedResourcesMappings(node)
 
 	assert.Equal(t, expected, result)
 }
@@ -85,7 +86,7 @@ func (r Registration) SupportedResources() map[string]*pluginsdk.Resource {
 		t.Fatalf("Failed to parse source: %v", err)
 	}
 
-	result := ExtractSupportedResourcesMappings(node)
+	result := extractSupportedResourcesMappings(node)
 
 	assert.Empty(t, result)
 }
@@ -105,7 +106,7 @@ func (r Registration) SupportedDataSources() map[string]*pluginsdk.Resource {
 		t.Fatalf("Failed to parse source: %v", err)
 	}
 
-	result := ExtractSupportedResourcesMappings(node)
+	result := extractSupportedResourcesMappings(node)
 
 	assert.Empty(t, result)
 }
@@ -144,7 +145,7 @@ func (r Registration) SupportedDataSources() map[string]*pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractSupportedDataSourcesMappings(node)
+	result := extractSupportedDataSourcesMappings(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -170,7 +171,7 @@ func (r Registration) SupportedDataSources() map[string]*pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractSupportedDataSourcesMappings(node)
+	result := extractSupportedDataSourcesMappings(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -185,7 +186,7 @@ func (r Registration) SupportedDataSources() map[string]*pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractSupportedDataSourcesMappings(node)
+	result := extractSupportedDataSourcesMappings(node)
 	assert.Empty(t, result)
 }
 
@@ -202,7 +203,7 @@ func (r Registration) SupportedResources() map[string]*pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractSupportedDataSourcesMappings(node)
+	result := extractSupportedDataSourcesMappings(node)
 	assert.Empty(t, result)
 }
 
@@ -221,7 +222,7 @@ func (r Registration) DataSources() []sdk.DataSource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractDataSourcesStructTypes(node)
+	result := extractDataSourcesStructTypes(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -242,7 +243,7 @@ func (r Registration) DataSources() []sdk.DataSource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractDataSourcesStructTypes(node)
+	result := extractDataSourcesStructTypes(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -263,7 +264,7 @@ func (r Registration) DataSources() []sdk.DataSource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractDataSourcesStructTypes(node)
+	result := extractDataSourcesStructTypes(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -278,7 +279,7 @@ func (r Registration) DataSources() []sdk.DataSource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractDataSourcesStructTypes(node)
+	result := extractDataSourcesStructTypes(node)
 	assert.Empty(t, result)
 }
 
@@ -295,7 +296,7 @@ func (r Registration) Resources() []sdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractDataSourcesStructTypes(node)
+	result := extractDataSourcesStructTypes(node)
 	assert.Empty(t, result)
 }
 
@@ -314,7 +315,7 @@ func (r Registration) Resources() []sdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractResourcesStructTypes(node)
+	result := extractResourcesStructTypes(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -335,7 +336,7 @@ func (r Registration) Resources() []sdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractResourcesStructTypes(node)
+	result := extractResourcesStructTypes(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -356,7 +357,7 @@ func (r Registration) Resources() []sdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractResourcesStructTypes(node)
+	result := extractResourcesStructTypes(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -371,7 +372,7 @@ func (r Registration) Resources() []sdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractResourcesStructTypes(node)
+	result := extractResourcesStructTypes(node)
 	assert.Empty(t, result)
 }
 
@@ -388,7 +389,7 @@ func (r Registration) DataSources() []sdk.DataSource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractResourcesStructTypes(node)
+	result := extractResourcesStructTypes(node)
 	assert.Empty(t, result)
 }
 
@@ -407,7 +408,7 @@ func (r Registration) EphemeralResources() []func() ephemeral.EphemeralResource 
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractEphemeralResourcesFunctions(node)
+	result := extractEphemeralResourcesFunctions(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -428,7 +429,7 @@ func (r Registration) EphemeralResources() []func() ephemeral.EphemeralResource 
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractEphemeralResourcesFunctions(node)
+	result := extractEphemeralResourcesFunctions(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -449,7 +450,7 @@ func (r Registration) EphemeralResources() []func() ephemeral.EphemeralResource 
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractEphemeralResourcesFunctions(node)
+	result := extractEphemeralResourcesFunctions(node)
 	assert.Equal(t, expected, result)
 }
 
@@ -464,7 +465,7 @@ func (r Registration) EphemeralResources() []func() ephemeral.EphemeralResource 
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractEphemeralResourcesFunctions(node)
+	result := extractEphemeralResourcesFunctions(node)
 	assert.Empty(t, result)
 }
 
@@ -481,7 +482,7 @@ func (r Registration) Resources() []sdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result := ExtractEphemeralResourcesFunctions(node)
+	result := extractEphemeralResourcesFunctions(node)
 	assert.Empty(t, result)
 }
 
@@ -516,7 +517,7 @@ func resourceKeyVault() *pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result, err := ExtractLegacyResourceCRUDMethods(node)
+	result, err := extractLegacyResourceCRUDMethods(node)
 	require.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -549,7 +550,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result, err := ExtractLegacyResourceCRUDMethods(node)
+	result, err := extractLegacyResourceCRUDMethods(node)
 	require.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -577,7 +578,7 @@ func resourceVirtualNetwork() *pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result, err := ExtractLegacyResourceCRUDMethods(node)
+	result, err := extractLegacyResourceCRUDMethods(node)
 	require.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -605,7 +606,7 @@ func resourceVirtualMachine() *pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result, err := ExtractLegacyResourceCRUDMethods(node)
+	result, err := extractLegacyResourceCRUDMethods(node)
 	require.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -636,7 +637,7 @@ func resourceReadOnlyResource() *pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result, err := ExtractLegacyResourceCRUDMethods(node)
+	result, err := extractLegacyResourceCRUDMethods(node)
 	require.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -663,7 +664,7 @@ func anotherFunction() *SomeOtherType {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result, err := ExtractLegacyResourceCRUDMethods(node)
+	result, err := extractLegacyResourceCRUDMethods(node)
 	require.NoError(t, err)
 	assert.Equal(t, expected, result)
 }
@@ -688,7 +689,181 @@ func resourceEmptyResource() *pluginsdk.Resource {
 	node, err := parseSource(source)
 	require.NoError(t, err)
 
-	result, err := ExtractLegacyResourceCRUDMethods(node)
+	result, err := extractLegacyResourceCRUDMethods(node)
 	require.NoError(t, err)
 	assert.Equal(t, expected, result)
+}
+
+func TestExtractTerraformTypeFromResourceTypeMethod(t *testing.T) {
+	testCases := []struct {
+		name           string
+		src            string
+		structName     string
+		expectedResult string
+	}{
+		{
+			name: "value receiver",
+			src: `package test
+
+type ContainerAppEnvironmentDaprComponentResource struct{}
+
+func (r ContainerAppEnvironmentDaprComponentResource) ResourceType() string {
+	return "azurerm_container_app_environment_dapr_component"
+}`,
+			structName:     "ContainerAppEnvironmentDaprComponentResource",
+			expectedResult: "azurerm_container_app_environment_dapr_component",
+		},
+		{
+			name: "pointer receiver",
+			src: `package test
+
+type KeyVaultResource struct{}
+
+func (r *KeyVaultResource) ResourceType() string {
+	return "azurerm_key_vault"
+}`,
+			structName:     "KeyVaultResource",
+			expectedResult: "azurerm_key_vault",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse the source code
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "test.go", tc.src, parser.ParseComments)
+			assert.NoError(t, err)
+
+			// Create mock package info
+			packageInfo := &gophon.PackageInfo{
+				Files: []*gophon.FileInfo{
+					{
+						File: file,
+					},
+				},
+			}
+
+			// Test the extraction
+			result := extractTerraformTypeFromResourceTypeMethod(packageInfo, tc.structName)
+
+			// Verify the result
+			assert.Equal(t, tc.expectedResult, result)
+		})
+	}
+}
+
+func TestExtractTerraformTypeFromDataSourceResourceTypeMethod(t *testing.T) {
+	testCases := []struct {
+		name           string
+		src            string
+		structName     string
+		expectedResult string
+	}{
+		{
+			name: "data source with value receiver",
+			src: `package test
+
+type KeyVaultDataSource struct{}
+
+func (d KeyVaultDataSource) ResourceType() string {
+	return "azurerm_key_vault"
+}`,
+			structName:     "KeyVaultDataSource",
+			expectedResult: "azurerm_key_vault",
+		},
+		{
+			name: "data source with pointer receiver",
+			src: `package test
+
+type ClientConfigDataSource struct{}
+
+func (d *ClientConfigDataSource) ResourceType() string {
+	return "azurerm_client_config"
+}`,
+			structName:     "ClientConfigDataSource",
+			expectedResult: "azurerm_client_config",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse the source code
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "test.go", tc.src, parser.ParseComments)
+			assert.NoError(t, err)
+
+			// Create mock package info
+			packageInfo := &gophon.PackageInfo{
+				Files: []*gophon.FileInfo{
+					{
+						File: file,
+					},
+				},
+			}
+
+			// Test the extraction (using the same function since data sources also use ResourceType method)
+			result := extractTerraformTypeFromResourceTypeMethod(packageInfo, tc.structName)
+
+			// Verify the result
+			assert.Equal(t, tc.expectedResult, result)
+		})
+	}
+}
+
+func TestExtractTerraformTypeFromMetadataMethod(t *testing.T) {
+	testCases := []struct {
+		name           string
+		src            string
+		structName     string
+		expectedResult string
+	}{
+		{
+			name: "ephemeral resource with value receiver",
+			src: `package test
+
+type KeyVaultSecretEphemeralResource struct{}
+
+func (e KeyVaultSecretEphemeralResource) Metadata(_ context.Context, _ ephemeral.MetadataRequest, resp *ephemeral.MetadataResponse) {
+	resp.TypeName = "azurerm_key_vault_secret"
+}`,
+			structName:     "KeyVaultSecretEphemeralResource",
+			expectedResult: "azurerm_key_vault_secret",
+		},
+		{
+			name: "ephemeral resource with pointer receiver",
+			src: `package test
+
+type KeyVaultCertificateEphemeralResource struct{}
+
+func (e *KeyVaultCertificateEphemeralResource) Metadata(_ context.Context, _ ephemeral.MetadataRequest, resp *ephemeral.MetadataResponse) {
+	resp.TypeName = "azurerm_key_vault_certificate"
+}`,
+			structName:     "KeyVaultCertificateEphemeralResource",
+			expectedResult: "azurerm_key_vault_certificate",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse the source code
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "test.go", tc.src, parser.ParseComments)
+			assert.NoError(t, err)
+
+			// Create mock package info
+			packageInfo := &gophon.PackageInfo{
+				Files: []*gophon.FileInfo{
+					{
+						File: file,
+					},
+				},
+			}
+
+			// Test the extraction (using the metadata method extraction function)
+			result := extractTerraformTypeFromMetadataMethod(packageInfo, tc.structName)
+
+			// Verify the result
+			assert.Equal(t, tc.expectedResult, result)
+		})
+	}
 }

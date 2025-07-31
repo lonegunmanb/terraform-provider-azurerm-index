@@ -81,89 +81,6 @@ func (w *DefaultFileWriter) CreateDirectories(dirs []string) error {
 	return nil
 }
 
-func NewTerraformResourceInfo(terraformType, structType, serviceName, packagePath, registrationMethod, sdkType, baseNamespace string) TerraformResourceInfo {
-	namespace := fmt.Sprintf("%s/%s", baseNamespace, packagePath)
-
-	if sdkType == "legacy_pluginsdk" {
-
-		return TerraformResourceInfo{
-			TerraformType:      terraformType,
-			StructType:         "",
-			Namespace:          namespace,
-			RegistrationMethod: registrationMethod,
-			SDKType:            sdkType,
-			// Optional fields can be added later when we have more sophisticated AST parsing
-			SchemaMethod:    "",
-			CreateMethod:    "",
-			ReadMethod:      "",
-			UpdateMethod:    "",
-			DeleteMethod:    "",
-			AttributeMethod: "",
-		}
-	}
-	return TerraformResourceInfo{
-		TerraformType:      terraformType,
-		StructType:         structType,
-		Namespace:          namespace,
-		RegistrationMethod: "",
-		SDKType:            sdkType,
-		// Optional fields can be added later when we have more sophisticated AST parsing
-		SchemaMethod:    fmt.Sprintf("method.%s.Arguments.goindex", structType),
-		CreateMethod:    fmt.Sprintf("method.%s.Create.goindex", structType),
-		ReadMethod:      fmt.Sprintf("method.%s.Read.goindex", structType),
-		UpdateMethod:    fmt.Sprintf("method.%s.Update.goindex", structType),
-		DeleteMethod:    fmt.Sprintf("method.%s.Delete.goindex", structType),
-		AttributeMethod: fmt.Sprintf("method.%s.Attributes.goindex", structType),
-	}
-}
-
-// NewTerraformDataSourceInfo creates a TerraformDataSourceInfo struct
-func NewTerraformDataSourceInfo(terraformType, serviceName, packagePath, registrationMethod, sdkType, baseNamespace string) TerraformDataSourceInfo {
-	namespace := fmt.Sprintf("%s/%s", baseNamespace, packagePath)
-
-	var regMethod string
-	var structType string
-
-	if sdkType == "legacy_pluginsdk" {
-		regMethod = "SupportedDataSources"
-		structType = ""
-	} else {
-		regMethod = "DataSources"
-		structType = terraformType
-	}
-
-	return TerraformDataSourceInfo{
-		TerraformType:      terraformType,
-		StructType:         structType,
-		Namespace:          namespace,
-		RegistrationMethod: regMethod,
-		SDKType:            sdkType,
-		// Optional fields can be added later when we have more sophisticated AST parsing
-		SchemaMethod:    "",
-		ReadMethod:      "",
-		AttributeMethod: "",
-	}
-}
-
-// NewTerraformEphemeralInfo creates a TerraformEphemeralInfo struct
-func NewTerraformEphemeralInfo(functionName, serviceName, packagePath, baseNamespace string) TerraformEphemeralInfo {
-	namespace := fmt.Sprintf("%s/%s", baseNamespace, packagePath)
-
-	return TerraformEphemeralInfo{
-		TerraformType:      functionName,
-		StructType:         "",
-		Namespace:          namespace,
-		RegistrationMethod: "EphemeralResources",
-		SDKType:            "ephemeral",
-		// Optional fields can be added later when we have more sophisticated AST parsing
-		SchemaMethod:    "",
-		OpenMethod:      "",
-		RenewMethod:     "",
-		CloseMethod:     "",
-		AttributeMethod: "",
-	}
-}
-
 // JSONOutputGenerator handles the generation of JSON output files
 type JSONOutputGenerator struct {
 	config     *JSONOutputConfig
@@ -233,15 +150,7 @@ func (g *JSONOutputGenerator) writeResourceFiles(index *TerraformProviderIndex) 
 	for _, service := range index.Services {
 		// Process legacy resources
 		for terraformType, registrationMethod := range service.SupportedResources {
-			resourceInfo := NewTerraformResourceInfo(terraformType, "", service.ServiceName, service.PackagePath, registrationMethod, "legacy_pluginsdk", g.config.BaseNamespace)
-
-			// Add CRUD methods if available
-			if crudMethods, exists := service.ResourceCRUDMethods[terraformType]; exists && crudMethods != nil {
-				resourceInfo.CreateMethod = crudMethods.CreateMethod
-				resourceInfo.ReadMethod = crudMethods.ReadMethod
-				resourceInfo.UpdateMethod = crudMethods.UpdateMethod
-				resourceInfo.DeleteMethod = crudMethods.DeleteMethod
-			}
+			resourceInfo := NewTerraformResourceInfo(terraformType, "", registrationMethod, "legacy_pluginsdk", service)
 
 			fileName := fmt.Sprintf("%s.json", terraformType)
 			filePath := filepath.Join(resourcesDir, fileName)
@@ -253,9 +162,9 @@ func (g *JSONOutputGenerator) writeResourceFiles(index *TerraformProviderIndex) 
 
 		// Process modern resources
 		for _, structType := range service.Resources {
-			resourceInfo := NewTerraformResourceInfo(structType, structType, service.ServiceName, service.PackagePath, "", "modern_sdk", g.config.BaseNamespace)
+			resourceInfo := NewTerraformResourceInfo("", structType, "", "modern_sdk", service)
 
-			fileName := fmt.Sprintf("%s.json", structType)
+			fileName := fmt.Sprintf("%s.json", resourceInfo.TerraformType)
 			filePath := filepath.Join(resourcesDir, fileName)
 
 			if err := g.fileWriter.WriteJSONFile(filePath, resourceInfo); err != nil {
@@ -274,12 +183,7 @@ func (g *JSONOutputGenerator) writeDataSourceFiles(index *TerraformProviderIndex
 	for _, service := range index.Services {
 		// Process legacy data sources
 		for terraformType, registrationMethod := range service.SupportedDataSources {
-			dataSourceInfo := NewTerraformDataSourceInfo(terraformType, service.ServiceName, service.PackagePath, registrationMethod, "legacy_pluginsdk", g.config.BaseNamespace)
-
-			// Add data source methods if available
-			if methods, exists := service.DataSourceMethods[terraformType]; exists && methods != nil {
-				dataSourceInfo.ReadMethod = methods.ReadMethod
-			}
+			dataSourceInfo := NewTerraformDataSourceInfo(terraformType, "", registrationMethod, "legacy_pluginsdk", service)
 
 			fileName := fmt.Sprintf("%s.json", terraformType)
 			filePath := filepath.Join(dataSourcesDir, fileName)
@@ -291,9 +195,9 @@ func (g *JSONOutputGenerator) writeDataSourceFiles(index *TerraformProviderIndex
 
 		// Process modern data sources
 		for _, structType := range service.DataSources {
-			dataSourceInfo := NewTerraformDataSourceInfo(structType, service.ServiceName, service.PackagePath, "", "modern_sdk", g.config.BaseNamespace)
+			dataSourceInfo := NewTerraformDataSourceInfo("", structType, "", "modern_sdk", service)
 
-			fileName := fmt.Sprintf("%s.json", structType)
+			fileName := fmt.Sprintf("%s.json", dataSourceInfo.TerraformType)
 			filePath := filepath.Join(dataSourcesDir, fileName)
 
 			if err := g.fileWriter.WriteJSONFile(filePath, dataSourceInfo); err != nil {
@@ -310,10 +214,10 @@ func (g *JSONOutputGenerator) writeEphemeralFiles(index *TerraformProviderIndex)
 	ephemeralDir := filepath.Join(g.config.OutputDir, g.config.EphemeralSubDir)
 
 	for _, service := range index.Services {
-		for _, functionName := range service.EphemeralResources {
-			ephemeralInfo := NewTerraformEphemeralInfo(functionName, service.ServiceName, service.PackagePath, g.config.BaseNamespace)
+		for _, structType := range service.EphemeralResources {
+			ephemeralInfo := NewTerraformEphemeralInfo(structType, service)
 
-			fileName := fmt.Sprintf("%s.json", functionName)
+			fileName := fmt.Sprintf("%s.json", ephemeralInfo.TerraformType)
 			filePath := filepath.Join(ephemeralDir, fileName)
 
 			if err := g.fileWriter.WriteJSONFile(filePath, ephemeralInfo); err != nil {
@@ -331,56 +235,4 @@ func (index *TerraformProviderIndex) GenerateJSONOutput(outputDir string) error 
 	generator := NewJSONOutputGenerator(config, fileWriter)
 
 	return generator.Generate(index)
-}
-
-// Legacy functions for backward compatibility
-// writeJSONFile is kept for backward compatibility with existing tests
-func writeJSONFile(filePath string, data interface{}) error {
-	fileWriter := NewDefaultFileWriter(fileSystem)
-	return fileWriter.WriteJSONFile(filePath, data)
-}
-
-// createResourceInfo is kept for backward compatibility with existing tests
-func createResourceInfo(terraformType, serviceName, packagePath, registrationMethod, sdkType string) TerraformResourceInfo {
-	namespace := fmt.Sprintf("github.com/hashicorp/terraform-provider-azurerm/%s", packagePath)
-
-	if sdkType == "legacy_pluginsdk" {
-		return TerraformResourceInfo{
-			TerraformType:      terraformType,
-			StructType:         "",
-			Namespace:          namespace,
-			RegistrationMethod: "SupportedResources", // Old behavior: always "SupportedResources" for legacy
-			SDKType:            sdkType,
-			SchemaMethod:       "",
-			CreateMethod:       "",
-			ReadMethod:         "",
-			UpdateMethod:       "",
-			DeleteMethod:       "",
-			AttributeMethod:    "",
-		}
-	} else {
-		return TerraformResourceInfo{
-			TerraformType:      terraformType,
-			StructType:         terraformType, // Old behavior: StructType = terraformType for modern
-			Namespace:          namespace,
-			RegistrationMethod: "Resources", // Old behavior: always "Resources" for modern
-			SDKType:            sdkType,
-			SchemaMethod:       "", // Old behavior: empty method fields
-			CreateMethod:       "",
-			ReadMethod:         "",
-			UpdateMethod:       "",
-			DeleteMethod:       "",
-			AttributeMethod:    "",
-		}
-	}
-}
-
-// createDataSourceInfo is kept for backward compatibility with existing tests
-func createDataSourceInfo(terraformType, serviceName, packagePath, registrationMethod, sdkType string) TerraformDataSourceInfo {
-	return NewTerraformDataSourceInfo(terraformType, serviceName, packagePath, registrationMethod, sdkType, "github.com/hashicorp/terraform-provider-azurerm")
-}
-
-// createEphemeralInfo is kept for backward compatibility with existing tests
-func createEphemeralInfo(functionName, serviceName, packagePath string) TerraformEphemeralInfo {
-	return NewTerraformEphemeralInfo(functionName, serviceName, packagePath, "github.com/hashicorp/terraform-provider-azurerm")
 }

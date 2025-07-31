@@ -711,11 +711,71 @@ for terraformType, registrationMethod := range service.SupportedResources {
 4. **Clear Separation**: You handle source code reading, function focuses on AST parsing
 5. **Backward Compatible**: Doesn't break existing functionality for modern framework resources
 
+## Session Progress (Current Development Session)
+
+### ✅ **COMPLETED: Modern Framework Terraform Type Extraction** 
+*Session Date: July 31, 2025*
+
+Successfully implemented comprehensive Terraform type extraction for modern Plugin Framework resources, data sources, and ephemeral resources. **Critical Issue Resolved**: The system now extracts actual Terraform types (e.g., `"azurerm_key_vault"`) instead of just struct names (e.g., `"KeyVaultResource"`).
+
+#### **1. Enhanced Data Structures** ✅
+- **Modified `ServiceRegistration`** with new mapping fields:
+  - `ResourceTerraformTypes map[string]string` - Maps struct names to Terraform types for resources
+  - `DataSourceTerraformTypes map[string]string` - Maps struct names to Terraform types for data sources  
+  - `EphemeralTerraformTypes map[string]string` - Maps struct names to Terraform types for ephemeral resources
+
+#### **2. AST Parsing Functions** ✅
+- **`extractTerraformTypeFromResourceTypeMethod()`** - Extracts Terraform types from `ResourceType()` methods for resources and data sources
+- **`extractTerraformTypeFromMetadataMethod()`** - Extracts Terraform types from `Metadata()` methods for ephemeral resources
+- **Receiver Type Support**: Both functions handle value receivers (`func (r StructName)`) and pointer receivers (`func (r *StructName)`)
+- **Robust Parsing**: Handles different method signatures and patterns
+
+#### **3. Updated JSON Generation** ✅
+- **Modified Generation Functions**:
+  - `writeResourceFiles()` - Now uses actual Terraform types from mappings
+  - `writeDataSourceFiles()` - Now uses actual Terraform types from mappings
+  - `writeEphemeralFiles()` - Now uses actual Terraform types from mappings
+- **Accuracy Improvement**: JSON output now contains correct Terraform resource type names instead of Go struct names
+
+#### **4. Comprehensive Test Coverage** ✅
+- **Table-Driven Tests** implemented for all extraction scenarios:
+  - `TestExtractTerraformTypeFromResourceTypeMethod` - Tests resource `ResourceType()` method extraction
+  - `TestExtractTerraformTypeFromDataSourceResourceTypeMethod` - Tests data source `ResourceType()` method extraction  
+  - `TestExtractTerraformTypeFromMetadataMethod` - Tests ephemeral resource `Metadata()` method extraction
+- **Test Coverage**: Both value and pointer receivers, various method patterns, edge cases
+- **Test Framework**: Using `gophon.PackageInfo` mocks with `github.com/stretchr/testify` assertions
+
+#### **5. Key Technical Achievements** ✅
+- **Framework Compatibility**: Supports both legacy Provider SDK and modern Terraform Plugin Framework patterns
+- **AST-Based Extraction**: Uses Go AST parsing to accurately extract types from method implementations
+- **Type Safety**: Proper handling of different receiver types and method signatures
+- **Future-Proof**: The AST-based approach can easily be extended for new patterns
+
+#### **6. Impact & Benefits** ✅
+- **Accurate Indexing**: Generated indexes now contain actual Terraform types that users reference in configurations
+- **AI Agent Compatibility**: AI agents can now correctly identify and work with Terraform resource types
+- **Developer Experience**: Improved accuracy makes the index more valuable for development tools
+- **Quality Assurance**: Comprehensive tests ensure reliability and prevent regressions
+
+### **Current State**: Ready for Integration Testing
+The implementation is **complete and tested** for modern framework types. The system can now correctly extract Terraform types like:
+- Resources: `"azurerm_container_app_environment_dapr_component"` from `ContainerAppEnvironmentDaprComponentResource`
+- Data Sources: `"azurerm_key_vault"` from `KeyVaultDataSource`  
+- Ephemeral Resources: `"azurerm_key_vault_certificate"` from `KeyVaultCertificateEphemeralResource`
+
+### **Next Session Goals**:
+- Integration testing with real Terraform provider codebase
+- Performance validation on large codebases
+- End-to-end workflow testing
+
+---
+
 ## Next Steps
 1. ~~Review this plan~~ ✅
 2. ~~**Decide**: Custom AST parsing vs gophon vs hybrid approach~~ ✅ (Chose hybrid)
-3. ~~Implement Phase 1 changes~~ 🚧 (In progress - SupportedResources and SupportedDataSources done)
-4. Complete remaining registration method parsers (DataSources, Resources, EphemeralResources)
-5. Test with a known terraform-provider-azurerm version
-6. Implement GitHub Actions workflow adaptation
-7. Iterate and improve based on results
+3. ~~Implement Phase 1 changes~~ ✅ **COMPLETED** (Modern framework Terraform type extraction)
+4. Complete remaining registration method parsers (DataSources, Resources, EphemeralResources) - **Note**: These are complete for modern framework
+5. Integration testing with actual terraform-provider-azurerm codebase
+6. Test with a known terraform-provider-azurerm version
+7. Implement GitHub Actions workflow adaptation
+8. Iterate and improve based on results
