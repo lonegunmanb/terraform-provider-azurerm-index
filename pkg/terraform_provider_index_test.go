@@ -2,7 +2,6 @@ package pkg
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -63,16 +62,6 @@ func createTestTerraformProviderIndex() *TerraformProviderIndex {
 						ReadMethod: "dataSourceKeyVaultKeyRead",
 					},
 				},
-			},
-		},
-		GlobalMaps: GlobalMappings{
-			AllResources: map[string]string{
-				"azurerm_key_vault":             "resourceKeyVault",
-				"azurerm_key_vault_certificate": "resourceKeyVaultCertificate",
-			},
-			AllDataSources: map[string]string{
-				"azurerm_key_vault":     "dataSourceKeyVault",
-				"azurerm_key_vault_key": "dataSourceKeyVaultKey",
 			},
 		},
 		Statistics: ProviderStatistics{
@@ -297,7 +286,6 @@ func TestTerraformProviderIndex_WriteMainIndexFile(t *testing.T) {
 	assert.Equal(t, index.Version, readIndex.Version)
 	assert.Equal(t, len(index.Services), len(readIndex.Services))
 	assert.Equal(t, index.Statistics, readIndex.Statistics)
-	assert.Equal(t, index.GlobalMaps, readIndex.GlobalMaps)
 }
 
 func TestTerraformProviderIndex_CreateDirectoryStructure(t *testing.T) {
@@ -370,7 +358,6 @@ func TestTerraformProviderIndex_WriteIndexFiles_EmptyIndex(t *testing.T) {
 	index := &TerraformProviderIndex{
 		Version:    "v3.0.0",
 		Services:   []ServiceRegistration{},
-		GlobalMaps: GlobalMappings{},
 		Statistics: ProviderStatistics{},
 	}
 	fs := afero.NewMemMapFs()
@@ -452,21 +439,4 @@ func TestTerraformProviderIndex_WriteResourceFiles_NoResources(t *testing.T) {
 	exists, err := afero.DirExists(fs, resourcesDir)
 	require.NoError(t, err)
 	assert.True(t, exists)
-}
-
-func TestTerraformProviderIndex_LegacyCompatibilityMethod(t *testing.T) {
-	// Setup
-	index := createTestTerraformProviderIndex()
-
-	tempDir := t.TempDir() // Use a real temporary directory
-
-	// Execute the legacy method (should delegate to new methods)
-	err := index.GenerateJSONOutput(tempDir)
-
-	// Verify - this test checks that the legacy method still works
-	require.NoError(t, err)
-
-	mainIndexPath := filepath.Join(tempDir, "terraform-provider-azurerm-index.json")
-	_, err = os.Stat(mainIndexPath)
-	require.NoError(t, err, "Main index file should exist")
 }

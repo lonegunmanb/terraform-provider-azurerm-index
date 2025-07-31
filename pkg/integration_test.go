@@ -70,14 +70,6 @@ func TestScanTerraformProviderServices(t *testing.T) {
 	assert.Contains(t, keyvaultService.EphemeralResources, "NewKeyVaultCertificateEphemeralResource")
 	assert.Contains(t, keyvaultService.EphemeralResources, "NewKeyVaultSecretEphemeralResource")
 
-	// Validate global maps are populated
-	assert.NotEmpty(t, index.GlobalMaps.AllResources, "Should have global resource mappings")
-	assert.NotEmpty(t, index.GlobalMaps.AllDataSources, "Should have global data source mappings")
-
-	// Check for expected resources in global maps
-	assert.Contains(t, index.GlobalMaps.AllResources, "azurerm_key_vault")
-	assert.Contains(t, index.GlobalMaps.AllDataSources, "azurerm_key_vault")
-
 	// Validate statistics make sense
 	assert.Greater(t, index.Statistics.TotalResources, 0)
 	assert.Greater(t, index.Statistics.TotalDataSources, 0)

@@ -13,10 +13,9 @@ var outputFs = afero.NewOsFs()
 
 // TerraformProviderIndex represents the complete index of a Terraform provider
 type TerraformProviderIndex struct {
-	Version    string                `json:"version"`     // Provider version
-	Services   []ServiceRegistration `json:"services"`    // All service registrations
-	GlobalMaps GlobalMappings        `json:"global_maps"` // Complete mapping across all services
-	Statistics ProviderStatistics    `json:"statistics"`  // Summary statistics
+	Version    string                `json:"version"`    // Provider version
+	Services   []ServiceRegistration `json:"services"`   // All service registrations
+	Statistics ProviderStatistics    `json:"statistics"` // Summary statistics
 }
 
 // ScanTerraformProviderServices scans the specified directory for Terraform provider services
@@ -114,12 +113,8 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*Ter
 	stats.TotalResources = stats.LegacyResources + stats.ModernResources + stats.EphemeralResources
 
 	return &TerraformProviderIndex{
-		Version:  version,
-		Services: services,
-		GlobalMaps: GlobalMappings{
-			AllResources:   globalResources,
-			AllDataSources: globalDataSources,
-		},
+		Version:    version,
+		Services:   services,
 		Statistics: stats,
 	}, nil
 }
