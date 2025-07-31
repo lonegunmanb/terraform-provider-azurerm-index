@@ -5,7 +5,7 @@ go 1.24.5
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.15.0
 	github.com/hashicorp/terraform-plugin-sdk/v2 v2.37.0
-	github.com/lonegunmanb/gophon v0.0.0-20250730053641-96e87d22a7a9
+	github.com/lonegunmanb/gophon v0.0.0-20250731005102-0d6e2c050003
 	github.com/stretchr/testify v1.10.0
 )
 

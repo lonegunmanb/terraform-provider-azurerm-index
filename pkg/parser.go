@@ -61,13 +61,16 @@ type TerraformProviderIndex struct {
 
 // ServiceRegistration represents all registration methods found in a single service package
 type ServiceRegistration struct {
-	ServiceName          string            `json:"service_name"`           // "keyvault", "resource", etc.
-	PackagePath          string            `json:"package_path"`           // "internal/services/keyvault"
-	SupportedResources   map[string]string `json:"supported_resources"`    // Legacy map-based resources
-	SupportedDataSources map[string]string `json:"supported_data_sources"` // Legacy map-based data sources
-	Resources            []string          `json:"resources"`              // Modern slice-based resources
-	DataSources          []string          `json:"data_sources"`           // Modern slice-based data sources
-	EphemeralResources   []string          `json:"ephemeral_resources"`    // Function-based ephemeral resources
+	Package              *pkg.PackageInfo
+	ServiceName          string                                `json:"service_name"`           // "keyvault", "resource", etc.
+	PackagePath          string                                `json:"package_path"`           // "internal/services/keyvault"
+	SupportedResources   map[string]string                     `json:"supported_resources"`    // Legacy map-based resources
+	SupportedDataSources map[string]string                     `json:"supported_data_sources"` // Legacy map-based data sources
+	Resources            []string                              `json:"resources"`              // Modern slice-based resources
+	DataSources          []string                              `json:"data_sources"`           // Modern slice-based data sources
+	EphemeralResources   []string                              `json:"ephemeral_resources"`    // Function-based ephemeral resources
+	ResourceCRUDMethods  map[string]*LegacyResourceCRUDMethods `json:"resource_crud_methods"`  // CRUD methods for legacy resources
+	DataSourceMethods    map[string]*LegacyDataSourceMethods   `json:"data_source_methods"`    // Methods for legacy data sources
 }
 
 // GlobalMappings represents complete mappings across all services
@@ -90,6 +93,19 @@ type ProviderStatistics struct {
 type TerraformResourceMapping struct {
 	TerraformType      string `json:"terraform_type"`      // e.g., "azurerm_resource_group"
 	RegistrationMethod string `json:"registration_method"` // e.g., "resourceResourceGroup"
+}
+
+// LegacyResourceCRUDMethods represents CRUD methods extracted from legacy plugin SDK resources
+type LegacyResourceCRUDMethods struct {
+	CreateMethod string `json:"create_method,omitempty"` // "keyVaultCreateFunc"
+	ReadMethod   string `json:"read_method,omitempty"`   // "keyVaultReadFunc"
+	UpdateMethod string `json:"update_method,omitempty"` // "keyVaultUpdateFunc"
+	DeleteMethod string `json:"delete_method,omitempty"` // "keyVaultDeleteFunc"
+}
+
+// LegacyDataSourceMethods represents methods extracted from legacy plugin SDK data sources
+type LegacyDataSourceMethods struct {
+	ReadMethod string `json:"read_method,omitempty"` // "dataSourceReadFunc"
 }
 
 // ExtractSupportedResourcesMappings extracts mappings from SupportedResources method in the AST
@@ -115,6 +131,22 @@ func ExtractResourcesStructTypes(node *ast.File) []string {
 // ExtractEphemeralResourcesFunctions extracts function names from EphemeralResources method in the AST
 func ExtractEphemeralResourcesFunctions(node *ast.File) []string {
 	return extractFunctionNamesFromMethod(node, "EphemeralResources")
+}
+
+// ExtractLegacyResourceCRUDMethods analyzes a legacy plugin SDK resource function
+// and extracts CRUD method names from the returned pluginsdk.Resource struct
+// The input ast.File should contain the registration function's source code
+// It will find any function that returns *pluginsdk.Resource and parse its CRUD methods
+func ExtractLegacyResourceCRUDMethods(node *ast.File) (*LegacyResourceCRUDMethods, error) {
+	// Find the resource function that returns *pluginsdk.Resource
+	resourceFunc := findResourceFunction(node)
+	if resourceFunc == nil {
+		return &LegacyResourceCRUDMethods{}, nil // No resource function found, return empty
+	}
+
+	// Extract CRUD methods from the function body
+	crudMethods := extractCRUDFromFunction(resourceFunc)
+	return crudMethods, nil
 }
 
 // ScanTerraformProviderServices scans the specified directory for Terraform provider services
@@ -148,15 +180,7 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*Ter
 			continue
 		}
 
-		serviceReg := ServiceRegistration{
-			ServiceName:          entry.Name(),
-			PackagePath:          packageInfo.Files[0].Package,
-			SupportedResources:   make(map[string]string),
-			SupportedDataSources: make(map[string]string),
-			Resources:            []string{},
-			DataSources:          []string{},
-			EphemeralResources:   []string{},
-		}
+		serviceReg := newServiceRegistration(packageInfo, entry)
 
 		// Process each file in the package
 		for _, fileInfo := range packageInfo.Files {
@@ -177,6 +201,20 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*Ter
 			serviceReg.Resources = append(serviceReg.Resources, resources...)
 			serviceReg.DataSources = append(serviceReg.DataSources, dataSources...)
 			serviceReg.EphemeralResources = append(serviceReg.EphemeralResources, ephemeralResources...)
+		}
+
+		// After processing all files, extract CRUD methods for legacy resources using gophon function data
+		for terraformType, registrationMethod := range serviceReg.SupportedResources {
+			if crudMethods := extractCRUDFromPackage(registrationMethod, packageInfo); crudMethods != nil {
+				serviceReg.ResourceCRUDMethods[terraformType] = crudMethods
+			}
+		}
+
+		// Extract methods for legacy data sources
+		for terraformType, registrationMethod := range serviceReg.SupportedDataSources {
+			if methods := extractDataSourceMethodsFromGophonPackage(registrationMethod, packageInfo); methods != nil {
+				serviceReg.DataSourceMethods[terraformType] = methods
+			}
 		}
 
 		// Only include services that have at least one registration method
@@ -209,6 +247,21 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*Ter
 		},
 		Statistics: stats,
 	}, nil
+}
+
+func newServiceRegistration(packageInfo *pkg.PackageInfo, entry os.DirEntry) ServiceRegistration {
+	return ServiceRegistration{
+		Package:              packageInfo,
+		ServiceName:          entry.Name(),
+		PackagePath:          packageInfo.Files[0].Package,
+		SupportedResources:   make(map[string]string),
+		SupportedDataSources: make(map[string]string),
+		Resources:            []string{},
+		DataSources:          []string{},
+		EphemeralResources:   []string{},
+		ResourceCRUDMethods:  make(map[string]*LegacyResourceCRUDMethods),
+		DataSourceMethods:    make(map[string]*LegacyDataSourceMethods),
+	}
 }
 
 // GenerateIndividualResourceFiles generates individual JSON files for each resource and data source
@@ -527,6 +580,139 @@ func extractFromFunctionSliceLiteral(sliceLit *ast.CompositeLit) []string {
 	return functions
 }
 
+// findResourceFunction locates any function declaration that returns *pluginsdk.Resource
+func findResourceFunction(node *ast.File) *ast.FuncDecl {
+	var resourceFunc *ast.FuncDecl
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Type.Results == nil {
+			return true
+		}
+
+		// Check if function returns *pluginsdk.Resource
+		for _, result := range fn.Type.Results.List {
+			if starExpr, ok := result.Type.(*ast.StarExpr); ok {
+				if selectorExpr, ok := starExpr.X.(*ast.SelectorExpr); ok {
+					if ident, ok := selectorExpr.X.(*ast.Ident); ok {
+						if ident.Name == "pluginsdk" && selectorExpr.Sel.Name == "Resource" {
+							resourceFunc = fn
+							return false // Found it, stop searching
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	return resourceFunc
+}
+
+// extractCRUDFromFunction extracts CRUD method names from a resource function body
+func extractCRUDFromFunction(fn *ast.FuncDecl) *LegacyResourceCRUDMethods {
+	methods := &LegacyResourceCRUDMethods{}
+
+	if fn.Body == nil {
+		return methods
+	}
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		// Look for return statements
+		returnStmt, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+
+		// Process each return expression
+		for _, result := range returnStmt.Results {
+			unaryExpr, ok := result.(*ast.UnaryExpr)
+			// Handle direct return of composite literal
+			if !ok || unaryExpr.Op != token.AND {
+				return true
+			}
+			if compLit, ok := unaryExpr.X.(*ast.CompositeLit); ok {
+				extractFromResourceLiteral(compLit, methods)
+			}
+		}
+
+		return true
+	})
+
+	// Also look for variable assignments in case of Pattern 2 (variable assignment)
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		assignStmt, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+
+		for _, rhs := range assignStmt.Rhs {
+			unaryExpr, ok := rhs.(*ast.UnaryExpr)
+			if !ok || unaryExpr.Op != token.AND {
+				return true
+			}
+			if compLit, ok := unaryExpr.X.(*ast.CompositeLit); ok {
+				extractFromResourceLiteral(compLit, methods)
+			}
+		}
+
+		return true
+	})
+
+	return methods
+}
+
+// extractFromResourceLiteral parses a pluginsdk.Resource composite literal
+// and extracts only CRUD method names
+func extractFromResourceLiteral(compLit *ast.CompositeLit, methods *LegacyResourceCRUDMethods) {
+	for _, elt := range compLit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+
+		// Get the field name
+		var fieldName string
+		if ident, ok := kv.Key.(*ast.Ident); ok {
+			fieldName = ident.Name
+		}
+
+		// Extract function reference from the value
+		funcName := extractFunctionReference(kv.Value)
+		if funcName == "" {
+			continue
+		}
+
+		// Map field names to CRUD methods
+		switch fieldName {
+		case "CreateContext", "CreateFunc", "CreateWithoutTimeout":
+			methods.CreateMethod = funcName
+		case "ReadContext", "ReadFunc", "ReadWithoutTimeout":
+			methods.ReadMethod = funcName
+		case "UpdateContext", "UpdateFunc", "UpdateWithoutTimeout":
+			methods.UpdateMethod = funcName
+		case "DeleteContext", "DeleteFunc", "DeleteWithoutTimeout":
+			methods.DeleteMethod = funcName
+		}
+	}
+}
+
+// extractFunctionReference extracts function name from various AST patterns:
+// - Direct identifier: funcName
+// - Selector expression: package.FuncName
+func extractFunctionReference(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		// Direct identifier: funcName
+		return e.Name
+	case *ast.SelectorExpr:
+		// Selector expression: package.FuncName
+		return e.Sel.Name
+	default:
+		return ""
+	}
+}
+
 func mergeMap[TK comparable, TV any](m1, m2 map[TK]TV) map[TK]TV {
 	m := make(map[TK]TV)
 	for tk, tv := range m1 {
@@ -536,4 +722,119 @@ func mergeMap[TK comparable, TV any](m1, m2 map[TK]TV) map[TK]TV {
 		m[tk] = tv
 	}
 	return m
+}
+
+// extractCRUDFromPackage extracts CRUD methods from a gophon PackageInfo by finding the registration function
+func extractCRUDFromPackage(registrationMethod string, packageInfo *pkg.PackageInfo) *LegacyResourceCRUDMethods {
+	if packageInfo == nil || packageInfo.Functions == nil {
+		return nil
+	}
+
+	// Find the registration function in the gophon function data
+	for _, funcInfo := range packageInfo.Functions {
+		if funcInfo.Name == registrationMethod && funcInfo.FuncDecl != nil {
+			return extractCRUDFromFunction(funcInfo.FuncDecl)
+		}
+	}
+
+	return nil
+}
+
+// extractDataSourceMethodsFromGophonPackage extracts data source methods from a gophon PackageInfo
+func extractDataSourceMethodsFromGophonPackage(registrationMethod string, packageInfo *pkg.PackageInfo) *LegacyDataSourceMethods {
+	if packageInfo == nil || packageInfo.Functions == nil {
+		return nil
+	}
+
+	// Find the registration function in the gophon function data
+	for _, funcInfo := range packageInfo.Functions {
+		if funcInfo.Name == registrationMethod && funcInfo.FuncDecl != nil {
+			// Extract data source methods from the function declaration
+			return extractDataSourceMethodsFromFunction(funcInfo.FuncDecl)
+		}
+	}
+
+	return nil
+}
+
+// extractDataSourceMethodsFromFunction extracts data source methods from a data source function body
+func extractDataSourceMethodsFromFunction(fn *ast.FuncDecl) *LegacyDataSourceMethods {
+	methods := &LegacyDataSourceMethods{}
+
+	if fn.Body == nil {
+		return methods
+	}
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		// Look for return statements
+		returnStmt, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+
+		// Process each return expression
+		for _, result := range returnStmt.Results {
+			unaryExpr, ok := result.(*ast.UnaryExpr)
+			// Handle direct return of composite literal
+			if !ok || unaryExpr.Op != token.AND {
+				return true
+			}
+			if compLit, ok := unaryExpr.X.(*ast.CompositeLit); ok {
+				extractFromDataSourceLiteral(compLit, methods)
+			}
+		}
+
+		return true
+	})
+
+	// Also look for variable assignments in case of variable assignment pattern
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		assignStmt, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+
+		for _, rhs := range assignStmt.Rhs {
+			unaryExpr, ok := rhs.(*ast.UnaryExpr)
+			if !ok || unaryExpr.Op != token.AND {
+				return true
+			}
+			if compLit, ok := unaryExpr.X.(*ast.CompositeLit); ok {
+				extractFromDataSourceLiteral(compLit, methods)
+			}
+		}
+
+		return true
+	})
+
+	return methods
+}
+
+// extractFromDataSourceLiteral parses a pluginsdk.Resource composite literal for data sources
+// and extracts only read method names
+func extractFromDataSourceLiteral(compLit *ast.CompositeLit, methods *LegacyDataSourceMethods) {
+	for _, elt := range compLit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+
+		// Get the field name
+		var fieldName string
+		if ident, ok := kv.Key.(*ast.Ident); ok {
+			fieldName = ident.Name
+		}
+
+		// Extract function reference from the value
+		funcName := extractFunctionReference(kv.Value)
+		if funcName == "" {
+			continue
+		}
+
+		// Map field names to data source methods (only ReadContext/ReadFunc for data sources)
+		switch fieldName {
+		case "ReadContext", "ReadFunc", "ReadWithoutTimeout":
+			methods.ReadMethod = funcName
+		}
+	}
 }

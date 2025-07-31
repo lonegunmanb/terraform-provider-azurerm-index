@@ -484,3 +484,211 @@ func (r Registration) Resources() []sdk.Resource {
 	result := ExtractEphemeralResourcesFunctions(node)
 	assert.Empty(t, result)
 }
+
+func TestExtractLegacyResourceCRUDMethods_DirectReturn(t *testing.T) {
+	// Test case with direct return pattern
+	source := `package keyvault
+
+func resourceKeyVault() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		CreateContext: keyVaultCreateFunc,
+		ReadContext:   keyVaultReadFunc,
+		UpdateContext: keyVaultUpdateFunc,
+		DeleteContext: keyVaultDeleteFunc,
+		
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {Type: pluginsdk.TypeString, Required: true},
+		},
+		
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+	}
+}`
+
+	expected := &LegacyResourceCRUDMethods{
+		CreateMethod: "keyVaultCreateFunc",
+		ReadMethod:   "keyVaultReadFunc",
+		UpdateMethod: "keyVaultUpdateFunc",
+		DeleteMethod: "keyVaultDeleteFunc",
+	}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result, err := ExtractLegacyResourceCRUDMethods(node)
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractLegacyResourceCRUDMethods_VariableAssignment(t *testing.T) {
+	// Test case with variable assignment pattern
+	source := `package storage
+
+func resourceStorageAccount() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		CreateFunc: storageAccountCreateFunc,
+		ReadFunc:   storageAccountReadFunc,
+		UpdateFunc: storageAccountUpdateFunc,
+		DeleteFunc: storageAccountDeleteFunc,
+		
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {Type: pluginsdk.TypeString, Required: true},
+		},
+	}
+	return resource
+}`
+
+	expected := &LegacyResourceCRUDMethods{
+		CreateMethod: "storageAccountCreateFunc",
+		ReadMethod:   "storageAccountReadFunc",
+		UpdateMethod: "storageAccountUpdateFunc",
+		DeleteMethod: "storageAccountDeleteFunc",
+	}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result, err := ExtractLegacyResourceCRUDMethods(node)
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractLegacyResourceCRUDMethods_MixedContextAndFunc(t *testing.T) {
+	// Test case with mixed Context and Func naming
+	source := `package network
+
+func resourceVirtualNetwork() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		CreateContext: vnetCreateFunc,
+		ReadFunc:      vnetReadFunc,
+		UpdateContext: vnetUpdateFunc,
+		DeleteFunc:    vnetDeleteFunc,
+	}
+}`
+
+	expected := &LegacyResourceCRUDMethods{
+		CreateMethod: "vnetCreateFunc",
+		ReadMethod:   "vnetReadFunc",
+		UpdateMethod: "vnetUpdateFunc",
+		DeleteMethod: "vnetDeleteFunc",
+	}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result, err := ExtractLegacyResourceCRUDMethods(node)
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractLegacyResourceCRUDMethods_SelectorExpression(t *testing.T) {
+	// Test case with selector expressions (package.Function)
+	source := `package compute
+
+func resourceVirtualMachine() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		CreateContext: compute.VMCreateFunc,
+		ReadContext:   compute.VMReadFunc,
+		UpdateContext: compute.VMUpdateFunc,
+		DeleteContext: compute.VMDeleteFunc,
+	}
+}`
+
+	expected := &LegacyResourceCRUDMethods{
+		CreateMethod: "VMCreateFunc",
+		ReadMethod:   "VMReadFunc",
+		UpdateMethod: "VMUpdateFunc",
+		DeleteMethod: "VMDeleteFunc",
+	}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result, err := ExtractLegacyResourceCRUDMethods(node)
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractLegacyResourceCRUDMethods_PartialMethods(t *testing.T) {
+	// Test case with only some CRUD methods defined
+	source := `package example
+
+func resourceReadOnlyResource() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		CreateContext: resourceCreateFunc,
+		ReadContext:   resourceReadFunc,
+		// No Update or Delete methods
+		
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {Type: pluginsdk.TypeString, Required: true},
+		},
+	}
+}`
+
+	expected := &LegacyResourceCRUDMethods{
+		CreateMethod: "resourceCreateFunc",
+		ReadMethod:   "resourceReadFunc",
+		UpdateMethod: "", // Empty
+		DeleteMethod: "", // Empty
+	}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result, err := ExtractLegacyResourceCRUDMethods(node)
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractLegacyResourceCRUDMethods_NoResourceFunction(t *testing.T) {
+	// Test case with no pluginsdk.Resource function
+	source := `package example
+
+func someOtherFunction() string {
+	return "not a resource"
+}
+
+func anotherFunction() *SomeOtherType {
+	return &SomeOtherType{}
+}`
+
+	expected := &LegacyResourceCRUDMethods{
+		CreateMethod: "",
+		ReadMethod:   "",
+		UpdateMethod: "",
+		DeleteMethod: "",
+	}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result, err := ExtractLegacyResourceCRUDMethods(node)
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+}
+
+func TestExtractLegacyResourceCRUDMethods_EmptyResourceStruct(t *testing.T) {
+	// Test case with empty pluginsdk.Resource struct
+	source := `package example
+
+func resourceEmptyResource() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		// No fields defined
+	}
+}`
+
+	expected := &LegacyResourceCRUDMethods{
+		CreateMethod: "",
+		ReadMethod:   "",
+		UpdateMethod: "",
+		DeleteMethod: "",
+	}
+
+	node, err := parseSource(source)
+	require.NoError(t, err)
+
+	result, err := ExtractLegacyResourceCRUDMethods(node)
+	require.NoError(t, err)
+	assert.Equal(t, expected, result)
+}

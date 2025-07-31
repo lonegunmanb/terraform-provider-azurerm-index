@@ -81,34 +81,39 @@ func (w *DefaultFileWriter) CreateDirectories(dirs []string) error {
 	return nil
 }
 
-// NewTerraformResourceInfo creates a TerraformResourceInfo struct
-func NewTerraformResourceInfo(terraformType, serviceName, packagePath, registrationMethod, sdkType, baseNamespace string) TerraformResourceInfo {
+func NewTerraformResourceInfo(terraformType, structType, serviceName, packagePath, registrationMethod, sdkType, baseNamespace string) TerraformResourceInfo {
 	namespace := fmt.Sprintf("%s/%s", baseNamespace, packagePath)
 
-	var regMethod string
-	var structType string
-
 	if sdkType == "legacy_pluginsdk" {
-		regMethod = "SupportedResources"
-		structType = ""
-	} else {
-		regMethod = "Resources"
-		structType = terraformType
-	}
 
+		return TerraformResourceInfo{
+			TerraformType:      terraformType,
+			StructType:         "",
+			Namespace:          namespace,
+			RegistrationMethod: registrationMethod,
+			SDKType:            sdkType,
+			// Optional fields can be added later when we have more sophisticated AST parsing
+			SchemaMethod:    "",
+			CreateMethod:    "",
+			ReadMethod:      "",
+			UpdateMethod:    "",
+			DeleteMethod:    "",
+			AttributeMethod: "",
+		}
+	}
 	return TerraformResourceInfo{
 		TerraformType:      terraformType,
 		StructType:         structType,
 		Namespace:          namespace,
-		RegistrationMethod: regMethod,
+		RegistrationMethod: "",
 		SDKType:            sdkType,
 		// Optional fields can be added later when we have more sophisticated AST parsing
-		SchemaMethod:    "",
-		CreateMethod:    "",
-		ReadMethod:      "",
-		UpdateMethod:    "",
-		DeleteMethod:    "",
-		AttributeMethod: "",
+		SchemaMethod:    fmt.Sprintf("method.%s.Arguments.goindex", structType),
+		CreateMethod:    fmt.Sprintf("method.%s.Create.goindex", structType),
+		ReadMethod:      fmt.Sprintf("method.%s.Read.goindex", structType),
+		UpdateMethod:    fmt.Sprintf("method.%s.Update.goindex", structType),
+		DeleteMethod:    fmt.Sprintf("method.%s.Delete.goindex", structType),
+		AttributeMethod: fmt.Sprintf("method.%s.Attributes.goindex", structType),
 	}
 }
 
@@ -228,7 +233,15 @@ func (g *JSONOutputGenerator) writeResourceFiles(index *TerraformProviderIndex) 
 	for _, service := range index.Services {
 		// Process legacy resources
 		for terraformType, registrationMethod := range service.SupportedResources {
-			resourceInfo := NewTerraformResourceInfo(terraformType, service.ServiceName, service.PackagePath, registrationMethod, "legacy_pluginsdk", g.config.BaseNamespace)
+			resourceInfo := NewTerraformResourceInfo(terraformType, "", service.ServiceName, service.PackagePath, registrationMethod, "legacy_pluginsdk", g.config.BaseNamespace)
+
+			// Add CRUD methods if available
+			if crudMethods, exists := service.ResourceCRUDMethods[terraformType]; exists && crudMethods != nil {
+				resourceInfo.CreateMethod = crudMethods.CreateMethod
+				resourceInfo.ReadMethod = crudMethods.ReadMethod
+				resourceInfo.UpdateMethod = crudMethods.UpdateMethod
+				resourceInfo.DeleteMethod = crudMethods.DeleteMethod
+			}
 
 			fileName := fmt.Sprintf("%s.json", terraformType)
 			filePath := filepath.Join(resourcesDir, fileName)
@@ -240,7 +253,7 @@ func (g *JSONOutputGenerator) writeResourceFiles(index *TerraformProviderIndex) 
 
 		// Process modern resources
 		for _, structType := range service.Resources {
-			resourceInfo := NewTerraformResourceInfo(structType, service.ServiceName, service.PackagePath, "", "modern_sdk", g.config.BaseNamespace)
+			resourceInfo := NewTerraformResourceInfo(structType, structType, service.ServiceName, service.PackagePath, "", "modern_sdk", g.config.BaseNamespace)
 
 			fileName := fmt.Sprintf("%s.json", structType)
 			filePath := filepath.Join(resourcesDir, fileName)
@@ -262,6 +275,11 @@ func (g *JSONOutputGenerator) writeDataSourceFiles(index *TerraformProviderIndex
 		// Process legacy data sources
 		for terraformType, registrationMethod := range service.SupportedDataSources {
 			dataSourceInfo := NewTerraformDataSourceInfo(terraformType, service.ServiceName, service.PackagePath, registrationMethod, "legacy_pluginsdk", g.config.BaseNamespace)
+
+			// Add data source methods if available
+			if methods, exists := service.DataSourceMethods[terraformType]; exists && methods != nil {
+				dataSourceInfo.ReadMethod = methods.ReadMethod
+			}
 
 			fileName := fmt.Sprintf("%s.json", terraformType)
 			filePath := filepath.Join(dataSourcesDir, fileName)
@@ -307,8 +325,6 @@ func (g *JSONOutputGenerator) writeEphemeralFiles(index *TerraformProviderIndex)
 	return nil
 }
 
-// GenerateJSONOutput generates structured JSON output for the Terraform provider index
-// This is a convenience function that maintains backward compatibility
 func (index *TerraformProviderIndex) GenerateJSONOutput(outputDir string) error {
 	config := DefaultJSONOutputConfig(outputDir)
 	fileWriter := NewDefaultFileWriter(fileSystem)
@@ -326,7 +342,37 @@ func writeJSONFile(filePath string, data interface{}) error {
 
 // createResourceInfo is kept for backward compatibility with existing tests
 func createResourceInfo(terraformType, serviceName, packagePath, registrationMethod, sdkType string) TerraformResourceInfo {
-	return NewTerraformResourceInfo(terraformType, serviceName, packagePath, registrationMethod, sdkType, "github.com/hashicorp/terraform-provider-azurerm")
+	namespace := fmt.Sprintf("github.com/hashicorp/terraform-provider-azurerm/%s", packagePath)
+
+	if sdkType == "legacy_pluginsdk" {
+		return TerraformResourceInfo{
+			TerraformType:      terraformType,
+			StructType:         "",
+			Namespace:          namespace,
+			RegistrationMethod: "SupportedResources", // Old behavior: always "SupportedResources" for legacy
+			SDKType:            sdkType,
+			SchemaMethod:       "",
+			CreateMethod:       "",
+			ReadMethod:         "",
+			UpdateMethod:       "",
+			DeleteMethod:       "",
+			AttributeMethod:    "",
+		}
+	} else {
+		return TerraformResourceInfo{
+			TerraformType:      terraformType,
+			StructType:         terraformType, // Old behavior: StructType = terraformType for modern
+			Namespace:          namespace,
+			RegistrationMethod: "Resources", // Old behavior: always "Resources" for modern
+			SDKType:            sdkType,
+			SchemaMethod:       "", // Old behavior: empty method fields
+			CreateMethod:       "",
+			ReadMethod:         "",
+			UpdateMethod:       "",
+			DeleteMethod:       "",
+			AttributeMethod:    "",
+		}
+	}
 }
 
 // createDataSourceInfo is kept for backward compatibility with existing tests
