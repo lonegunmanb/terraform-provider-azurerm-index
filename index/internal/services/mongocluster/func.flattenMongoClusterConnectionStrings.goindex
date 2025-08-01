@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mongocluster
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mongocluster/2024-07-01/mongoclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenMongoClusterConnectionStrings(input *[]mongoclusters.ConnectionString, userName, userPassword string) []MongoClusterConnectionString {
+	results := make([]MongoClusterConnectionString, 0)
+	if input == nil {
+		return results
+	}
+	for _, cs := range *input {
+		value := pointer.From(cs.ConnectionString)
+		// Password can be empty if it isn't available in the state file (e.g. during import).
+		// In this case, we simply leave the placeholder unchanged.
+		if userPassword != "" {
+			value = regexp.MustCompile(`<user>:<password>`).ReplaceAllString(value, url.UserPassword(userName, userPassword).String())
+		}
+
+		results = append(results, MongoClusterConnectionString{
+			Name:        pointer.From(cs.Name),
+			Description: pointer.From(cs.Description),
+			Value:       value,
+		})
+	}
+
+	return results
+}

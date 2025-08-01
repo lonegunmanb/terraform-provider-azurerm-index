@@ -10,10 +10,10 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2020-03-01/clusters"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2020-03-01/transformations"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2021-10-01-preview/streamingjobs"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -21,7 +21,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceStreamAnalyticsJobRead(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).StreamAnalytics.JobsClient
@@ -62,86 +61,38 @@ func resourceStreamAnalyticsJobRead(d *pluginsdk.ResourceData, meta interface{})
 		}
 
 		if props := model.Properties; props != nil {
-			compatibilityLevel := ""
-			if v := props.CompatibilityLevel; v != nil {
-				compatibilityLevel = string(*v)
-			}
-			d.Set("compatibility_level", compatibilityLevel)
+			d.Set("compatibility_level", pointer.From(props.CompatibilityLevel))
+			d.Set("data_locale", pointer.From(props.DataLocale))
+			d.Set("events_late_arrival_max_delay_in_seconds", pointer.From(props.EventsLateArrivalMaxDelayInSeconds))
+			d.Set("events_out_of_order_max_delay_in_seconds", pointer.From(props.EventsOutOfOrderMaxDelayInSeconds))
+			d.Set("events_out_of_order_policy", pointer.From(props.EventsOutOfOrderPolicy))
+			d.Set("output_error_policy", pointer.From(props.OutputErrorPolicy))
 
-			dataLocale := ""
-			if v := props.DataLocale; v != nil {
-				dataLocale = *v
+			clusterId := ""
+			if props.Cluster != nil && pointer.From(props.Cluster.Id) != "" {
+				cId, err := clusters.ParseClusterID(*props.Cluster.Id)
+				if err != nil {
+					return err
+				}
+				clusterId = cId.ID()
 			}
-			d.Set("data_locale", dataLocale)
-
-			var lateArrival int64
-			if v := props.EventsLateArrivalMaxDelayInSeconds; v != nil {
-				lateArrival = *v
-			}
-			d.Set("events_late_arrival_max_delay_in_seconds", lateArrival)
-
-			var maxDelay int64
-			if v := props.EventsOutOfOrderMaxDelayInSeconds; v != nil {
-				maxDelay = *v
-			}
-			d.Set("events_out_of_order_max_delay_in_seconds", maxDelay)
-
-			orderPolicy := ""
-			if v := props.EventsOutOfOrderPolicy; v != nil {
-				orderPolicy = string(*v)
-			}
-			d.Set("events_out_of_order_policy", orderPolicy)
-
-			outputPolicy := ""
-			if v := props.OutputErrorPolicy; v != nil {
-				outputPolicy = string(*v)
-			}
-			d.Set("output_error_policy", outputPolicy)
-
-			cluster := ""
-			if props.Cluster != nil && props.Cluster.Id != nil {
-				cluster = *props.Cluster.Id
-			}
-			d.Set("stream_analytics_cluster_id", cluster)
-
-			jobType := ""
-			if v := props.JobType; v != nil {
-				jobType = string(*v)
-			}
-			d.Set("type", jobType)
+			d.Set("stream_analytics_cluster_id", clusterId)
+			d.Set("type", pointer.From(props.JobType))
 
 			sku := ""
-			if props.Sku != nil && props.Sku.Name != nil {
-				sku = string(*props.Sku.Name)
+			if props.Sku != nil {
+				sku = string(pointer.From(props.Sku.Name))
 			}
 			d.Set("sku_name", sku)
-
-			storagePolicy := ""
-			if v := props.ContentStoragePolicy; v != nil {
-				storagePolicy = string(*v)
-			}
-			d.Set("content_storage_policy", storagePolicy)
-
-			jobId := ""
-			if v := props.JobId; v != nil {
-				jobId = *v
-			}
-			d.Set("job_id", jobId)
-
+			d.Set("content_storage_policy", pointer.From(props.ContentStoragePolicy))
+			d.Set("job_id", pointer.From(props.JobId))
 			d.Set("job_storage_account", flattenJobStorageAccount(d, props.JobStorageAccount))
 
 			if transformation := props.Transformation; transformation != nil {
-				var streamingUnits int64
-				if v := props.Transformation.Properties.StreamingUnits; v != nil {
-					streamingUnits = *v
+				if transformProps := transformation.Properties; transformProps != nil {
+					d.Set("streaming_units", pointer.From(transformProps.StreamingUnits))
+					d.Set("transformation_query", pointer.From(transformProps.Query))
 				}
-				d.Set("streaming_units", streamingUnits)
-
-				query := ""
-				if v := props.Transformation.Properties.Query; v != nil {
-					query = *v
-				}
-				d.Set("transformation_query", query)
 			}
 			return tags.FlattenAndSet(d, model.Tags)
 		}

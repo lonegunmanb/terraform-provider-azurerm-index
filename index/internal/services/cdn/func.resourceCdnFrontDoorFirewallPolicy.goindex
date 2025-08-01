@@ -445,6 +445,57 @@ func resourceCdnFrontDoorFirewallPolicy() *pluginsdk.Resource {
 				},
 			},
 
+			"log_scrubbing": {
+				Type:     pluginsdk.TypeList,
+				MaxItems: 1,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"enabled": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  true,
+						},
+
+						"scrubbing_rule": {
+							Type:     pluginsdk.TypeList,
+							MaxItems: 100,
+							Required: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"enabled": {
+										Type:     pluginsdk.TypeBool,
+										Optional: true,
+										Default:  true,
+									},
+
+									"match_variable": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice(waf.PossibleValuesForScrubbingRuleEntryMatchVariable(),
+											false),
+									},
+
+									"operator": {
+										Type:     pluginsdk.TypeString,
+										Optional: true,
+										Default:  string(waf.ScrubbingRuleEntryMatchOperatorEquals),
+										ValidateFunc: validation.StringInSlice(waf.PossibleValuesForScrubbingRuleEntryMatchOperator(),
+											false),
+									},
+
+									"selector": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
 			"frontend_endpoint_ids": {
 				Type:     pluginsdk.TypeList,
 				Computed: true,
@@ -507,6 +558,17 @@ func resourceCdnFrontDoorFirewallPolicy() *pluginsdk.Resource {
 					}
 				}
 
+				return nil
+			}),
+
+			// Verify that the scrubbing_rule's are valid...
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+				if v, ok := diff.GetOk("log_scrubbing"); ok {
+					_, err := expandCdnFrontDoorFirewallLogScrubbingPolicy(v.([]interface{}))
+					if err != nil {
+						return err
+					}
+				}
 				return nil
 			}),
 		),

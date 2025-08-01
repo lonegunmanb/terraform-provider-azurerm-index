@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/availabilitysets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/clouds"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/inventoryitems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachineinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachinetemplates"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualnetworks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/vmmservers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r SystemCenterVirtualMachineManagerVirtualMachineInstanceResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.SystemCenterVirtualMachineManager.VirtualMachineInstances
+
+			id, err := parse.SystemCenterVirtualMachineManagerVirtualMachineInstanceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, commonids.NewScopeID(id.Scope))
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(*id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			state := SystemCenterVirtualMachineManagerVirtualMachineInstanceModel{
+				ScopedResourceId: id.Scope,
+			}
+
+			if model := resp.Model; model != nil {
+				state.CustomLocationId = pointer.From(model.ExtendedLocation.Name)
+
+				if props := model.Properties; props != nil {
+					state.Hardware = flattenSystemCenterVirtualMachineManagerVirtualMachineInstanceHardwareProfile(props.HardwareProfile)
+					state.Infrastructure = flattenSystemCenterVirtualMachineManagerVirtualMachineInstanceInfrastructureProfile(props.InfrastructureProfile)
+					state.OperatingSystem = flattenSystemCenterVirtualMachineManagerVirtualMachineInstanceOSProfile(props.OsProfile, metadata.ResourceData.Get("operating_system.0.admin_password").(string))
+					state.SystemCenterVirtualMachineManagerAvailabilitySetIds = flattenSystemCenterVirtualMachineManagerVirtualMachineInstanceAvailabilitySets(props.AvailabilitySets)
+
+					if v := props.NetworkProfile; v != nil {
+						state.NetworkInterfaces = flattenSystemCenterVirtualMachineManagerVirtualMachineInstanceNetworkInterfaces(v.NetworkInterfaces)
+					}
+
+					if v := props.StorageProfile; v != nil {
+						state.StorageDisks = flattenSystemCenterVirtualMachineManagerVirtualMachineInstanceStorageDisks(v.Disks)
+					}
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

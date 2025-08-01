@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/availabilitysets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/clouds"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/inventoryitems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachineinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachinetemplates"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualnetworks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/vmmservers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandSystemCenterVirtualMachineManagerVirtualMachineInstanceStorageDisksForCreate(input []StorageDisk, d *pluginsdk.ResourceData) *[]virtualmachineinstances.VirtualDisk {
+	result := make([]virtualmachineinstances.VirtualDisk, 0)
+	if len(input) == 0 {
+		return &result
+	}
+
+	for k, v := range input {
+		virtualDisk := virtualmachineinstances.VirtualDisk{}
+
+		// As API allows zero value for this property, so TF has to use d.GetRawConfig() to determine whether it's set in tf config
+		if bus := d.GetRawConfig().AsValueMap()["storage_disk"].AsValueSlice()[k].AsValueMap()["bus"]; !bus.IsNull() {
+			virtualDisk.Bus = pointer.To(v.Bus)
+		}
+
+		if lun := d.GetRawConfig().AsValueMap()["storage_disk"].AsValueSlice()[k].AsValueMap()["lun"]; !lun.IsNull() {
+			virtualDisk.Lun = pointer.To(v.Lun)
+		}
+
+		if busType := v.BusType; busType != "" {
+			virtualDisk.BusType = pointer.To(busType)
+		}
+
+		if diskSizeGB := v.DiskSizeGB; diskSizeGB != 0 {
+			virtualDisk.DiskSizeGB = pointer.To(diskSizeGB)
+		}
+
+		if name := v.Name; name != "" {
+			virtualDisk.Name = pointer.To(name)
+		}
+
+		if templateDiskId := v.TemplateDiskId; templateDiskId != "" {
+			virtualDisk.TemplateDiskId = pointer.To(templateDiskId)
+		}
+
+		if vhdType := v.VhdType; vhdType != "" {
+			virtualDisk.VhdType = pointer.To(vhdType)
+		}
+
+		if storageQosPolicyName := v.StorageQoSPolicyName; storageQosPolicyName != "" {
+			virtualDisk.StorageQoSPolicy = &virtualmachineinstances.StorageQosPolicyDetails{
+				Name: pointer.To(storageQosPolicyName),
+			}
+		}
+
+		result = append(result, virtualDisk)
+	}
+
+	return &result
+}

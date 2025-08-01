@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/availabilitysets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/clouds"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/inventoryitems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachineinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachinetemplates"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualnetworks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/vmmservers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandSystemCenterVirtualMachineManagerVirtualMachineInstanceHardwareProfileForCreate(input []Hardware, d *pluginsdk.ResourceData) *virtualmachineinstances.HardwareProfile {
+	if len(input) == 0 {
+		return nil
+	}
+
+	hardwareProfile := input[0]
+
+	result := virtualmachineinstances.HardwareProfile{}
+
+	// As TF always sets bool value to false when it isn't set, so it has to use d.GetRawConfig() to determine whether it is set in the tf config
+	if v := d.GetRawConfig().AsValueMap()["hardware"].AsValueSlice()[0].AsValueMap()["limit_cpu_for_migration_enabled"]; !v.IsNull() {
+		result.LimitCPUForMigration = pointer.To(virtualmachineinstances.LimitCPUForMigration(strconv.FormatBool(hardwareProfile.LimitCpuForMigrationEnabled)))
+	}
+
+	if v := hardwareProfile.CpuCount; v != 0 {
+		result.CpuCount = pointer.To(v)
+	}
+
+	dynamicMemoryEnabled := false
+	if hardwareProfile.DynamicMemoryMaxInMb != 0 || hardwareProfile.DynamicMemoryMinInMb != 0 {
+		dynamicMemoryEnabled = true
+	}
+	result.DynamicMemoryEnabled = pointer.To(virtualmachineinstances.DynamicMemoryEnabled(strconv.FormatBool(dynamicMemoryEnabled)))
+
+	if v := hardwareProfile.DynamicMemoryMaxInMb; v != 0 {
+		result.DynamicMemoryMaxMB = pointer.To(v)
+	}
+
+	if v := hardwareProfile.DynamicMemoryMinInMb; v != 0 {
+		result.DynamicMemoryMinMB = pointer.To(v)
+	}
+
+	if v := hardwareProfile.MemoryInMb; v != 0 {
+		result.MemoryMB = pointer.To(v)
+	}
+
+	return &result
+}

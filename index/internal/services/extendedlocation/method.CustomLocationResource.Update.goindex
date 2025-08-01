@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
 	arckubernetes "github.com/hashicorp/go-azure-sdk/resource-manager/hybridkubernetes/2021-10-01/connectedclusters"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/kubernetesconfiguration/2022-11-01/extensions"
@@ -26,7 +27,7 @@ func (r CustomLocationResource) Update() sdk.ResourceFunc {
 				return err
 			}
 
-			var state CustomLocationResourceModel
+			var state ExtendedLocationCustomLocationResourceModel
 			if err := metadata.Decode(&state); err != nil {
 				return fmt.Errorf("decoding %+v", err)
 			}
@@ -55,11 +56,15 @@ func (r CustomLocationResource) Update() sdk.ResourceFunc {
 				model.Properties.Authentication = nil
 			}
 
+			if d.HasChange("display_name") {
+				model.Properties.DisplayName = pointer.To(state.DisplayName)
+			}
+
 			if d.HasChange("cluster_extension_ids") {
 				model.Properties.ClusterExtensionIds = pointer.To(state.ClusterExtensionIds)
 			}
 
-			if _, err := client.CreateOrUpdate(ctx, *id, *model); err != nil {
+			if err := client.CreateOrUpdateThenPoll(ctx, *id, *model); err != nil {
 				return fmt.Errorf("updating %s: %+v", *id, err)
 			}
 			return nil

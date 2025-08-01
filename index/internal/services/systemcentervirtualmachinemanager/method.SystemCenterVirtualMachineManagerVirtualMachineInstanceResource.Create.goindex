@@ -1,0 +1,91 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/availabilitysets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/clouds"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/inventoryitems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachineinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachinetemplates"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualnetworks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/vmmservers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r SystemCenterVirtualMachineManagerVirtualMachineInstanceResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 60 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.SystemCenterVirtualMachineManager.VirtualMachineInstances
+
+			var model SystemCenterVirtualMachineManagerVirtualMachineInstanceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := parse.NewSystemCenterVirtualMachineManagerVirtualMachineInstanceID(model.ScopedResourceId)
+
+			existing, err := client.Get(ctx, commonids.NewScopeID(id.Scope))
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for the presence of an existing %s: %+v", id, err)
+				}
+			}
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			parameters := virtualmachineinstances.VirtualMachineInstance{
+				ExtendedLocation: virtualmachineinstances.ExtendedLocation{
+					Type: pointer.To("customLocation"),
+					Name: pointer.To(model.CustomLocationId),
+				},
+				Properties: &virtualmachineinstances.VirtualMachineInstanceProperties{
+					InfrastructureProfile: expandSystemCenterVirtualMachineManagerVirtualMachineInstanceInfrastructureProfileForCreate(model.Infrastructure),
+					HardwareProfile:       expandSystemCenterVirtualMachineManagerVirtualMachineInstanceHardwareProfileForCreate(model.Hardware, metadata.ResourceData),
+					OsProfile:             expandSystemCenterVirtualMachineManagerVirtualMachineInstanceOSProfile(model.OperatingSystem),
+				},
+			}
+
+			if v := model.NetworkInterfaces; v != nil {
+				parameters.Properties.NetworkProfile = &virtualmachineinstances.NetworkProfile{
+					NetworkInterfaces: expandSystemCenterVirtualMachineManagerVirtualMachineInstanceNetworkInterfacesForCreate(v),
+				}
+			}
+
+			if v := model.StorageDisks; v != nil {
+				parameters.Properties.StorageProfile = &virtualmachineinstances.StorageProfile{
+					Disks: expandSystemCenterVirtualMachineManagerVirtualMachineInstanceStorageDisksForCreate(v, metadata.ResourceData),
+				}
+			}
+
+			if v := model.SystemCenterVirtualMachineManagerAvailabilitySetIds; v != nil {
+				availabilitySets, err := expandSystemCenterVirtualMachineManagerVirtualMachineInstanceAvailabilitySets(v)
+				if err != nil {
+					return err
+				}
+				parameters.Properties.AvailabilitySets = availabilitySets
+			}
+
+			if err := client.CreateOrUpdateThenPoll(ctx, commonids.NewScopeID(id.Scope), parameters); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

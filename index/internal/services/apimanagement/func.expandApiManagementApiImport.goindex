@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/api"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandApiManagementApiImport(importVs []interface{}, apiType api.ApiType, soapApiType api.SoapApiType, path, serviceUrl, version, versionSetId string) *api.ApiCreateOrUpdateParameter {
+	if len(importVs) == 0 || importVs[0] == nil {
+		return nil
+	}
+
+	importV := importVs[0].(map[string]interface{})
+	if len(importV) == 0 {
+		return nil
+	}
+
+	contentFormat := importV["content_format"].(string)
+	contentValue := importV["content_value"].(string)
+
+	apiParams := api.ApiCreateOrUpdateParameter{
+		Properties: &api.ApiCreateOrUpdateProperties{
+			Type:    pointer.To(apiType),
+			ApiType: pointer.To(soapApiType),
+			Format:  pointer.To(api.ContentFormat(contentFormat)),
+			Value:   pointer.To(contentValue),
+			Path:    path,
+		},
+	}
+
+	wsdlSelectorVs := importV["wsdl_selector"].([]interface{})
+	if len(wsdlSelectorVs) > 0 && wsdlSelectorVs[0] != nil {
+		if wsdlSelectorV := wsdlSelectorVs[0].(map[string]interface{}); len(wsdlSelectorV) > 0 {
+			wSvcName := wsdlSelectorV["service_name"].(string)
+			wEndpName := wsdlSelectorV["endpoint_name"].(string)
+
+			apiParams.Properties.WsdlSelector = &api.ApiCreateOrUpdatePropertiesWsdlSelector{
+				WsdlServiceName:  pointer.To(wSvcName),
+				WsdlEndpointName: pointer.To(wEndpName),
+			}
+		}
+	}
+	if serviceUrl != "" {
+		apiParams.Properties.ServiceURL = pointer.To(serviceUrl)
+	}
+
+	if version != "" {
+		apiParams.Properties.ApiVersion = pointer.To(version)
+	}
+
+	if versionSetId != "" {
+		apiParams.Properties.ApiVersionSetId = pointer.To(versionSetId)
+	}
+
+	return &apiParams
+}

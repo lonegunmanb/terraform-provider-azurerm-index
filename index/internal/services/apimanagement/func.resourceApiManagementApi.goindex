@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -21,9 +22,9 @@ import (
 )
 func resourceApiManagementApi() *pluginsdk.Resource {
 	resource := &pluginsdk.Resource{
-		Create: resourceApiManagementApiCreateUpdate,
+		Create: resourceApiManagementApiCreate,
 		Read:   resourceApiManagementApiRead,
-		Update: resourceApiManagementApiCreateUpdate,
+		Update: resourceApiManagementApiUpdate,
 		Delete: resourceApiManagementApiDelete,
 		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
 			_, err := api.ParseApiID(id)
@@ -329,6 +330,21 @@ func resourceApiManagementApi() *pluginsdk.Resource {
 				Optional: true,
 			},
 		},
+
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+				values := d.GetRawConfig().AsValueMap()
+				if d.Get("version").(string) != "" && values["version_set_id"].IsNull() {
+					return errors.New("setting `version` without the required `version_set_id`")
+				}
+
+				protocols := expandApiManagementApiProtocols(d.Get("protocols").(*pluginsdk.Set).List())
+				if values["source_api_id"].IsNull() && (values["display_name"].IsNull() || protocols == nil || len(*protocols) == 0) {
+					return errors.New("`display_name`, `protocols` are required when `source_api_id` is not set")
+				}
+				return nil
+			}),
+		),
 	}
 
 	return resource

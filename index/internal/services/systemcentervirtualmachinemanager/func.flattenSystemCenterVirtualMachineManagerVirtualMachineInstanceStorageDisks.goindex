@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/availabilitysets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/clouds"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/inventoryitems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachineinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualmachinetemplates"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/virtualnetworks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/vmmservers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenSystemCenterVirtualMachineManagerVirtualMachineInstanceStorageDisks(input *[]virtualmachineinstances.VirtualDisk) []StorageDisk {
+	result := make([]StorageDisk, 0)
+	if input == nil {
+		return result
+	}
+
+	for _, v := range *input {
+		// service team confirmed that diskSizeGB in the request payload and maxDiskSizeGB in the API response both represent the maximum size of the disk but diskSizeGB in the API response represents the actual disk size
+		storageDisk := StorageDisk{
+			Bus:            pointer.From(v.Bus),
+			BusType:        pointer.From(v.BusType),
+			DiskSizeGB:     pointer.From(v.MaxDiskSizeGB),
+			Lun:            pointer.From(v.Lun),
+			Name:           pointer.From(v.Name),
+			TemplateDiskId: pointer.From(v.TemplateDiskId),
+			VhdType:        pointer.From(v.VhdType),
+		}
+
+		if storageQoSPolicy := v.StorageQoSPolicy; storageQoSPolicy != nil {
+			storageDisk.StorageQoSPolicyName = pointer.From(storageQoSPolicy.Name)
+		}
+
+		result = append(result, storageDisk)
+	}
+
+	return result
+}

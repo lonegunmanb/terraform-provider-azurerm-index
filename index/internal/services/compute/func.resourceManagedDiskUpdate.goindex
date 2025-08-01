@@ -26,7 +26,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceManagedDiskUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Compute.DisksClient
@@ -66,7 +65,7 @@ func resourceManagedDiskUpdate(d *pluginsdk.ResourceData, meta interface{}) erro
 	}
 
 	if d.HasChange("max_shares") {
-		diskUpdate.Properties.MaxShares = utils.Int64(int64(maxShares))
+		diskUpdate.Properties.MaxShares = pointer.To(int64(maxShares))
 		var skuName disks.DiskStorageAccountTypes
 		for _, v := range disks.PossibleValuesForDiskStorageAccountTypes() {
 			if strings.EqualFold(storageAccountType, v) {
@@ -124,7 +123,7 @@ func resourceManagedDiskUpdate(d *pluginsdk.ResourceData, meta interface{}) erro
 			}
 
 			v := d.Get("disk_iops_read_only")
-			diskUpdate.Properties.DiskIOPSReadOnly = utils.Int64(int64(v.(int)))
+			diskUpdate.Properties.DiskIOPSReadOnly = pointer.To(int64(v.(int)))
 		}
 
 		if d.HasChange("disk_mbps_read_only") {
@@ -133,7 +132,7 @@ func resourceManagedDiskUpdate(d *pluginsdk.ResourceData, meta interface{}) erro
 			}
 
 			v := d.Get("disk_mbps_read_only")
-			diskUpdate.Properties.DiskMBpsReadOnly = utils.Int64(int64(v.(int)))
+			diskUpdate.Properties.DiskMBpsReadOnly = pointer.To(int64(v.(int)))
 		}
 	} else if d.HasChange("disk_iops_read_write") || d.HasChange("disk_mbps_read_write") || d.HasChange("disk_iops_read_only") || d.HasChange("disk_mbps_read_only") {
 		return fmt.Errorf("[ERROR] disk_iops_read_write, disk_mbps_read_write, disk_iops_read_only and disk_mbps_read_only are only available for UltraSSD disks and PremiumV2 disks")
@@ -168,7 +167,7 @@ func resourceManagedDiskUpdate(d *pluginsdk.ResourceData, meta interface{}) erro
 				log.Printf("[INFO] The %s, or the Virtual Machine that it's attached to, doesn't support no-downtime-resizing - requiring that the VM should be shutdown", *id)
 				shouldShutDown = true
 			}
-			diskUpdate.Properties.DiskSizeGB = utils.Int64(int64(newSize.(int)))
+			diskUpdate.Properties.DiskSizeGB = pointer.To(int64(newSize.(int)))
 		} else {
 			return fmt.Errorf("- New size must be greater than original size. Shrinking disks is not supported on Azure")
 		}
@@ -188,25 +187,21 @@ func resourceManagedDiskUpdate(d *pluginsdk.ResourceData, meta interface{}) erro
 
 			diskUpdate.Properties.Encryption = &disks.Encryption{
 				Type:                encryptionType,
-				DiskEncryptionSetId: utils.String(diskEncryptionSetId),
+				DiskEncryptionSetId: pointer.To(diskEncryptionSetId),
 			}
 		} else {
 			return fmt.Errorf("once a customer-managed key is used, you can’t change the selection back to a platform-managed key")
 		}
 	}
 
-	if networkAccessPolicy := d.Get("network_access_policy").(string); networkAccessPolicy != "" {
-		policy := disks.NetworkAccessPolicy(networkAccessPolicy)
-		diskUpdate.Properties.NetworkAccessPolicy = &policy
-	} else {
-		allowAllPolicy := disks.NetworkAccessPolicyAllowAll
-		diskUpdate.Properties.NetworkAccessPolicy = &allowAllPolicy
+	if d.HasChange("network_access_policy") {
+		diskUpdate.Properties.NetworkAccessPolicy = pointer.To(disks.NetworkAccessPolicy(d.Get("network_access_policy").(string)))
 	}
 
 	if diskAccessID := d.Get("disk_access_id").(string); d.HasChange("disk_access_id") {
 		switch {
 		case *diskUpdate.Properties.NetworkAccessPolicy == disks.NetworkAccessPolicyAllowPrivate:
-			diskUpdate.Properties.DiskAccessId = utils.String(diskAccessID)
+			diskUpdate.Properties.DiskAccessId = pointer.To(diskAccessID)
 		case diskAccessID != "" && *diskUpdate.Properties.NetworkAccessPolicy != disks.NetworkAccessPolicyAllowPrivate:
 			return fmt.Errorf("[ERROR] disk_access_id is only available when network_access_policy is set to AllowPrivate")
 		default:
@@ -239,7 +234,7 @@ func resourceManagedDiskUpdate(d *pluginsdk.ResourceData, meta interface{}) erro
 
 	if d.HasChange("on_demand_bursting_enabled") {
 		shouldShutDown = true
-		diskUpdate.Properties.BurstingEnabled = utils.Bool(onDemandBurstingEnabled)
+		diskUpdate.Properties.BurstingEnabled = pointer.To(onDemandBurstingEnabled)
 	}
 
 	// whilst we need to shut this down, if we're not attached to anything there's no point

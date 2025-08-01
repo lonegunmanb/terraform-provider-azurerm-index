@@ -10,10 +10,10 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2020-03-01/clusters"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2020-03-01/transformations"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2021-10-01-preview/streamingjobs"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -21,13 +21,11 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func resourceStreamAnalyticsJobCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceStreamAnalyticsJobCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).StreamAnalytics.JobsClient
-	transformationsClient := meta.(*clients.Client).StreamAnalytics.TransformationsClient
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
-	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
 	log.Printf("[INFO] preparing arguments for Azure Stream Analytics Job creation.")
@@ -37,25 +35,22 @@ func resourceStreamAnalyticsJobCreateUpdate(d *pluginsdk.ResourceData, meta inte
 	locks.ByID(id.ID())
 	defer locks.UnlockByID(id.ID())
 
-	if d.IsNewResource() {
-		var opts streamingjobs.GetOperationOptions
-		existing, err := client.Get(ctx, id, opts)
-		if err != nil {
-			if !response.WasNotFound(existing.HttpResponse) {
-				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
-			}
-		}
-
+	existing, err := client.Get(ctx, id, streamingjobs.DefaultGetOperationOptions())
+	if err != nil {
 		if !response.WasNotFound(existing.HttpResponse) {
-			return tf.ImportAsExistsError("azurerm_stream_analytics_job", id.ID())
+			return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
 		}
+	}
+
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_stream_analytics_job", id.ID())
 	}
 
 	// needs to be defined inline for a Create but via a separate API for Update
 	transformation := streamingjobs.Transformation{
-		Name: utils.String("main"),
+		Name: pointer.To("main"),
 		Properties: &streamingjobs.TransformationProperties{
-			Query: utils.String(d.Get("transformation_query").(string)),
+			Query: pointer.To(d.Get("transformation_query").(string)),
 		},
 	}
 
@@ -68,15 +63,15 @@ func resourceStreamAnalyticsJobCreateUpdate(d *pluginsdk.ResourceData, meta inte
 		}
 	} else {
 		if v, ok := d.GetOk("streaming_units"); ok {
-			transformation.Properties.StreamingUnits = utils.Int64(int64(v.(int)))
+			transformation.Properties.StreamingUnits = pointer.To(int64(v.(int)))
 		} else {
 			return fmt.Errorf("`streaming_units` must be set when `type` is `Cloud`")
 		}
 	}
 
 	props := streamingjobs.StreamingJob{
-		Name:     utils.String(id.StreamingJobName),
-		Location: utils.String(azure.NormalizeLocation(d.Get("location").(string))),
+		Name:     pointer.To(id.StreamingJobName),
+		Location: pointer.To(location.Normalize(d.Get("location").(string))),
 		Properties: &streamingjobs.StreamingJobProperties{
 			Sku: &streamingjobs.Sku{
 				Name: pointer.To(streamingjobs.SkuName(d.Get("sku_name").(string))),
@@ -102,7 +97,7 @@ func resourceStreamAnalyticsJobCreateUpdate(d *pluginsdk.ResourceData, meta inte
 		// >  Code="BadRequest" Message="The JSON provided in the request body is invalid. Cannot convert value 'None'
 		// > to type 'System.Nullable`1[Microsoft.Streaming.Service.Contracts.CSMResourceProvider.IdentityType]"
 		// > Details=[{"code":"400","correlationId":"dcdbdcfa-fe38-66f8-3aa3-36950bab0a28","message":"The JSON provided in the request body is invalid.
-		// > Cannot convert value 'None' to type 'System.Nullable`1[Microsoft.Streaming.Service.Contracts.CSMResourceProvider.IdentityType]"
+		// > Cannot convert value 'None' to type "System.Nullable`1[Microsoft.Streaming.Service.Contracts.CSMResourceProvider.IdentityType]"
 		//
 		// Tracked in https://github.com/Azure/azure-rest-api-specs/issues/17649
 		expandedIdentity = nil
@@ -110,8 +105,7 @@ func resourceStreamAnalyticsJobCreateUpdate(d *pluginsdk.ResourceData, meta inte
 	props.Identity = expandedIdentity
 
 	if _, ok := d.GetOk("compatibility_level"); ok {
-		compatibilityLevel := d.Get("compatibility_level").(string)
-		props.Properties.CompatibilityLevel = pointer.To(streamingjobs.CompatibilityLevel(compatibilityLevel))
+		props.Properties.CompatibilityLevel = pointer.To(streamingjobs.CompatibilityLevel(d.Get("compatibility_level").(string)))
 	}
 
 	if contentStoragePolicy == string(streamingjobs.ContentStoragePolicyJobStorageAccount) {
@@ -129,7 +123,7 @@ func resourceStreamAnalyticsJobCreateUpdate(d *pluginsdk.ResourceData, meta inte
 	} else {
 		if streamAnalyticsCluster := d.Get("stream_analytics_cluster_id"); streamAnalyticsCluster != "" {
 			props.Properties.Cluster = &streamingjobs.ClusterInfo{
-				Id: utils.String(streamAnalyticsCluster.(string)),
+				Id: pointer.To(streamAnalyticsCluster.(string)),
 			}
 		} else {
 			props.Properties.Cluster = &streamingjobs.ClusterInfo{
@@ -139,52 +133,16 @@ func resourceStreamAnalyticsJobCreateUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if dataLocale, ok := d.GetOk("data_locale"); ok {
-		props.Properties.DataLocale = utils.String(dataLocale.(string))
+		props.Properties.DataLocale = pointer.To(dataLocale.(string))
 	}
 
-	if d.IsNewResource() {
-		props.Properties.Transformation = &transformation
+	props.Properties.Transformation = &transformation
 
-		var opts streamingjobs.CreateOrReplaceOperationOptions
-		if err := client.CreateOrReplaceThenPoll(ctx, id, props, opts); err != nil {
-			return fmt.Errorf("creating %s: %+v", id, err)
-		}
-
-		d.SetId(id.ID())
-	} else {
-		var updateOpts streamingjobs.UpdateOperationOptions
-		if _, err := client.Update(ctx, id, props, updateOpts); err != nil {
-			return fmt.Errorf("updating %s: %+v", id, err)
-		}
-
-		if d.HasChanges("streaming_units", "transformation_query") {
-			transformationUpdate := transformations.Transformation{
-				Name: utils.String("main"),
-				Properties: &transformations.TransformationProperties{
-					Query: utils.String(d.Get("transformation_query").(string)),
-				},
-			}
-
-			if jobType == string(streamingjobs.JobTypeEdge) {
-				if _, ok := d.GetOk("streaming_units"); ok {
-					return fmt.Errorf("the job type `Edge` doesn't support `streaming_units`")
-				}
-			} else {
-				if v, ok := d.GetOk("streaming_units"); ok {
-					transformationUpdate.Properties.StreamingUnits = utils.Int64(int64(v.(int)))
-				} else {
-					return fmt.Errorf("`streaming_units` must be set when `type` is `Cloud`")
-				}
-			}
-
-			transformationId := transformations.NewTransformationID(subscriptionId, id.ResourceGroupName, id.StreamingJobName, *transformation.Name)
-
-			var updateOpts transformations.UpdateOperationOptions
-			if _, err := transformationsClient.Update(ctx, transformationId, transformationUpdate, updateOpts); err != nil {
-				return fmt.Errorf("updating transformation for %s: %+v", id, err)
-			}
-		}
+	if err := client.CreateOrReplaceThenPoll(ctx, id, props, streamingjobs.DefaultCreateOrReplaceOperationOptions()); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
 	}
+
+	d.SetId(id.ID())
 
 	return resourceStreamAnalyticsJobRead(d, meta)
 }

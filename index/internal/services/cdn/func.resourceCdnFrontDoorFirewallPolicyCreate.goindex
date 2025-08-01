@@ -60,9 +60,15 @@ func resourceCdnFrontDoorFirewallPolicyCreate(d *pluginsdk.ResourceData, meta in
 	customBlockResponseStatusCode := d.Get("custom_block_response_status_code").(int)
 	customBlockResponseBody := d.Get("custom_block_response_body").(string)
 	customRules := d.Get("custom_rule").([]interface{})
+
 	managedRules, err := expandCdnFrontDoorFirewallManagedRules(d.Get("managed_rule").([]interface{}))
 	if err != nil {
-		return fmt.Errorf("expanding managed_rule: %+v", err)
+		return fmt.Errorf("expanding 'managed_rule': %+v", err)
+	}
+
+	logScrubbingRules, err := expandCdnFrontDoorFirewallLogScrubbingPolicy(d.Get("log_scrubbing").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding 'log_scrubbing': %+v", err)
 	}
 
 	if sku != string(waf.SkuNamePremiumAzureFrontDoor) && managedRules != nil {
@@ -113,6 +119,10 @@ func resourceCdnFrontDoorFirewallPolicyCreate(d *pluginsdk.ResourceData, meta in
 
 	if customBlockResponseStatusCode > 0 {
 		payload.Properties.PolicySettings.CustomBlockResponseStatusCode = pointer.To(int64(customBlockResponseStatusCode))
+	}
+
+	if logScrubbingRules != nil {
+		payload.Properties.PolicySettings.LogScrubbing = logScrubbingRules
 	}
 
 	err = client.PoliciesCreateOrUpdateThenPoll(ctx, id, payload)

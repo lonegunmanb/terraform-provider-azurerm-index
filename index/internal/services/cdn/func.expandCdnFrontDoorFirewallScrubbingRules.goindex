@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandCdnFrontDoorFirewallScrubbingRules(input []interface{}) (*[]waf.WebApplicationFirewallScrubbingRules, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	scrubbingRules := make([]waf.WebApplicationFirewallScrubbingRules, 0)
+
+	for _, rule := range input {
+		v := rule.(map[string]interface{})
+		var item waf.WebApplicationFirewallScrubbingRules
+
+		enalbed := waf.ScrubbingRuleEntryStateDisabled
+		if value := v["enabled"].(bool); value {
+			enalbed = waf.ScrubbingRuleEntryStateEnabled
+		}
+
+		item.State = pointer.To(enalbed)
+		item.MatchVariable = waf.ScrubbingRuleEntryMatchVariable(v["match_variable"].(string))
+		item.SelectorMatchOperator = waf.ScrubbingRuleEntryMatchOperator(v["operator"].(string))
+
+		if selector, ok := v["selector"]; ok {
+			item.Selector = pointer.To(selector.(string))
+		}
+
+		// NOTE: Validate the rules configuration...
+		switch {
+		case item.MatchVariable == waf.ScrubbingRuleEntryMatchVariableRequestIPAddress || item.MatchVariable == waf.ScrubbingRuleEntryMatchVariableRequestUri:
+			// NOTE: 'RequestIPAddress' and 'RequestUri' 'match_variable's can only use the 'EqualsAny' 'operator'...
+			if item.SelectorMatchOperator != waf.ScrubbingRuleEntryMatchOperatorEqualsAny {
+				return nil, fmt.Errorf("the %q 'match_variable' must use the %q 'operator', got %q", item.MatchVariable, waf.ScrubbingRuleEntryMatchOperatorEqualsAny, item.SelectorMatchOperator)
+			}
+
+		case item.SelectorMatchOperator == waf.ScrubbingRuleEntryMatchOperatorEquals:
+			// NOTE: If the 'operator' is set to 'Equals' the 'selector' cannot be 'nil'...
+			if pointer.From(item.Selector) == "" {
+				return nil, fmt.Errorf("the 'selector' field must be set when the %q 'operator' is used, got %q", waf.ScrubbingRuleEntryMatchOperatorEquals, "nil")
+			}
+
+		case item.SelectorMatchOperator == waf.ScrubbingRuleEntryMatchOperatorEqualsAny:
+			// NOTE: If the 'operator' is set to 'EqualsAny' the 'selector' must be 'nil'...
+			if pointer.From(item.Selector) != "" {
+				return nil, fmt.Errorf("the 'selector' field cannot be set when the %q 'operator' is used, got %q", waf.ScrubbingRuleEntryMatchOperatorEqualsAny, *item.Selector)
+			}
+		}
+
+		scrubbingRules = append(scrubbingRules, item)
+	}
+
+	return pointer.To(scrubbingRules), nil
+}

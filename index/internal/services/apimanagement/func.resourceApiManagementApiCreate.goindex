@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -19,7 +20,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceApiManagementApiCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceApiManagementApiCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).ApiManagement.ApiClient
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
@@ -36,85 +37,30 @@ func resourceApiManagementApiCreateUpdate(d *pluginsdk.ResourceData, meta interf
 	sourceApiId := d.Get("source_api_id").(string)
 
 	id := api.NewApiID(subscriptionId, d.Get("resource_group_name").(string), d.Get("api_management_name").(string), apiId)
-
-	if version != "" && versionSetId == "" {
-		return errors.New("setting `version` without the required `version_set_id`")
-	}
-
-	if sourceApiId == "" && (displayName == "" || protocols == nil || len(*protocols) == 0) {
-		return errors.New("`display_name`, `protocols` are required when `source_api_id` is not set")
-	}
-
-	newId := api.NewApiID(subscriptionId, d.Get("resource_group_name").(string), d.Get("api_management_name").(string), apiId)
-	if d.IsNewResource() {
-		existing, err := client.Get(ctx, newId)
-		if err != nil {
-			if !response.WasNotFound(existing.HttpResponse) {
-				return fmt.Errorf("checking for presence of an existing %s: %+v", newId, err)
-			}
-		}
+	existing, err := client.Get(ctx, id)
+	if err != nil {
 		if !response.WasNotFound(existing.HttpResponse) {
-			return tf.ImportAsExistsError("azurerm_api_management_api", newId.ID())
+			return fmt.Errorf("checking for presence of an existing %s: %+v", id, err)
 		}
+	}
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_api_management_api", id.ID())
 	}
 
 	apiType := api.ApiTypeHTTP
 	if v, ok := d.GetOk("api_type"); ok {
 		apiType = api.ApiType(v.(string))
 	}
-
-	soapApiType := map[api.ApiType]api.SoapApiType{
-		api.ApiTypeGraphql:   api.SoapApiTypeGraphql,
-		api.ApiTypeHTTP:      api.SoapApiTypeHTTP,
-		api.ApiTypeSoap:      api.SoapApiTypeSoap,
-		api.ApiTypeWebsocket: api.SoapApiTypeWebsocket,
-	}[apiType]
+	soapApiType := soapApiTypeFromApiType(apiType)
 
 	// If import is used, we need to send properties to Azure API in two operations.
 	// First we execute import and then updated the other props.
-	if vs, hasImport := d.GetOk("import"); hasImport {
-		importVs := vs.([]interface{})
-		importV := importVs[0].(map[string]interface{})
-		contentFormat := importV["content_format"].(string)
-		contentValue := importV["content_value"].(string)
-
-		log.Printf("[DEBUG] Importing API Management API %q of type %q", id.ApiId, contentFormat)
-		apiParams := api.ApiCreateOrUpdateParameter{
-			Properties: &api.ApiCreateOrUpdateProperties{
-				Type:    pointer.To(apiType),
-				ApiType: pointer.To(soapApiType),
-				Format:  pointer.To(api.ContentFormat(contentFormat)),
-				Value:   pointer.To(contentValue),
-				Path:    path,
-			},
-		}
-
-		if v, ok := d.GetOk("service_url"); ok {
-			apiParams.Properties.ServiceURL = pointer.To(v.(string))
-		}
-
-		wsdlSelectorVs := importV["wsdl_selector"].([]interface{})
-
-		if len(wsdlSelectorVs) > 0 {
-			wsdlSelectorV := wsdlSelectorVs[0].(map[string]interface{})
-			wSvcName := wsdlSelectorV["service_name"].(string)
-			wEndpName := wsdlSelectorV["endpoint_name"].(string)
-
-			apiParams.Properties.WsdlSelector = &api.ApiCreateOrUpdatePropertiesWsdlSelector{
-				WsdlServiceName:  pointer.To(wSvcName),
-				WsdlEndpointName: pointer.To(wEndpName),
+	if importVs, ok := d.GetOk("import"); ok {
+		if apiParams := expandApiManagementApiImport(importVs.([]interface{}), apiType, soapApiType,
+			path, d.Get("service_url").(string), version, versionSetId); apiParams != nil {
+			if err := client.CreateOrUpdateThenPoll(ctx, id, *apiParams, api.CreateOrUpdateOperationOptions{}); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
 			}
-		}
-
-		if version != "" {
-			apiParams.Properties.ApiVersion = pointer.To(version)
-		}
-
-		if versionSetId != "" {
-			apiParams.Properties.ApiVersionSetId = pointer.To(versionSetId)
-		}
-		if err := client.CreateOrUpdateThenPoll(ctx, newId, apiParams, api.CreateOrUpdateOperationOptions{}); err != nil {
-			return fmt.Errorf("creating/updating %s: %+v", id, err)
 		}
 	}
 
@@ -122,8 +68,7 @@ func resourceApiManagementApiCreateUpdate(d *pluginsdk.ResourceData, meta interf
 	serviceUrl := d.Get("service_url").(string)
 	subscriptionRequired := d.Get("subscription_required").(bool)
 
-	subscriptionKeyParameterNamesRaw := d.Get("subscription_key_parameter_names").([]interface{})
-	subscriptionKeyParameterNames := expandApiManagementApiSubscriptionKeyParamNames(subscriptionKeyParameterNamesRaw)
+	subscriptionKeyParameterNames := expandApiManagementApiSubscriptionKeyParamNames(d.Get("subscription_key_parameter_names").([]interface{}))
 
 	authenticationSettings := &api.AuthenticationSettingsContract{}
 
@@ -178,7 +123,7 @@ func resourceApiManagementApiCreateUpdate(d *pluginsdk.ResourceData, meta interf
 		params.Properties.TermsOfServiceURL = pointer.To(v.(string))
 	}
 
-	if err := client.CreateOrUpdateThenPoll(ctx, newId, params, api.CreateOrUpdateOperationOptions{IfMatch: pointer.To("*")}); err != nil {
+	if err := client.CreateOrUpdateThenPoll(ctx, id, params, api.CreateOrUpdateOperationOptions{IfMatch: pointer.To("*")}); err != nil {
 		return fmt.Errorf("creating/updating %s: %+v", id, err)
 	}
 
