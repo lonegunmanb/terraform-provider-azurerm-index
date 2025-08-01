@@ -52,13 +52,13 @@ func extractFromResourceLiteral(compLit *ast.CompositeLit, methods *LegacyResour
 
 		// Map field names to CRUD methods
 		switch fieldName {
-		case "CreateContext", "CreateFunc", "CreateWithoutTimeout":
+		case "Create", "CreateContext", "CreateFunc", "CreateWithoutTimeout":
 			methods.CreateMethod = funcName
-		case "ReadContext", "ReadFunc", "ReadWithoutTimeout":
+		case "Read", "ReadContext", "ReadFunc", "ReadWithoutTimeout":
 			methods.ReadMethod = funcName
-		case "UpdateContext", "UpdateFunc", "UpdateWithoutTimeout":
+		case "Update", "UpdateContext", "UpdateFunc", "UpdateWithoutTimeout":
 			methods.UpdateMethod = funcName
-		case "DeleteContext", "DeleteFunc", "DeleteWithoutTimeout":
+		case "Delete", "DeleteContext", "DeleteFunc", "DeleteWithoutTimeout":
 			methods.DeleteMethod = funcName
 		}
 	}

@@ -78,3 +78,32 @@ func extractDataSourceMethodsFromFunction(fn *ast.FuncDecl) *LegacyDataSourceMet
 
 	return methods
 }
+
+// extractFromDataSourceLiteral parses a pluginsdk.Resource composite literal for data sources
+// and extracts only read method names
+func extractFromDataSourceLiteral(compLit *ast.CompositeLit, methods *LegacyDataSourceMethods) {
+	for _, elt := range compLit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+
+		// Get the field name
+		var fieldName string
+		if ident, ok := kv.Key.(*ast.Ident); ok {
+			fieldName = ident.Name
+		}
+
+		// Extract function reference from the value
+		funcName := extractFunctionReference(kv.Value)
+		if funcName == "" {
+			continue
+		}
+
+		// Map field names to data source methods (only ReadContext/ReadFunc for data sources)
+		switch fieldName {
+		case "Read", "ReadContext", "ReadFunc", "ReadWithoutTimeout":
+			methods.ReadMethod = funcName
+		}
+	}
+}

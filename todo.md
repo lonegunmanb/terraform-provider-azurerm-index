@@ -521,6 +521,8 @@ This enhanced AST approach will **complement gophon** with more targeted indexin
 - [x] **Project structure**: Set up `pkg/` folder with proper Go module structure and test harness under `pkg/testharness/`
 - [x] **Code refactoring**: Created reusable functions for map-based, slice-based, and function-based parsing patterns
 - [x] **Structured data types**: Implemented all Phase 3 data structures for TerraformProviderIndex, ServiceRegistration, and individual resource info types
+- [x] **ExtractCRUDFromPackage function**: Enhanced to support basic CRUD field names (`Create`, `Read`, `Update`, `Delete`) in addition to context variants
+- [x] **ExtractCRUDFromPackage unit tests**: Comprehensive test coverage including real Azure provider function examples
 
 ### 🚧 Next Tasks (In Priority Order)
 

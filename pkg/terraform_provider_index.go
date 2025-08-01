@@ -3,12 +3,13 @@ package pkg
 import (
 	"encoding/json"
 	"fmt"
-	gophon "github.com/lonegunmanb/gophon/pkg"
-	"github.com/spf13/afero"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
+
+	gophon "github.com/lonegunmanb/gophon/pkg"
+	"github.com/spf13/afero"
 )
 
 var outputFs = afero.NewOsFs()
@@ -76,10 +77,10 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string, progr
 
 				// Scan the individual service package
 				packageInfo, err := gophon.ScanSinglePackage(servicePath, basePkgUrl)
-				
+
 				// Update progress
 				progressTracker.UpdateProgress(entry.Name())
-				
+
 				if err != nil || packageInfo == nil || len(packageInfo.Files) == 0 {
 					// Skip services that can't be scanned (might not be valid Go packages)
 					continue
@@ -182,13 +183,13 @@ func (index *TerraformProviderIndex) WriteIndexFiles(outputDir string, progressC
 	// Calculate total number of files to write
 	totalFiles := 1 // main index file
 	for _, service := range index.Services {
-		totalFiles += len(service.SupportedResources)     // legacy resources
-		totalFiles += len(service.Resources)              // modern resources
-		totalFiles += len(service.SupportedDataSources)   // legacy data sources
-		totalFiles += len(service.DataSources)            // modern data sources
-		totalFiles += len(service.EphemeralResources)     // ephemeral resources
+		totalFiles += len(service.SupportedResources)   // legacy resources
+		totalFiles += len(service.Resources)            // modern resources
+		totalFiles += len(service.SupportedDataSources) // legacy data sources
+		totalFiles += len(service.DataSources)          // modern data sources
+		totalFiles += len(service.EphemeralResources)   // ephemeral resources
 	}
-	
+
 	// Create progress tracker
 	progressTracker := NewProgressTracker("indexing", totalFiles, progressCallback)
 
@@ -302,7 +303,7 @@ func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string, progre
 				if err := index.WriteJSONFile(filePath, resourceInfo); err != nil {
 					return fmt.Errorf("failed to write legacy resource file %s: %w", fileName, err)
 				}
-				
+
 				progressTracker.UpdateProgress(fmt.Sprintf("resource %s", tfType))
 				return nil
 			})
@@ -329,7 +330,7 @@ func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string, progre
 				if err := index.WriteJSONFile(filePath, resourceInfo); err != nil {
 					return fmt.Errorf("failed to write modern resource file %s: %w", fileName, err)
 				}
-				
+
 				progressTracker.UpdateProgress(fmt.Sprintf("resource %s", terraformType))
 				return nil
 			})
@@ -360,7 +361,7 @@ func (index *TerraformProviderIndex) WriteDataSourceFiles(outputDir string, prog
 				if err := index.WriteJSONFile(filePath, dataSourceInfo); err != nil {
 					return fmt.Errorf("failed to write legacy data source file %s: %w", fileName, err)
 				}
-				
+
 				progressTracker.UpdateProgress(fmt.Sprintf("data source %s", tfType))
 				return nil
 			})
@@ -387,7 +388,7 @@ func (index *TerraformProviderIndex) WriteDataSourceFiles(outputDir string, prog
 				if err := index.WriteJSONFile(filePath, dataSourceInfo); err != nil {
 					return fmt.Errorf("failed to write modern data source file %s: %w", fileName, err)
 				}
-				
+
 				progressTracker.UpdateProgress(fmt.Sprintf("data source %s", terraformType))
 				return nil
 			})
@@ -423,7 +424,7 @@ func (index *TerraformProviderIndex) WriteEphemeralFiles(outputDir string, progr
 				if err := index.WriteJSONFile(filePath, ephemeralInfo); err != nil {
 					return fmt.Errorf("failed to write ephemeral resource file %s: %w", fileName, err)
 				}
-				
+
 				progressTracker.UpdateProgress(fmt.Sprintf("ephemeral %s", terraformType))
 				return nil
 			})
