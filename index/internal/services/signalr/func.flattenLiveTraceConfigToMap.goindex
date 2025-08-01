@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2024-03-01/webpubsub"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenLiveTraceConfigToMap(input *webpubsub.LiveTraceConfiguration) map[string]bool {
+	result := make(map[string]bool)
+	if input == nil {
+		return result
+	}
+
+	result["enabled"] = strings.EqualFold(pointer.From(input.Enabled), "true")
+
+	if input.Categories != nil {
+		for _, item := range *input.Categories {
+			name := pointer.From(item.Name)
+			categoryEnabled := pointer.From(item.Enabled)
+
+			switch name {
+			case "ConnectivityLogs":
+				result["connectivityLogsEnabled"] = strings.EqualFold(categoryEnabled, "true")
+			case "HttpRequestLogs":
+				result["httpLogsEnabled"] = strings.EqualFold(categoryEnabled, "true")
+			case "MessagingLogs":
+				result["messagingLogsEnabled"] = strings.EqualFold(categoryEnabled, "true")
+			default:
+				continue
+			}
+		}
+	}
+
+	return result
+}

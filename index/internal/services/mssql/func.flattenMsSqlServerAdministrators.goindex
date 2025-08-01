@@ -19,7 +19,6 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/servers"
 	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/go-cty/cty"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
@@ -32,21 +31,31 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func msSqlAdministratorLoginPassword(_ context.Context, d *pluginsdk.ResourceDiff, _ interface{}) (err error) {
-	adminLogin, ok := d.GetRawConfig().AsValueMap()["administrator_login"]
-	if ok {
-		if !adminLogin.IsNull() {
-			woAdminLoginPassword, err := pluginsdk.GetWriteOnlyFromDiff(d, "administrator_login_password_wo", cty.String)
-			if err != nil {
-				return err
-			}
-
-			password := d.GetRawConfig().AsValueMap()["administrator_login_password"]
-
-			if woAdminLoginPassword.IsNull() && password.IsNull() {
-				return fmt.Errorf("expected `administrator_login_password` or `administrator_login_password_wo` to be set when `administrator_login` is specified")
-			}
-		}
+func flattenMsSqlServerAdministrators(admin servers.ServerExternalAdministrator) []interface{} {
+	var login, sid, tid string
+	if admin.Login != nil {
+		login = *admin.Login
 	}
-	return
+
+	if admin.Sid != nil {
+		sid = pointer.From(admin.Sid)
+	}
+
+	if admin.TenantId != nil {
+		tid = pointer.From(admin.TenantId)
+	}
+
+	var aadOnlyAuthenticationEnabled bool
+	if admin.AzureADOnlyAuthentication != nil {
+		aadOnlyAuthenticationEnabled = pointer.From(admin.AzureADOnlyAuthentication)
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"login_username":              login,
+			"object_id":                   sid,
+			"tenant_id":                   tid,
+			"azuread_authentication_only": aadOnlyAuthenticationEnabled,
+		},
+	}
 }

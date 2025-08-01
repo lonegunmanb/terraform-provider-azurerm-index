@@ -1,0 +1,119 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2024-03-01/webpubsub"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (w WebPubSubSocketIOResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.WebPubSubName(),
+		},
+
+		"resource_group_name": commonschema.ResourceGroupName(),
+
+		"location": commonschema.Location(),
+
+		"sku": {
+			Type:     pluginsdk.TypeList,
+			Required: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringInSlice(helpers.PossibleValuesForSkuName(), false),
+					},
+					"capacity": {
+						Type:     pluginsdk.TypeInt,
+						Optional: true,
+						Default:  1,
+						ValidateFunc: validation.IntInSlice([]int{
+							1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200,
+							300, 400, 500, 600, 700, 800, 900, 1000,
+						}),
+					},
+				},
+			},
+		},
+
+		"aad_auth_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"identity": commonschema.SystemOrUserAssignedIdentityOptional(),
+
+		"live_trace_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"live_trace_connectivity_logs_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"live_trace_http_request_logs_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"live_trace_messaging_logs_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"local_auth_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"public_network_access": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      helpers.PublicNetworkAccessEnabled,
+			ValidateFunc: validation.StringInSlice(helpers.PossibleValuesForPublicNetworkAccess(), false),
+		},
+
+		"service_mode": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      helpers.SocketIOServiceModeDefault,
+			ValidateFunc: validation.StringInSlice(helpers.PossibleValuesForSocketIOServiceMode(), false),
+		},
+
+		"tags": commonschema.Tags(),
+
+		"tls_client_cert_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+		},
+	}
+}

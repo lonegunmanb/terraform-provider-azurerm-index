@@ -19,7 +19,6 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/servers"
 	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/go-cty/cty"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
@@ -94,8 +93,7 @@ func resourceMsSqlServerUpdate(d *pluginsdk.ResourceData, meta interface{}) erro
 		}
 
 		if d.HasChange("administrator_login_password") {
-			adminPassword := d.Get("administrator_login_password").(string)
-			payload.Properties.AdministratorLoginPassword = pointer.To(adminPassword)
+			payload.Properties.AdministratorLoginPassword = pointer.To(d.Get("administrator_login_password").(string))
 		}
 
 		if d.HasChange("administrator_login_password_wo_version") {
@@ -176,14 +174,14 @@ func resourceMsSqlServerUpdate(d *pluginsdk.ResourceData, meta interface{}) erro
 		}
 	}
 
-	if aadOnlyAuthentictionsEnabled := expandMsSqlServerAADOnlyAuthentictions(d.Get("azuread_administrator").([]interface{})); d.HasChange("azuread_administrator") && aadOnlyAuthentictionsEnabled {
-		aadOnlyAuthentictionsProps := serverazureadonlyauthentications.ServerAzureADOnlyAuthentication{
+	if aadOnlyAuthenticationEnabled := expandMsSqlServerAADOnlyAuthentication(d.Get("azuread_administrator").([]interface{})); d.HasChange("azuread_administrator") && aadOnlyAuthenticationEnabled {
+		aadOnlyAuthenticationProps := serverazureadonlyauthentications.ServerAzureADOnlyAuthentication{
 			Properties: &serverazureadonlyauthentications.AzureADOnlyAuthProperties{
-				AzureADOnlyAuthentication: aadOnlyAuthentictionsEnabled,
+				AzureADOnlyAuthentication: aadOnlyAuthenticationEnabled,
 			},
 		}
 
-		err := aadOnlyAuthenticationsClient.CreateOrUpdateThenPoll(ctx, *id, aadOnlyAuthentictionsProps)
+		err := aadOnlyAuthenticationsClient.CreateOrUpdateThenPoll(ctx, *id, aadOnlyAuthenticationProps)
 		if err != nil {
 			return fmt.Errorf("updating Azure Active Directory Only Authentication for %s: %+v", id, err)
 		}
@@ -196,7 +194,7 @@ func resourceMsSqlServerUpdate(d *pluginsdk.ResourceData, meta interface{}) erro
 	}
 
 	if err = connectionClient.CreateOrUpdateThenPoll(ctx, *id, connection); err != nil {
-		return fmt.Errorf("updating request for Connection Policy %s: %+v", id, err)
+		return fmt.Errorf("updating Connection Policy for %s: %+v", id, err)
 	}
 
 	return resourceMsSqlServerRead(d, meta)
