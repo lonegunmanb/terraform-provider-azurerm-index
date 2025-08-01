@@ -1,13 +1,13 @@
 package pkg
 
 import (
-	pkg2 "github.com/lonegunmanb/gophon/pkg"
+	gophon "github.com/lonegunmanb/gophon/pkg"
 	"os"
 )
 
 // ServiceRegistration represents all registration methods found in a single service package
 type ServiceRegistration struct {
-	Package              *pkg2.PackageInfo
+	Package              *gophon.PackageInfo                     `json:"-"`
 	ServiceName          string                                  `json:"service_name"`           // "keyvault", "resource", etc.
 	PackagePath          string                                  `json:"package_path"`           // "internal/services/keyvault"
 	SupportedResources   map[string]string                       `json:"supported_resources"`    // Legacy map-based resources
@@ -23,7 +23,7 @@ type ServiceRegistration struct {
 	EphemeralTerraformTypes  map[string]string `json:"ephemeral_terraform_types"`   // StructType -> TerraformType for ephemeral resources
 }
 
-func newServiceRegistration(packageInfo *pkg2.PackageInfo, entry os.DirEntry) ServiceRegistration {
+func newServiceRegistration(packageInfo *gophon.PackageInfo, entry os.DirEntry) ServiceRegistration {
 	return ServiceRegistration{
 		Package:                  packageInfo,
 		ServiceName:              entry.Name(),

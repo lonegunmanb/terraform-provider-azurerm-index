@@ -65,6 +65,7 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*Ter
 
 				// Scan the individual service package
 				packageInfo, err := gophon.ScanSinglePackage(servicePath, basePkgUrl)
+				fmt.Printf("%s scanned.\n", servicePath)
 				if err != nil || packageInfo == nil || len(packageInfo.Files) == 0 {
 					// Skip services that can't be scanned (might not be valid Go packages)
 					continue
@@ -246,263 +247,6 @@ func processCallbacksParallel(tasks []func() error) error {
 	return nil
 }
 
-// WriteTask represents a single file write operation
-type WriteTask struct {
-	FilePath string
-	Data     interface{}
-	FileName string
-}
-
-// ResourceTask represents a resource processing task
-type ResourceTask struct {
-	Service            ServiceRegistration
-	TerraformType      string
-	StructType         string
-	RegistrationMethod string
-	SDKType            string
-	OutputDir          string
-}
-
-// DataSourceTask represents a data source processing task
-type DataSourceTask struct {
-	Service            ServiceRegistration
-	TerraformType      string
-	StructType         string
-	RegistrationMethod string
-	SDKType            string
-	OutputDir          string
-}
-
-// EphemeralTask represents an ephemeral resource processing task
-type EphemeralTask struct {
-	Service       ServiceRegistration
-	TerraformType string
-	StructType    string
-	OutputDir     string
-}
-
-// processResourceTasksParallel processes resource tasks in parallel
-func (index *TerraformProviderIndex) processResourceTasksParallel(tasks []ResourceTask) error {
-	if len(tasks) == 0 {
-		return nil
-	}
-
-	numWorkers := runtime.NumCPU()
-	if numWorkers > len(tasks) {
-		numWorkers = len(tasks)
-	}
-
-	taskChan := make(chan ResourceTask, len(tasks))
-	errorChan := make(chan error, len(tasks))
-	var wg sync.WaitGroup
-
-	// Send all tasks to the channel
-	for _, task := range tasks {
-		taskChan <- task
-	}
-	close(taskChan)
-
-	// Start worker goroutines
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for task := range taskChan {
-				// Create resource info (this is the slow part we want to parallelize)
-				resourceInfo := NewTerraformResourceInfo(task.TerraformType, task.StructType, task.RegistrationMethod, task.SDKType, task.Service)
-
-				fileName := fmt.Sprintf("%s.json", task.TerraformType)
-				filePath := filepath.Join(task.OutputDir, fileName)
-
-				if err := index.WriteJSONFile(filePath, resourceInfo); err != nil {
-					errorChan <- fmt.Errorf("failed to write resource file %s: %w", fileName, err)
-					return
-				}
-			}
-		}()
-	}
-
-	// Wait for all workers to complete
-	go func() {
-		wg.Wait()
-		close(errorChan)
-	}()
-
-	// Check for errors
-	for err := range errorChan {
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// processDataSourceTasksParallel processes data source tasks in parallel
-func (index *TerraformProviderIndex) processDataSourceTasksParallel(tasks []DataSourceTask) error {
-	if len(tasks) == 0 {
-		return nil
-	}
-
-	numWorkers := runtime.NumCPU()
-	if numWorkers > len(tasks) {
-		numWorkers = len(tasks)
-	}
-
-	taskChan := make(chan DataSourceTask, len(tasks))
-	errorChan := make(chan error, len(tasks))
-	var wg sync.WaitGroup
-
-	// Send all tasks to the channel
-	for _, task := range tasks {
-		taskChan <- task
-	}
-	close(taskChan)
-
-	// Start worker goroutines
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for task := range taskChan {
-				// Create data source info (this is the slow part we want to parallelize)
-				dataSourceInfo := NewTerraformDataSourceInfo(task.TerraformType, task.StructType, task.RegistrationMethod, task.SDKType, task.Service)
-
-				fileName := fmt.Sprintf("%s.json", task.TerraformType)
-				filePath := filepath.Join(task.OutputDir, fileName)
-
-				if err := index.WriteJSONFile(filePath, dataSourceInfo); err != nil {
-					errorChan <- fmt.Errorf("failed to write data source file %s: %w", fileName, err)
-					return
-				}
-			}
-		}()
-	}
-
-	// Wait for all workers to complete
-	go func() {
-		wg.Wait()
-		close(errorChan)
-	}()
-
-	// Check for errors
-	for err := range errorChan {
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// processEphemeralTasksParallel processes ephemeral resource tasks in parallel
-func (index *TerraformProviderIndex) processEphemeralTasksParallel(tasks []EphemeralTask) error {
-	if len(tasks) == 0 {
-		return nil
-	}
-
-	numWorkers := runtime.NumCPU()
-	if numWorkers > len(tasks) {
-		numWorkers = len(tasks)
-	}
-
-	taskChan := make(chan EphemeralTask, len(tasks))
-	errorChan := make(chan error, len(tasks))
-	var wg sync.WaitGroup
-
-	// Send all tasks to the channel
-	for _, task := range tasks {
-		taskChan <- task
-	}
-	close(taskChan)
-
-	// Start worker goroutines
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for task := range taskChan {
-				// Create ephemeral info (this is the slow part we want to parallelize)
-				ephemeralInfo := NewTerraformEphemeralInfo(task.StructType, task.Service)
-
-				fileName := fmt.Sprintf("%s.json", task.TerraformType)
-				filePath := filepath.Join(task.OutputDir, fileName)
-
-				if err := index.WriteJSONFile(filePath, ephemeralInfo); err != nil {
-					errorChan <- fmt.Errorf("failed to write ephemeral file %s: %w", fileName, err)
-					return
-				}
-			}
-		}()
-	}
-
-	// Wait for all workers to complete
-	go func() {
-		wg.Wait()
-		close(errorChan)
-	}()
-
-	// Check for errors
-	for err := range errorChan {
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// processWriteTasksParallel processes write tasks in parallel using worker goroutines
-func (index *TerraformProviderIndex) processWriteTasksParallel(tasks []WriteTask) error {
-	if len(tasks) == 0 {
-		return nil
-	}
-
-	numWorkers := runtime.NumCPU()
-	if numWorkers > len(tasks) {
-		numWorkers = len(tasks)
-	}
-
-	taskChan := make(chan WriteTask, len(tasks))
-	errorChan := make(chan error, len(tasks))
-	var wg sync.WaitGroup
-
-	// Send all tasks to the channel
-	for _, task := range tasks {
-		taskChan <- task
-	}
-	close(taskChan)
-
-	// Start worker goroutines
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for task := range taskChan {
-				if err := index.WriteJSONFile(task.FilePath, task.Data); err != nil {
-					errorChan <- fmt.Errorf("failed to write file %s: %w", task.FileName, err)
-					return
-				}
-			}
-		}()
-	}
-
-	// Wait for all workers to complete
-	go func() {
-		wg.Wait()
-		close(errorChan)
-	}()
-
-	// Check for errors
-	for err := range errorChan {
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // WriteResourceFiles writes individual JSON files for each resource
 func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string) error {
 	resourcesDir := filepath.Join(outputDir, "resources")
@@ -524,6 +268,7 @@ func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string) error 
 				if err := index.WriteJSONFile(filePath, resourceInfo); err != nil {
 					return fmt.Errorf("failed to write legacy resource file %s: %w", fileName, err)
 				}
+				fmt.Printf("resource %s indexed. \n", tfType)
 				return nil
 			})
 		}
@@ -549,6 +294,7 @@ func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string) error 
 				if err := index.WriteJSONFile(filePath, resourceInfo); err != nil {
 					return fmt.Errorf("failed to write modern resource file %s: %w", fileName, err)
 				}
+				fmt.Printf("resource %s indexed. \n", terraformType)
 				return nil
 			})
 		}
@@ -578,6 +324,7 @@ func (index *TerraformProviderIndex) WriteDataSourceFiles(outputDir string) erro
 				if err := index.WriteJSONFile(filePath, dataSourceInfo); err != nil {
 					return fmt.Errorf("failed to write legacy data source file %s: %w", fileName, err)
 				}
+				fmt.Printf("data %s indexed. \n", tfType)
 				return nil
 			})
 		}
@@ -603,6 +350,7 @@ func (index *TerraformProviderIndex) WriteDataSourceFiles(outputDir string) erro
 				if err := index.WriteJSONFile(filePath, dataSourceInfo); err != nil {
 					return fmt.Errorf("failed to write modern data source file %s: %w", fileName, err)
 				}
+				fmt.Printf("data %s indexed. \n", terraformType)
 				return nil
 			})
 		}
@@ -637,6 +385,7 @@ func (index *TerraformProviderIndex) WriteEphemeralFiles(outputDir string) error
 				if err := index.WriteJSONFile(filePath, ephemeralInfo); err != nil {
 					return fmt.Errorf("failed to write ephemeral resource file %s: %w", fileName, err)
 				}
+				fmt.Printf("ephemeral %s indexed. \n", terraformType)
 				return nil
 			})
 		}
