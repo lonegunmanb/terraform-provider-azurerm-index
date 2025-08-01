@@ -84,7 +84,7 @@ func TestTerraformProviderIndex_WriteIndexFiles(t *testing.T) {
 	outputDir := "/test/output"
 
 	// Execute
-	err := sut.WriteIndexFiles(outputDir)
+	err := sut.WriteIndexFiles(outputDir, nil)
 
 	// Verify
 	require.NoError(t, err)
@@ -115,7 +115,7 @@ func TestTerraformProviderIndex_WriteResourceFiles(t *testing.T) {
 	outputDir := "/test/output"
 
 	// Execute
-	err := sut.WriteResourceFiles(outputDir)
+	err := sut.WriteResourceFiles(outputDir, nil)
 
 	// Verify
 	require.NoError(t, err)
@@ -171,7 +171,7 @@ func TestTerraformProviderIndex_WriteDataSourceFiles(t *testing.T) {
 	outputDir := "/test/output"
 
 	// Execute
-	err := index.WriteDataSourceFiles(outputDir)
+	err := index.WriteDataSourceFiles(outputDir, nil)
 
 	// Verify
 	require.NoError(t, err)
@@ -227,7 +227,7 @@ func TestTerraformProviderIndex_WriteEphemeralFiles(t *testing.T) {
 	outputDir := "/test/output"
 
 	// Execute
-	err := index.WriteEphemeralFiles(outputDir)
+	err := index.WriteEphemeralFiles(outputDir, nil)
 
 	// Verify
 	require.NoError(t, err)
@@ -366,7 +366,7 @@ func TestTerraformProviderIndex_WriteIndexFiles_EmptyIndex(t *testing.T) {
 	outputDir := "/test/output"
 
 	// Execute
-	err := index.WriteIndexFiles(outputDir)
+	err := index.WriteIndexFiles(outputDir, nil)
 
 	// Verify
 	require.NoError(t, err)
@@ -400,7 +400,7 @@ func TestTerraformProviderIndex_WriteIndexFiles_FileSystemError(t *testing.T) {
 	outputDir := "/test/output"
 
 	// Execute
-	err := index.WriteIndexFiles(outputDir)
+	err := index.WriteIndexFiles(outputDir, nil)
 
 	// Verify
 	assert.Error(t, err)
@@ -429,7 +429,7 @@ func TestTerraformProviderIndex_WriteResourceFiles_NoResources(t *testing.T) {
 	// Execute
 	err := index.CreateDirectoryStructure(outputDir)
 	require.NoError(t, err)
-	err = index.WriteResourceFiles(outputDir)
+	err = index.WriteResourceFiles(outputDir, nil)
 
 	// Verify - should succeed even with no resources
 	require.NoError(t, err)

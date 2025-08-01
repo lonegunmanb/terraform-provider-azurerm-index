@@ -22,8 +22,7 @@ type TerraformProviderIndex struct {
 
 // ScanTerraformProviderServices scans the specified directory for Terraform provider services
 // and extracts all registration information into a structured index
-func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*TerraformProviderIndex, error) {
-
+func ScanTerraformProviderServices(dir, basePkgUrl string, version string, progressCallback ProgressCallback) (*TerraformProviderIndex, error) {
 	// Read the services directory to get all service subdirectories
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -37,6 +36,18 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*Ter
 			dirEntries = append(dirEntries, entry)
 		}
 	}
+
+	totalServices := len(dirEntries)
+	if totalServices == 0 {
+		return &TerraformProviderIndex{
+			Version:    version,
+			Services:   []ServiceRegistration{},
+			Statistics: ProviderStatistics{},
+		}, nil
+	}
+
+	// Create progress tracker
+	progressTracker := NewProgressTracker("scanning", totalServices, progressCallback)
 
 	// Set up parallel processing
 	numWorkers := runtime.NumCPU()
@@ -65,7 +76,10 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*Ter
 
 				// Scan the individual service package
 				packageInfo, err := gophon.ScanSinglePackage(servicePath, basePkgUrl)
-				fmt.Printf("%s scanned.\n", servicePath)
+				
+				// Update progress
+				progressTracker.UpdateProgress(entry.Name())
+				
 				if err != nil || packageInfo == nil || len(packageInfo.Files) == 0 {
 					// Skip services that can't be scanned (might not be valid Go packages)
 					continue
@@ -152,6 +166,9 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*Ter
 
 	stats.TotalResources = stats.LegacyResources + stats.ModernResources + stats.EphemeralResources
 
+	// Report scanning completion
+	progressTracker.Complete()
+
 	return &TerraformProviderIndex{
 		Version:    version,
 		Services:   services,
@@ -161,7 +178,20 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string) (*Ter
 
 // WriteIndexFiles writes all index files to the specified output directory
 // This is the main method that orchestrates writing all index files
-func (index *TerraformProviderIndex) WriteIndexFiles(outputDir string) error {
+func (index *TerraformProviderIndex) WriteIndexFiles(outputDir string, progressCallback ProgressCallback) error {
+	// Calculate total number of files to write
+	totalFiles := 1 // main index file
+	for _, service := range index.Services {
+		totalFiles += len(service.SupportedResources)     // legacy resources
+		totalFiles += len(service.Resources)              // modern resources
+		totalFiles += len(service.SupportedDataSources)   // legacy data sources
+		totalFiles += len(service.DataSources)            // modern data sources
+		totalFiles += len(service.EphemeralResources)     // ephemeral resources
+	}
+	
+	// Create progress tracker
+	progressTracker := NewProgressTracker("indexing", totalFiles, progressCallback)
+
 	// Create directory structure
 	if err := index.CreateDirectoryStructure(outputDir); err != nil {
 		return fmt.Errorf("failed to create directory structure: %w", err)
@@ -171,21 +201,25 @@ func (index *TerraformProviderIndex) WriteIndexFiles(outputDir string) error {
 	if err := index.WriteMainIndexFile(outputDir); err != nil {
 		return fmt.Errorf("failed to write main index file: %w", err)
 	}
+	progressTracker.UpdateProgress("main index file")
 
 	// Write individual resource files
-	if err := index.WriteResourceFiles(outputDir); err != nil {
+	if err := index.WriteResourceFiles(outputDir, progressTracker); err != nil {
 		return fmt.Errorf("failed to write resource files: %w", err)
 	}
 
 	// Write individual data source files
-	if err := index.WriteDataSourceFiles(outputDir); err != nil {
+	if err := index.WriteDataSourceFiles(outputDir, progressTracker); err != nil {
 		return fmt.Errorf("failed to write data source files: %w", err)
 	}
 
 	// Write individual ephemeral resource files
-	if err := index.WriteEphemeralFiles(outputDir); err != nil {
+	if err := index.WriteEphemeralFiles(outputDir, progressTracker); err != nil {
 		return fmt.Errorf("failed to write ephemeral files: %w", err)
 	}
+
+	// Report completion
+	progressTracker.Complete()
 
 	return nil
 }
@@ -248,7 +282,7 @@ func processCallbacksParallel(tasks []func() error) error {
 }
 
 // WriteResourceFiles writes individual JSON files for each resource
-func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string) error {
+func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string, progressTracker *ProgressTracker) error {
 	resourcesDir := filepath.Join(outputDir, "resources")
 	var tasks []func() error
 
@@ -268,7 +302,8 @@ func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string) error 
 				if err := index.WriteJSONFile(filePath, resourceInfo); err != nil {
 					return fmt.Errorf("failed to write legacy resource file %s: %w", fileName, err)
 				}
-				fmt.Printf("resource %s indexed. \n", tfType)
+				
+				progressTracker.UpdateProgress(fmt.Sprintf("resource %s", tfType))
 				return nil
 			})
 		}
@@ -294,7 +329,8 @@ func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string) error 
 				if err := index.WriteJSONFile(filePath, resourceInfo); err != nil {
 					return fmt.Errorf("failed to write modern resource file %s: %w", fileName, err)
 				}
-				fmt.Printf("resource %s indexed. \n", terraformType)
+				
+				progressTracker.UpdateProgress(fmt.Sprintf("resource %s", terraformType))
 				return nil
 			})
 		}
@@ -304,7 +340,7 @@ func (index *TerraformProviderIndex) WriteResourceFiles(outputDir string) error 
 }
 
 // WriteDataSourceFiles writes individual JSON files for each data source
-func (index *TerraformProviderIndex) WriteDataSourceFiles(outputDir string) error {
+func (index *TerraformProviderIndex) WriteDataSourceFiles(outputDir string, progressTracker *ProgressTracker) error {
 	dataSourcesDir := filepath.Join(outputDir, "datasources")
 	var tasks []func() error
 
@@ -324,7 +360,8 @@ func (index *TerraformProviderIndex) WriteDataSourceFiles(outputDir string) erro
 				if err := index.WriteJSONFile(filePath, dataSourceInfo); err != nil {
 					return fmt.Errorf("failed to write legacy data source file %s: %w", fileName, err)
 				}
-				fmt.Printf("data %s indexed. \n", tfType)
+				
+				progressTracker.UpdateProgress(fmt.Sprintf("data source %s", tfType))
 				return nil
 			})
 		}
@@ -350,7 +387,8 @@ func (index *TerraformProviderIndex) WriteDataSourceFiles(outputDir string) erro
 				if err := index.WriteJSONFile(filePath, dataSourceInfo); err != nil {
 					return fmt.Errorf("failed to write modern data source file %s: %w", fileName, err)
 				}
-				fmt.Printf("data %s indexed. \n", terraformType)
+				
+				progressTracker.UpdateProgress(fmt.Sprintf("data source %s", terraformType))
 				return nil
 			})
 		}
@@ -360,7 +398,7 @@ func (index *TerraformProviderIndex) WriteDataSourceFiles(outputDir string) erro
 }
 
 // WriteEphemeralFiles writes individual JSON files for each ephemeral resource
-func (index *TerraformProviderIndex) WriteEphemeralFiles(outputDir string) error {
+func (index *TerraformProviderIndex) WriteEphemeralFiles(outputDir string, progressTracker *ProgressTracker) error {
 	ephemeralDir := filepath.Join(outputDir, "ephemeral")
 	var tasks []func() error
 
@@ -385,7 +423,8 @@ func (index *TerraformProviderIndex) WriteEphemeralFiles(outputDir string) error
 				if err := index.WriteJSONFile(filePath, ephemeralInfo); err != nil {
 					return fmt.Errorf("failed to write ephemeral resource file %s: %w", fileName, err)
 				}
-				fmt.Printf("ephemeral %s indexed. \n", terraformType)
+				
+				progressTracker.UpdateProgress(fmt.Sprintf("ephemeral %s", terraformType))
 				return nil
 			})
 		}

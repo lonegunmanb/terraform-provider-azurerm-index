@@ -78,38 +78,40 @@ Example:
 		log.Fatalf("Error: scan path does not exist: %s", *scanPath)
 	}
 
-	fmt.Printf("Scanning Terraform provider services...\n")
-	fmt.Printf("  Scan Path: %s\n", *scanPath)
-	fmt.Printf("  Package Path: %s\n", *packagePath)
-	fmt.Printf("  Version: %s\n", *version)
-	fmt.Printf("  Output Directory: %s\n", *outputDir)
+	fmt.Printf("🚀 Starting Terraform Provider Indexing...\n")
+	fmt.Printf("  📁 Scan Path: %s\n", *scanPath)
+	fmt.Printf("  📦 Package Path: %s\n", *packagePath)
+	fmt.Printf("  🏷️  Version: %s\n", *version)
+	fmt.Printf("  📂 Output Directory: %s\n", *outputDir)
 	fmt.Printf("\n")
 
+	// Create progress callback for rich visual feedback
+	progressCallback := pkg.CreateRichProgressCallback()
+
 	// Scan the Terraform provider services
-	index, err := pkg.ScanTerraformProviderServices(*scanPath, *packagePath, *version)
+	index, err := pkg.ScanTerraformProviderServices(*scanPath, *packagePath, *version, progressCallback)
 	if err != nil {
 		log.Fatalf("Error scanning Terraform provider services: %v", err)
 	}
 
-	fmt.Printf("Scan completed successfully!\n")
-	fmt.Printf("  Services Found: %d\n", index.Statistics.ServiceCount)
-	fmt.Printf("  Total Resources: %d\n", index.Statistics.TotalResources)
-	fmt.Printf("  Total Data Sources: %d\n", index.Statistics.TotalDataSources)
-	fmt.Printf("  Legacy Resources: %d\n", index.Statistics.LegacyResources)
-	fmt.Printf("  Modern Resources: %d\n", index.Statistics.ModernResources)
-	fmt.Printf("  Ephemeral Resources: %d\n", index.Statistics.EphemeralResources)
+	fmt.Printf("\n📊 Scan Results:\n")
+	fmt.Printf("  🏢 Services Found: %d\n", index.Statistics.ServiceCount)
+	fmt.Printf("  📋 Total Resources: %d\n", index.Statistics.TotalResources)
+	fmt.Printf("  📄 Total Data Sources: %d\n", index.Statistics.TotalDataSources)
+	fmt.Printf("  🔗 Legacy Resources: %d\n", index.Statistics.LegacyResources)
+	fmt.Printf("  ⚡ Modern Resources: %d\n", index.Statistics.ModernResources)
+	fmt.Printf("  🔄 Ephemeral Resources: %d\n", index.Statistics.EphemeralResources)
 	fmt.Printf("\n")
 
 	// Generate JSON output
-	fmt.Printf("Generating JSON index files...\n")
-	err = index.WriteIndexFiles(*outputDir)
+	err = index.WriteIndexFiles(*outputDir, progressCallback)
 	if err != nil {
 		log.Fatalf("Error generating JSON output: %v", err)
 	}
 
-	fmt.Printf("Index files generated successfully in: %s\n", *outputDir)
-	fmt.Printf("  Main index: %s/terraform-provider-azurerm-index.json\n", *outputDir)
-	fmt.Printf("  Resources: %s/resources/\n", *outputDir)
-	fmt.Printf("  Data Sources: %s/datasources/\n", *outputDir)
-	fmt.Printf("  Ephemeral Resources: %s/ephemeral/\n", *outputDir)
+	fmt.Printf("\n🎉 Index files generated successfully!\n")
+	fmt.Printf("  📋 Main index: %s/terraform-provider-azurerm-index.json\n", *outputDir)
+	fmt.Printf("  🔧 Resources: %s/resources/\n", *outputDir)
+	fmt.Printf("  📊 Data Sources: %s/datasources/\n", *outputDir)
+	fmt.Printf("  ⚡ Ephemeral Resources: %s/ephemeral/\n", *outputDir)
 }
