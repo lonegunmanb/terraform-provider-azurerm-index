@@ -409,18 +409,13 @@ func (index *TerraformProviderIndex) WriteEphemeralFiles(outputDir string, progr
 	var tasks []func() error
 
 	for _, service := range index.Services {
-		for _, structType := range service.EphemeralFunctions {
+		for structType, tfType := range service.EphemeralTerraformTypes {
 			// Capture variables for closure
 			structT := structType
 			svc := service
+			terraformType := tfType
 
 			tasks = append(tasks, func() error {
-				// Get the actual Terraform type from the mapping
-				terraformType, exists := svc.EphemeralTerraformTypes[structT]
-				if !exists {
-					// Fallback to struct type if mapping doesn't exist
-					terraformType = structT
-				}
 
 				ephemeralInfo := NewTerraformEphemeralInfo(structT, svc)
 				fileName := fmt.Sprintf("%s.json", terraformType)
