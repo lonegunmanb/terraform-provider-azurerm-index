@@ -1,10 +1,12 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/linkedservices"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
@@ -44,10 +46,43 @@ func resourceDataFactoryLinkedServiceSFTPCreate(d *pluginsdk.ResourceData, meta 
 		Port:               d.Get("port").(int),
 		AuthenticationType: datafactory.SftpAuthenticationType(d.Get("authentication_type").(string)),
 		UserName:           d.Get("username").(string),
-		Password: pointer.To(datafactory.SecureString{
-			Value: pointer.To(d.Get("password").(string)),
+	}
+
+	if v, ok := d.GetOk("password"); ok {
+		sftpProperties.Password = &datafactory.SecureString{
+			Value: pointer.To(v.(string)),
 			Type:  datafactory.TypeSecureString,
-		}),
+		}
+	}
+
+	if v, ok := d.GetOk("key_vault_password"); ok {
+		sftpProperties.Password = expandAzureKeyVaultSecretReference(v.([]interface{}))
+	}
+
+	if v, ok := d.GetOk("private_key_content_base64"); ok {
+		sftpProperties.PrivateKeyContent = &datafactory.SecureString{
+			Value: pointer.To(v.(string)),
+			Type:  datafactory.TypeSecureString,
+		}
+	}
+
+	if v, ok := d.GetOk("key_vault_private_key_content_base64"); ok {
+		sftpProperties.PrivateKeyContent = expandAzureKeyVaultSecretReference(v.([]interface{}))
+	}
+
+	if v, ok := d.GetOk("private_key_passphrase"); ok {
+		sftpProperties.PassPhrase = &datafactory.SecureString{
+			Value: pointer.To(v.(string)),
+			Type:  datafactory.TypeSecureString,
+		}
+	}
+
+	if v, ok := d.GetOk("key_vault_private_key_passphrase"); ok {
+		sftpProperties.PassPhrase = expandAzureKeyVaultSecretReference(v.([]interface{}))
+	}
+
+	if v, ok := d.GetOk("private_key_path"); ok {
+		sftpProperties.PrivateKeyPath = pointer.To(v.(string))
 	}
 
 	if v, ok := d.GetOk("skip_host_key_validation"); ok {
@@ -80,8 +115,7 @@ func resourceDataFactoryLinkedServiceSFTPCreate(d *pluginsdk.ResourceData, meta 
 	}
 
 	if v, ok := d.GetOk("annotations"); ok {
-		annotations := v.([]interface{})
-		sftpLinkedService.Annotations = &annotations
+		sftpLinkedService.Annotations = pointer.To(v.([]interface{}))
 	}
 
 	linkedService := datafactory.LinkedServiceResource{

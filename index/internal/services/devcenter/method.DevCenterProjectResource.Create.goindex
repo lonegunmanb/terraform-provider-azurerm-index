@@ -9,7 +9,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2023-04-01/projects"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2025-02-01/projects"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 )
@@ -17,7 +17,7 @@ func (r DevCenterProjectResource) Create() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Timeout: 30 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
-			client := metadata.Client.DevCenter.V20230401.Projects
+			client := metadata.Client.DevCenter.V20250201.Projects
 
 			var config DevCenterProjectResourceSchema
 			if err := metadata.Decode(&config); err != nil {
@@ -39,9 +39,17 @@ func (r DevCenterProjectResource) Create() sdk.ResourceFunc {
 			}
 
 			var payload projects.Project
-			if err := r.mapDevCenterProjectResourceSchemaToProject(config, &payload); err != nil {
-				return fmt.Errorf("mapping schema model to sdk model: %+v", err)
+
+			payload.Location = location.Normalize(config.Location)
+			payload.Tags = tags.Expand(config.Tags)
+
+			if payload.Properties == nil {
+				payload.Properties = &projects.ProjectProperties{}
 			}
+
+			payload.Properties.Description = &config.Description
+			payload.Properties.DevCenterId = &config.DevCenterId
+			payload.Properties.MaxDevBoxesPerUser = &config.MaximumDevBoxesPerUser
 
 			if err := client.CreateOrUpdateThenPoll(ctx, id, payload); err != nil {
 				return fmt.Errorf("creating %s: %+v", id, err)

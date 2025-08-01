@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/poolchange"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/snapshots"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumesreplication"
@@ -67,7 +69,6 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 			"pool_name": {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
-				ForceNew:     true,
 				ValidateFunc: netAppValidate.PoolName,
 			},
 
@@ -81,7 +82,6 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 			"service_level": {
 				Type:     pluginsdk.TypeString,
 				Required: true,
-				ForceNew: true,
 				ValidateFunc: validation.StringInSlice([]string{
 					string(volumes.ServiceLevelPremium),
 					string(volumes.ServiceLevelStandard),
@@ -386,6 +386,23 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 				Default:     false,
 				Description: "Enable access based enumeration setting for SMB/Dual Protocol volume. When enabled, users who do not have permission to access a shared folder or file underneath it, do not see that shared resource displayed in their environment.",
 			},
+		},
+		CustomizeDiff: func(ctx context.Context, d *pluginsdk.ResourceDiff, i interface{}) error {
+			if d.HasChanges("service_level", "pool_name") {
+				serviceLevelChange := d.HasChange("service_level")
+				poolNameChange := d.HasChange("pool_name")
+
+				// `service_level` and `pool_name` must be updated together or we ForceNew the resource
+				// https://learn.microsoft.com/en-us/azure/azure-netapp-files/dynamic-change-volume-service-level
+				if serviceLevelChange && !poolNameChange {
+					return d.ForceNew("service_level")
+				}
+				if !serviceLevelChange && poolNameChange {
+					return d.ForceNew("pool_name")
+				}
+			}
+
+			return nil
 		},
 	}
 

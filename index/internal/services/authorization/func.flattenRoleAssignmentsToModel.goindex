@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2022-04-01/roleassignments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenRoleAssignmentsToModel(input *[]roleassignments.RoleAssignment, scope string, limitAtScope bool) []RoleAssignmentsModel {
+	result := make([]RoleAssignmentsModel, 0)
+
+	if len(*input) == 0 {
+		return result
+	}
+
+	for _, v := range *input {
+		assignment := RoleAssignmentsModel{
+			RoleAssignmentID:   pointer.From(v.Id),
+			RoleAssignmentName: pointer.From(v.Name),
+		}
+
+		if props := v.Properties; props != nil {
+			// The API returns all role assignments at, above, or below the provided scope regardless of whether `atScope()` is passed as a filter.
+			// If user set `limit_at_scope` to `true` and configuration scope != returned scope, discard
+			if limitAtScope && !strings.EqualFold(scope, pointer.From(props.Scope)) {
+				continue
+			}
+
+			assignment.Condition = pointer.From(props.Condition)
+			assignment.ConditionVersion = pointer.From(props.ConditionVersion)
+			assignment.DelegatedManagedIdentityResourceID = pointer.From(props.DelegatedManagedIdentityResourceId)
+			assignment.Description = pointer.From(props.Description)
+			assignment.PrincipalID = props.PrincipalId
+			assignment.PrincipalType = string(pointer.From(props.PrincipalType))
+			assignment.RoleAssignmentScope = pointer.From(props.Scope)
+			assignment.RoleDefinitionID = props.RoleDefinitionId
+		}
+
+		result = append(result, assignment)
+	}
+
+	return result
+}

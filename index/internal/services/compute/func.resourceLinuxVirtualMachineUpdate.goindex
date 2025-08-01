@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
@@ -121,9 +122,11 @@ func resourceLinuxVirtualMachineUpdate(d *pluginsdk.ResourceData, meta interface
 	if d.HasChange("license_type") {
 		shouldUpdate = true
 
+		licenseType := "None"
 		if v, ok := d.GetOk("license_type"); ok {
-			update.Properties.LicenseType = pointer.To(v.(string))
+			licenseType = v.(string)
 		}
+		update.Properties.LicenseType = pointer.To(licenseType)
 	}
 
 	if d.HasChange("capacity_reservation_group_id") {
@@ -320,19 +323,6 @@ func resourceLinuxVirtualMachineUpdate(d *pluginsdk.ResourceData, meta interface
 		update.Properties.HardwareProfile = &virtualmachines.HardwareProfile{
 			VMSize: pointer.To(virtualmachines.VirtualMachineSizeTypes(vmSize)),
 		}
-	}
-
-	if d.HasChange("vm_agent_platform_updates_enabled") {
-		shouldUpdate = true
-		if update.Properties.OsProfile == nil {
-			update.Properties.OsProfile = &virtualmachines.OSProfile{}
-		}
-
-		if update.Properties.OsProfile.LinuxConfiguration == nil {
-			update.Properties.OsProfile.LinuxConfiguration = &virtualmachines.LinuxConfiguration{}
-		}
-
-		update.Properties.OsProfile.LinuxConfiguration.EnableVMAgentPlatformUpdates = pointer.To(d.Get("vm_agent_platform_updates_enabled").(bool))
 	}
 
 	if d.HasChange("patch_mode") {

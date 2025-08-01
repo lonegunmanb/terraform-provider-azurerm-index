@@ -1,10 +1,12 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/linkedservices"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
@@ -54,13 +56,29 @@ func resourceDataFactoryLinkedServiceSFTPRead(d *pluginsdk.ResourceData, meta in
 		d.Set("additional_properties", sftp.AdditionalProperties)
 		d.Set("description", sftp.Description)
 
-		annotations := flattenDataFactoryAnnotations(sftp.Annotations)
-		if err := d.Set("annotations", annotations); err != nil {
+		if sftp.Password != nil {
+			if v, ok := sftp.Password.AsAzureKeyVaultSecretReference(); ok {
+				d.Set("key_vault_password", flattenAzureKeyVaultSecretReference(v))
+			}
+		}
+
+		if sftp.PrivateKeyContent != nil {
+			if v, ok := sftp.PrivateKeyContent.AsAzureKeyVaultSecretReference(); ok {
+				d.Set("key_vault_private_key_content_base64", flattenAzureKeyVaultSecretReference(v))
+			}
+		}
+
+		if sftp.PassPhrase != nil {
+			if v, ok := sftp.PassPhrase.AsAzureKeyVaultSecretReference(); ok {
+				d.Set("key_vault_private_key_passphrase", flattenAzureKeyVaultSecretReference(v))
+			}
+		}
+
+		if err := d.Set("annotations", flattenDataFactoryAnnotations(sftp.Annotations)); err != nil {
 			return fmt.Errorf("setting `annotations`: %+v", err)
 		}
 
-		parameters := flattenLinkedServiceParameters(sftp.Parameters)
-		if err := d.Set("parameters", parameters); err != nil {
+		if err := d.Set("parameters", flattenLinkedServiceParameters(sftp.Parameters)); err != nil {
 			return fmt.Errorf("setting `parameters`: %+v", err)
 		}
 

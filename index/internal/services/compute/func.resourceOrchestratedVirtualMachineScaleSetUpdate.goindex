@@ -454,6 +454,25 @@ func resourceOrchestratedVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData,
 		update.Zones = pointer.To(zones.ExpandUntyped(d.Get("zones").(*schema.Set).List()))
 	}
 
+	if d.HasChange("rolling_upgrade_policy") {
+		upgradePolicy := virtualmachinescalesets.UpgradePolicy{}
+
+		if existing.Model.Properties.UpgradePolicy != nil {
+			upgradePolicy = *existing.Model.Properties.UpgradePolicy
+		}
+
+		upgradePolicy.Mode = pointer.To(virtualmachinescalesets.UpgradeMode(d.Get("upgrade_mode").(string)))
+
+		rollingRaw := d.Get("rolling_upgrade_policy").([]interface{})
+		rollingUpgradePolicy, err := ExpandVirtualMachineScaleSetRollingUpgradePolicy(rollingRaw, len(zones.ExpandUntyped(d.Get("zones").(*schema.Set).List())) > 0, false)
+		if err != nil {
+			return fmt.Errorf("expanding `rolling_upgrade_policy`: %+v", err)
+		}
+
+		upgradePolicy.RollingUpgradePolicy = rollingUpgradePolicy
+		updateProps.UpgradePolicy = &upgradePolicy
+	}
+
 	// Only two fields that can change in legacy mode
 	if d.HasChange("proximity_placement_group_id") {
 		if v, ok := d.GetOk("proximity_placement_group_id"); ok {

@@ -80,6 +80,17 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 		props.Zones = &zones
 	}
 
+	upgradeMode := virtualmachinescalesets.UpgradeMode(d.Get("upgrade_mode").(string))
+	rollingUpgradePolicy, err := ExpandVirtualMachineScaleSetRollingUpgradePolicy(d.Get("rolling_upgrade_policy").([]interface{}), len(zones) > 0, false)
+	if err != nil {
+		return fmt.Errorf("expanding `rolling_upgrade_policy`: %+v", err)
+	}
+
+	props.Properties.UpgradePolicy = &virtualmachinescalesets.UpgradePolicy{
+		Mode:                 pointer.To(upgradeMode),
+		RollingUpgradePolicy: rollingUpgradePolicy,
+	}
+
 	virtualMachineProfile := virtualmachinescalesets.VirtualMachineScaleSetVMProfile{
 		StorageProfile: &virtualmachinescalesets.VirtualMachineScaleSetStorageProfile{},
 	}
@@ -139,6 +150,11 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 
 	if hasHealthExtension {
 		log.Printf("[DEBUG] Orchestrated %s has a Health Extension defined", id)
+	}
+
+	// Virtual Machine Scale Set with Flexible Orchestration Mode and 'Rolling' upgradeMode must have Health Extension Present
+	if upgradeMode == virtualmachinescalesets.UpgradeModeRolling && !hasHealthExtension {
+		return fmt.Errorf("a health extension must be specified when `upgrade_mode` is set to `Rolling`")
 	}
 
 	if v, ok := d.GetOk("extensions_time_budget"); ok {

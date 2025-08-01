@@ -61,37 +61,7 @@ func (m DeploymentResource) Create() sdk.ResourceFunc {
 			}
 
 			prop.EnableDiagnosticsSupport = pointer.FromBool(model.DiagnoseSupportEnabled)
-			prop.NetworkProfile = &nginxdeployment.NginxNetworkProfile{
-				FrontEndIPConfiguration:       &nginxdeployment.NginxFrontendIPConfiguration{},
-				NetworkInterfaceConfiguration: &nginxdeployment.NginxNetworkInterfaceConfiguration{},
-			}
-
-			if public := model.FrontendPublic; len(public) > 0 && len(public[0].IpAddress) > 0 {
-				var publicIPs []nginxdeployment.NginxPublicIPAddress
-				for _, ip := range public[0].IpAddress {
-					publicIPs = append(publicIPs, nginxdeployment.NginxPublicIPAddress{
-						Id: pointer.To(ip),
-					})
-				}
-				prop.NetworkProfile.FrontEndIPConfiguration.PublicIPAddresses = &publicIPs
-			}
-
-			if private := model.FrontendPrivate; len(private) > 0 {
-				var privateIPs []nginxdeployment.NginxPrivateIPAddress
-				for _, ip := range private {
-					alloc := nginxdeployment.NginxPrivateIPAllocationMethod(ip.AllocationMethod)
-					privateIPs = append(privateIPs, nginxdeployment.NginxPrivateIPAddress{
-						PrivateIPAddress:          pointer.To(ip.IpAddress),
-						PrivateIPAllocationMethod: &alloc,
-						SubnetId:                  pointer.To(ip.SubnetId),
-					})
-				}
-				prop.NetworkProfile.FrontEndIPConfiguration.PrivateIPAddresses = &privateIPs
-			}
-
-			if len(model.NetworkInterface) > 0 {
-				prop.NetworkProfile.NetworkInterfaceConfiguration.SubnetId = pointer.To(model.NetworkInterface[0].SubnetId)
-			}
+			prop.NetworkProfile = expandNetworkProfile(model.FrontendPublic, model.FrontendPrivate, model.NetworkInterface)
 
 			isBasicSKU := strings.HasPrefix(model.Sku, "basic")
 			hasScaling := (model.Capacity > 0 || len(model.AutoScaleProfile) > 0)

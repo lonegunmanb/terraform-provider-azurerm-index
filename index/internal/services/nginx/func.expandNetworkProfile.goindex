@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/nginx
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/nginx/2024-11-01-preview/nginxdeployment"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandNetworkProfile(public []FrontendPublic, private []FrontendPrivate, networkInterface []NetworkInterface) *nginxdeployment.NginxNetworkProfile {
+	out := nginxdeployment.NginxNetworkProfile{
+		FrontEndIPConfiguration:       &nginxdeployment.NginxFrontendIPConfiguration{},
+		NetworkInterfaceConfiguration: &nginxdeployment.NginxNetworkInterfaceConfiguration{},
+	}
+
+	if len(public) > 0 && len(public[0].IpAddress) > 0 {
+		var publicIPs []nginxdeployment.NginxPublicIPAddress
+		for _, ip := range public[0].IpAddress {
+			publicIPs = append(publicIPs, nginxdeployment.NginxPublicIPAddress{
+				Id: pointer.To(ip),
+			})
+		}
+		out.FrontEndIPConfiguration.PublicIPAddresses = &publicIPs
+	}
+
+	if len(private) > 0 {
+		var privateIPs []nginxdeployment.NginxPrivateIPAddress
+		for _, ip := range private {
+			alloc := nginxdeployment.NginxPrivateIPAllocationMethod(ip.AllocationMethod)
+			privateIPs = append(privateIPs, nginxdeployment.NginxPrivateIPAddress{
+				PrivateIPAddress:          pointer.To(ip.IpAddress),
+				PrivateIPAllocationMethod: &alloc,
+				SubnetId:                  pointer.To(ip.SubnetId),
+			})
+		}
+		out.FrontEndIPConfiguration.PrivateIPAddresses = &privateIPs
+	}
+
+	if len(networkInterface) > 0 {
+		out.NetworkInterfaceConfiguration.SubnetId = pointer.To(networkInterface[0].SubnetId)
+	}
+
+	return &out
+}

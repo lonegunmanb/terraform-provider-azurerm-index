@@ -231,6 +231,8 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 				},
 			},
 
+			"rolling_upgrade_policy": VirtualMachineScaleSetRollingUpgradePolicySchema(),
+
 			// NOTE: single_placement_group is now supported in orchestrated VMSS
 			// Since null is now a valid value for this field there is no default
 			// for this bool
@@ -278,6 +280,18 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 				Computed: true,
 			},
 
+			"upgrade_mode": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+				Default:  string(virtualmachinescalesets.UpgradeModeManual),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(virtualmachinescalesets.UpgradeModeAutomatic),
+					string(virtualmachinescalesets.UpgradeModeManual),
+					string(virtualmachinescalesets.UpgradeModeRolling),
+				}, false),
+			},
+
 			"user_data_base64": {
 				Type:         pluginsdk.TypeString,
 				Optional:     true,
@@ -323,6 +337,17 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 					if hasSkuName && skuName == SkuNameMix {
 						return fmt.Errorf("`sku_profile` must be set when `sku_name` is set to `Mix`")
 					}
+				}
+
+				upgradeMode := virtualmachinescalesets.UpgradeMode(diff.Get("upgrade_mode").(string))
+				rollingUpgradePolicyRaw := diff.Get("rolling_upgrade_policy").([]interface{})
+
+				if upgradeMode == virtualmachinescalesets.UpgradeModeManual && len(rollingUpgradePolicyRaw) > 0 {
+					return fmt.Errorf("a `rolling_upgrade_policy` block cannot be specified when `upgrade_mode` is set to `%s`", string(upgradeMode))
+				}
+
+				if upgradeMode == virtualmachinescalesets.UpgradeModeRolling && len(rollingUpgradePolicyRaw) == 0 {
+					return fmt.Errorf("a `rolling_upgrade_policy` block must be specified when `upgrade_mode` is set to `%s`", string(upgradeMode))
 				}
 
 				return nil
