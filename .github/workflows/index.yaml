@@ -60,6 +60,9 @@ jobs:
       - name: Install gophon
         if: ${{ env.TAG_EXISTS != 'true' }}
         run: go install github.com/lonegunmanb/gophon@latest
+      - name: Install indexer
+        if: ${{ env.TAG_EXISTS != 'true' }}
+        run: go install github.com/lonegunmanb/terraform-provider-azurerm-index
       
       - name: Checkout terraform-provider-azurerm
         if: ${{ env.TAG_EXISTS != 'true' }}
@@ -73,12 +76,13 @@ jobs:
         if: ${{ env.TAG_EXISTS != 'true' }}
         run: rm -rf ./index
       
-      - name: Generate gophon index
+      - name: Generate index
         if: ${{ env.TAG_EXISTS != 'true' }}
         run: |
           cd ./tmp/terraform-provider-azurerm
-          gophon -pkg=internal -base=github.com/hashicorp/terraform-provider-azurerm -dest=../index
-      
+          gophon -pkg=internal -base=github.com/hashicorp/terraform-provider-azurerm -dest=../../index
+          terraform-provider-azurerm-index -version=${{ env.VERSION }} -scan-path internal/services -package-path github.com/hashicorp/terraform-provider-azurerm/internal/services -output ../../index
+
       - name: Commit and push index files
         if: ${{ env.TAG_EXISTS != 'true' }}
         run: |
@@ -87,10 +91,5 @@ jobs:
           git add ./index
           git commit -m "Update index files for terraform-provider-azurerm ${{ env.VERSION }}"
           git push origin main
-      - name: Create and push tag
-        if: ${{ env.TAG_EXISTS != 'true' }}
-        run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
           git tag ${{ env.VERSION }}
           git push origin ${{ env.VERSION }}
