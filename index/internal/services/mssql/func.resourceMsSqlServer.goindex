@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serverconnectionpolicies"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/servers"
 	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -30,7 +31,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceMsSqlServer() *pluginsdk.Resource {
 	resource := &pluginsdk.Resource{
@@ -79,15 +79,30 @@ func resourceMsSqlServer() *pluginsdk.Resource {
 				Computed:     true,
 				ForceNew:     true,
 				AtLeastOneOf: []string{"administrator_login", "azuread_administrator.0.azuread_authentication_only"},
-				RequiredWith: []string{"administrator_login", "administrator_login_password"},
 			},
 
 			"administrator_login_password": {
-				Type:         pluginsdk.TypeString,
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				Sensitive:     true,
+				AtLeastOneOf:  []string{"administrator_login_password", "administrator_login_password_wo", "azuread_administrator.0.azuread_authentication_only"},
+				ConflictsWith: []string{"administrator_login_password_wo"},
+			},
+
+			"administrator_login_password_wo": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				Sensitive:     true,
+				WriteOnly:     true,
+				AtLeastOneOf:  []string{"administrator_login_password_wo", "administrator_login_password", "azuread_administrator.0.azuread_authentication_only"},
+				ConflictsWith: []string{"administrator_login_password"},
+				RequiredWith:  []string{"administrator_login_password_wo_version"},
+			},
+
+			"administrator_login_password_wo_version": {
+				Type:         pluginsdk.TypeInt,
 				Optional:     true,
-				Sensitive:    true,
-				AtLeastOneOf: []string{"administrator_login_password", "azuread_administrator.0.azuread_authentication_only"},
-				RequiredWith: []string{"administrator_login", "administrator_login_password"},
+				RequiredWith: []string{"administrator_login_password_wo"},
 			},
 
 			"azuread_administrator": {
@@ -192,6 +207,8 @@ func resourceMsSqlServer() *pluginsdk.Resource {
 			pluginsdk.CustomizeDiffShim(msSqlMinimumTLSVersionDiff),
 
 			pluginsdk.CustomizeDiffShim(msSqlPasswordChangeWhenAADAuthOnly),
+
+			pluginsdk.CustomizeDiffShim(msSqlAdministratorLoginPassword),
 		),
 	}
 

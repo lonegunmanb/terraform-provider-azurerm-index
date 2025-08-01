@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/replicas"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/servers"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/serversecurityalertpolicies"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -81,22 +82,34 @@ func resourcePostgreSQLServerCreate(d *pluginsdk.ResourceData, meta interface{})
 	switch mode {
 	case servers.CreateModeDefault:
 		admin := d.Get("administrator_login").(string)
-		pass := d.Get("administrator_login_password").(string)
-		if admin == "" {
-			return fmt.Errorf("`administrator_login` must not be empty when `create_mode` is `default`")
+		password := ""
+
+		if v, ok := d.GetOk("administrator_login_password"); ok {
+			password = v.(string)
 		}
-		if pass == "" {
-			return fmt.Errorf("`administrator_login_password` must not be empty when `create_mode` is `default`")
+		woPassword, err := pluginsdk.GetWriteOnly(d, "administrator_login_password_wo", cty.String)
+		if err != nil {
+			return err
+		}
+		if !woPassword.IsNull() {
+			password = woPassword.AsString()
+		}
+
+		if admin == "" {
+			return fmt.Errorf("`administrator_login` must not be empty when `create_mode` is `Default`")
+		}
+		if password == "" {
+			return fmt.Errorf("`administrator_login_password_wo` or `administrator_login_password` must be set when `create_mode` is `Default`")
 		}
 
 		if _, ok := d.GetOk("restore_point_in_time"); ok {
-			return fmt.Errorf("`restore_point_in_time` cannot be set when `create_mode` is `default`")
+			return fmt.Errorf("`restore_point_in_time` cannot be set when `create_mode` is `Default`")
 		}
 
 		// check admin
 		props = servers.ServerPropertiesForDefaultCreate{
 			AdministratorLogin:         admin,
-			AdministratorLoginPassword: pass,
+			AdministratorLoginPassword: password,
 			InfrastructureEncryption:   &infraEncrypt,
 			PublicNetworkAccess:        &publicAccess,
 			MinimalTlsVersion:          &tlsMin,

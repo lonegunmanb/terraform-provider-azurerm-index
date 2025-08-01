@@ -16,7 +16,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func expandSecurityCenterSubscriptionPricingExtensions(inputList []interface{}, extensionsStatusFromBackend *[]pricings_v2023_01_01.Extension) *[]pricings_v2023_01_01.Extension {
 	extensionStatuses := map[string]bool{}
@@ -27,6 +26,9 @@ func expandSecurityCenterSubscriptionPricingExtensions(inputList []interface{}, 
 		for _, backendExtension := range *extensionsStatusFromBackend {
 			// set the default value to false, then turn on the extension that appear in the template
 			extensionStatuses[backendExtension.Name] = false
+			if backendExtension.AdditionalExtensionProperties != nil {
+				extensionProperties[backendExtension.Name] = *(backendExtension.AdditionalExtensionProperties)
+			}
 		}
 	}
 
@@ -52,7 +54,9 @@ func expandSecurityCenterSubscriptionPricingExtensions(inputList []interface{}, 
 			IsEnabled: isEnabled,
 		}
 
-		if vAdditional, ok := extensionProperties[extensionName]; ok {
+		// The service will return HTTP 500 if the payload contains extensionProperties and `IsEnabled==false`
+		// `AdditionalProperties of Extension 'xxx' can't be updated while the extension is disabled (IsEnabled = False)`
+		if vAdditional, ok := extensionProperties[extensionName]; ok && toBeEnabled {
 			props, _ := vAdditional.(*interface{})
 			p := (*props).(map[string]interface{})
 			output.AdditionalExtensionProperties = pointer.To(p)

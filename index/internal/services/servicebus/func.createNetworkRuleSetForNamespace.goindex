@@ -29,12 +29,14 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func createNetworkRuleSetForNamespace(ctx context.Context, client *namespaces.NamespacesClient, id namespaces.NamespaceId, input []interface{}) error {
 	if len(input) < 1 || input[0] == nil {
 		return nil
 	}
+
+	log.Printf("[DEBUG] Creating/updating the Network Rule Set associated with %s..", id)
+
 	item := input[0].(map[string]interface{})
 
 	defaultAction := namespaces.DefaultAction(item["default_action"].(string))
@@ -58,13 +60,14 @@ func createNetworkRuleSetForNamespace(ctx context.Context, client *namespaces.Na
 			VirtualNetworkRules:         vnetRule,
 			IPRules:                     ipRule,
 			PublicNetworkAccess:         &publicNetworkAccess,
-			TrustedServiceAccessEnabled: utils.Bool(item["trusted_services_allowed"].(bool)),
+			TrustedServiceAccessEnabled: pointer.To(item["trusted_services_allowed"].(bool)),
 		},
 	}
 
 	if _, err := client.CreateOrUpdateNetworkRuleSet(ctx, id, parameters); err != nil {
 		return fmt.Errorf("creating/updating %s: %+v", id, err)
 	}
+	log.Printf("[DEBUG] Created/updated the Network Rule Set associated with %s", id)
 
 	return nil
 }

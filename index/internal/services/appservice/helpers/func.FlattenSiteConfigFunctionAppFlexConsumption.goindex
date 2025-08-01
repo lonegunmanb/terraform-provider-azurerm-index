@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	apimValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func FlattenSiteConfigFunctionAppFlexConsumption(functionAppFlexConsumptionSiteConfig *webapps.SiteConfig) (*SiteConfigFunctionAppFlexConsumption, error) {
+	if functionAppFlexConsumptionSiteConfig == nil {
+		return nil, fmt.Errorf("flattening site config: SiteConfig was nil")
+	}
+
+	result := &SiteConfigFunctionAppFlexConsumption{
+		AppCommandLine:                pointer.From(functionAppFlexConsumptionSiteConfig.AppCommandLine),
+		ContainerRegistryMSI:          pointer.From(functionAppFlexConsumptionSiteConfig.AcrUserManagedIdentityID),
+		Cors:                          FlattenCorsSettings(functionAppFlexConsumptionSiteConfig.Cors),
+		DetailedErrorLogging:          pointer.From(functionAppFlexConsumptionSiteConfig.DetailedErrorLoggingEnabled),
+		HealthCheckPath:               pointer.From(functionAppFlexConsumptionSiteConfig.HealthCheckPath),
+		IpRestrictionDefaultAction:    string(pointer.From(functionAppFlexConsumptionSiteConfig.IPSecurityRestrictionsDefaultAction)),
+		ScmIpRestrictionDefaultAction: string(pointer.From(functionAppFlexConsumptionSiteConfig.ScmIPSecurityRestrictionsDefaultAction)),
+		LoadBalancing:                 string(pointer.From(functionAppFlexConsumptionSiteConfig.LoadBalancing)),
+		ManagedPipelineMode:           string(pointer.From(functionAppFlexConsumptionSiteConfig.ManagedPipelineMode)),
+		WorkerCount:                   pointer.From(functionAppFlexConsumptionSiteConfig.NumberOfWorkers),
+		ScmType:                       string(pointer.From(functionAppFlexConsumptionSiteConfig.ScmType)),
+		RuntimeScaleMonitoring:        pointer.From(functionAppFlexConsumptionSiteConfig.FunctionsRuntimeScaleMonitoringEnabled),
+		MinTlsVersion:                 string(pointer.From(functionAppFlexConsumptionSiteConfig.MinTlsVersion)),
+		ScmMinTlsVersion:              string(pointer.From(functionAppFlexConsumptionSiteConfig.ScmMinTlsVersion)),
+		WebSockets:                    pointer.From(functionAppFlexConsumptionSiteConfig.WebSocketsEnabled),
+		ScmUseMainIpRestriction:       pointer.From(functionAppFlexConsumptionSiteConfig.ScmIPSecurityRestrictionsUseMain),
+		UseManagedIdentityACR:         pointer.From(functionAppFlexConsumptionSiteConfig.AcrUseManagedIdentityCreds),
+		RemoteDebugging:               pointer.From(functionAppFlexConsumptionSiteConfig.RemoteDebuggingEnabled),
+		RemoteDebuggingVersion:        strings.ToUpper(pointer.From(functionAppFlexConsumptionSiteConfig.RemoteDebuggingVersion)),
+		Http2Enabled:                  pointer.From(functionAppFlexConsumptionSiteConfig.HTTP20Enabled),
+	}
+
+	if v := functionAppFlexConsumptionSiteConfig.ApiDefinition; v != nil && v.Url != nil {
+		result.ApiDefinition = *v.Url
+	}
+
+	if v := functionAppFlexConsumptionSiteConfig.ApiManagementConfig; v != nil && v.Id != nil {
+		result.ApiManagementConfigId = *v.Id
+	}
+
+	if functionAppFlexConsumptionSiteConfig.IPSecurityRestrictions != nil {
+		result.IpRestriction = FlattenIpRestrictions(functionAppFlexConsumptionSiteConfig.IPSecurityRestrictions)
+	}
+
+	if functionAppFlexConsumptionSiteConfig.ScmIPSecurityRestrictions != nil {
+		result.ScmIpRestriction = FlattenIpRestrictions(functionAppFlexConsumptionSiteConfig.ScmIPSecurityRestrictions)
+	}
+
+	if v := functionAppFlexConsumptionSiteConfig.DefaultDocuments; v != nil {
+		result.DefaultDocuments = *v
+	}
+
+	return result, nil
+}

@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serverconnectionpolicies"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/servers"
 	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -30,7 +31,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceMsSqlServerCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).MSSQL.ServersClient
@@ -55,6 +55,11 @@ func resourceMsSqlServerCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 		return tf.ImportAsExistsError("azurerm_mssql_server", id.ID())
 	}
 
+	woAdminLoginPassword, err := pluginsdk.GetWriteOnly(d, "administrator_login_password_wo", cty.String)
+	if err != nil {
+		return err
+	}
+
 	props := servers.Server{
 		Location: location,
 		Tags:     tags.Expand(d.Get("tags").(map[string]interface{})),
@@ -66,11 +71,15 @@ func resourceMsSqlServerCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 	}
 
 	if v := d.Get("administrator_login"); v.(string) != "" {
-		props.Properties.AdministratorLogin = utils.String(v.(string))
+		props.Properties.AdministratorLogin = pointer.To(v.(string))
 	}
 
 	if v := d.Get("administrator_login_password"); v.(string) != "" {
-		props.Properties.AdministratorLoginPassword = utils.String(v.(string))
+		props.Properties.AdministratorLoginPassword = pointer.To(v.(string))
+	}
+
+	if !woAdminLoginPassword.IsNull() {
+		props.Properties.AdministratorLoginPassword = pointer.To(woAdminLoginPassword.AsString())
 	}
 
 	// NOTE: You must set the admin before setting the values of the admin...

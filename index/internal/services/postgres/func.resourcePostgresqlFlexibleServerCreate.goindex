@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2021-06-01/serverrestart"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2023-06-01-preview/servers"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -34,10 +35,7 @@ func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta inte
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	name := d.Get("name").(string)
-	resourceGroup := d.Get("resource_group_name").(string)
-
-	id := servers.NewFlexibleServerID(subscriptionId, resourceGroup, name)
+	id := servers.NewFlexibleServerID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
 
 	existing, err := client.Get(ctx, id)
 	if err != nil {
@@ -70,6 +68,11 @@ func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta inte
 		}
 	}
 
+	woPassword, err := pluginsdk.GetWriteOnly(d, "administrator_password_wo", cty.String)
+	if err != nil {
+		return err
+	}
+
 	if createMode == "" || servers.CreateMode(createMode) == servers.CreateModeDefault {
 		_, adminLoginSet := d.GetOk("administrator_login")
 		_, adminPwdSet := d.GetOk("administrator_password")
@@ -87,11 +90,11 @@ func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta inte
 				return fmt.Errorf("`administrator_login` is required when `create_mode` is `Default` and `authentication.password_auth_enabled` is set to `true`")
 			}
 
-			if !adminPwdSet {
-				return fmt.Errorf("`administrator_password` is required when `create_mode` is `Default` and `authentication.password_auth_enabled` is set to `true`")
+			if !adminPwdSet && woPassword.IsNull() {
+				return fmt.Errorf("`administrator_password` or `administrator_password_wo` is required when `create_mode` is `Default` and `authentication.password_auth_enabled` is set to `true`")
 			}
-		} else if adminLoginSet || adminPwdSet {
-			return fmt.Errorf("`administrator_login` and `administrator_password` cannot be set during creation when `authentication.password_auth_enabled` is set to `false`")
+		} else if adminLoginSet || adminPwdSet || !woPassword.IsNull() {
+			return fmt.Errorf("`administrator_login`, `administrator_password` and `administrator_password_wo` cannot be set during creation when `authentication.password_auth_enabled` is set to `false`")
 		}
 
 		if _, ok := d.GetOk("sku_name"); !ok {
@@ -151,6 +154,10 @@ func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta inte
 
 	if v, ok := d.GetOk("administrator_password"); ok && v.(string) != "" {
 		parameters.Properties.AdministratorLoginPassword = utils.String(v.(string))
+	}
+
+	if !woPassword.IsNull() {
+		parameters.Properties.AdministratorLoginPassword = pointer.To(woPassword.AsString())
 	}
 
 	if createMode != "" {

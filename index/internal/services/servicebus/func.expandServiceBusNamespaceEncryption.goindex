@@ -29,7 +29,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func expandServiceBusNamespaceEncryption(input []interface{}) *namespaces.Encryption {
 	if len(input) == 0 || input[0] == nil {
@@ -38,18 +37,22 @@ func expandServiceBusNamespaceEncryption(input []interface{}) *namespaces.Encryp
 	v := input[0].(map[string]interface{})
 	keyId, _ := keyVaultParse.ParseOptionallyVersionedNestedItemID(v["key_vault_key_id"].(string))
 	keySource := namespaces.KeySourceMicrosoftPointKeyVault
-	return &namespaces.Encryption{
-		KeyVaultProperties: &[]namespaces.KeyVaultProperties{
-			{
-				KeyName:     utils.String(keyId.Name),
-				KeyVersion:  utils.String(keyId.Version),
-				KeyVaultUri: utils.String(keyId.KeyVaultBaseUrl),
-				Identity: &namespaces.UserAssignedIdentityProperties{
-					UserAssignedIdentity: utils.String(v["identity_id"].(string)),
-				},
+
+	encryption := namespaces.Encryption{
+		KeySource:                       &keySource,
+		RequireInfrastructureEncryption: pointer.To(v["infrastructure_encryption_enabled"].(bool)),
+	}
+
+	encryption.KeyVaultProperties = &[]namespaces.KeyVaultProperties{
+		{
+			KeyName:     pointer.To(keyId.Name),
+			KeyVersion:  pointer.To(keyId.Version),
+			KeyVaultUri: pointer.To(keyId.KeyVaultBaseUrl),
+			Identity: &namespaces.UserAssignedIdentityProperties{
+				UserAssignedIdentity: pointer.To(v["identity_id"].(string)),
 			},
 		},
-		KeySource:                       &keySource,
-		RequireInfrastructureEncryption: utils.Bool(v["infrastructure_encryption_enabled"].(bool)),
 	}
+
+	return &encryption
 }

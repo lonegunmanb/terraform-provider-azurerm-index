@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/replicas"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/servers"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/serversecurityalertpolicies"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -141,8 +142,20 @@ func resourcePostgreSQLServerUpdate(d *pluginsdk.ResourceData, meta interface{})
 	}
 
 	// Update Admin Password in the separate call when Replication is stopped: https://github.com/Azure/azure-rest-api-specs/issues/16898
-	if d.HasChange("administrator_login_password") && !replicaUpdatedToDefault {
-		properties.Properties.AdministratorLoginPassword = utils.String(d.Get("administrator_login_password").(string))
+	if d.HasChanges("administrator_login_password", "administrator_login_password_wo_version") && !replicaUpdatedToDefault {
+		password := ""
+
+		if v, ok := d.GetOk("administrator_login_password"); ok {
+			password = v.(string)
+		}
+		woPassword, err := pluginsdk.GetWriteOnly(d, "administrator_login_password_wo", cty.String)
+		if err != nil {
+			return err
+		}
+		if !woPassword.IsNull() {
+			password = woPassword.AsString()
+		}
+		properties.Properties.AdministratorLoginPassword = pointer.To(password)
 	}
 
 	if err = client.UpdateThenPoll(ctx, *id, properties); err != nil {
@@ -150,12 +163,20 @@ func resourcePostgreSQLServerUpdate(d *pluginsdk.ResourceData, meta interface{})
 	}
 
 	// Update Admin Password in a separate call when Replication is stopped: https://github.com/Azure/azure-rest-api-specs/issues/16898
-	if d.HasChange("administrator_login_password") && replicaUpdatedToDefault {
-		properties.Properties.AdministratorLoginPassword = utils.String(d.Get("administrator_login_password").(string))
+	if d.HasChanges("administrator_login_password", "administrator_login_password_wo_version") && replicaUpdatedToDefault {
+		password := ""
 
-		if err = client.UpdateThenPoll(ctx, *id, properties); err != nil {
-			return fmt.Errorf("updating Admin Password of %q: %+v", id, err)
+		if v, ok := d.GetOk("administrator_login_password"); ok {
+			password = v.(string)
 		}
+		woPassword, err := pluginsdk.GetWriteOnly(d, "administrator_login_password_wo", cty.String)
+		if err != nil {
+			return err
+		}
+		if !woPassword.IsNull() {
+			password = woPassword.AsString()
+		}
+		properties.Properties.AdministratorLoginPassword = pointer.To(password)
 	}
 
 	if v, ok := d.GetOk("threat_detection_policy"); ok {

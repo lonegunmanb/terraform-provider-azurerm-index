@@ -4,6 +4,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/clusters"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
@@ -14,7 +15,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceLogAnalyticsClusterCustomerManagedKeyUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).LogAnalytics.ClusterClient
@@ -45,17 +45,20 @@ func resourceLogAnalyticsClusterCustomerManagedKeyUpdate(d *pluginsdk.ResourceDa
 
 	model := resp.Model
 	if model == nil {
-		return fmt.Errorf("retiring `azurerm_log_analytics_cluster` %s: `model` is nil", *id)
+		return fmt.Errorf("retrieving `azurerm_log_analytics_cluster` %s: `model` is nil", *id)
 	}
 
 	if props := model.Properties; props == nil {
-		return fmt.Errorf("retiring `azurerm_log_analytics_cluster` %s: `Properties` is nil", *id)
+		return fmt.Errorf("retrieving `azurerm_log_analytics_cluster` %s: `Properties` is nil", *id)
 	}
 
+	// This is a read only property, please see comment in the create function.
+	model.Properties.AssociatedWorkspaces = nil
+
 	model.Properties.KeyVaultProperties = &clusters.KeyVaultProperties{
-		KeyVaultUri: utils.String(keyId.KeyVaultBaseUrl),
-		KeyName:     utils.String(keyId.Name),
-		KeyVersion:  utils.String(keyId.Version),
+		KeyVaultUri: pointer.To(keyId.KeyVaultBaseUrl),
+		KeyName:     pointer.To(keyId.Name),
+		KeyVersion:  pointer.To(keyId.Version),
 	}
 
 	if err := client.CreateOrUpdateThenPoll(ctx, *id, *model); err != nil {

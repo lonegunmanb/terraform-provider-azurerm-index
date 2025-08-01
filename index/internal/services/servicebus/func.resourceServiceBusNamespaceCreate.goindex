@@ -29,32 +29,30 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func resourceServiceBusNamespaceCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceServiceBusNamespaceCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).ServiceBus.NamespacesClient
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
-	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	log.Printf("[INFO] preparing arguments for ServiceBus Namespace create/update.")
+	log.Printf("[INFO] preparing arguments for ServiceBus Namespace create")
 
 	location := azure.NormalizeLocation(d.Get("location").(string))
 	sku := d.Get("sku").(string)
 	t := d.Get("tags").(map[string]interface{})
 
 	id := namespaces.NewNamespaceID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
-	if d.IsNewResource() {
-		existing, err := client.Get(ctx, id)
-		if err != nil {
-			if !response.WasNotFound(existing.HttpResponse) {
-				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
-			}
-		}
 
+	existing, err := client.Get(ctx, id)
+	if err != nil {
 		if !response.WasNotFound(existing.HttpResponse) {
-			return tf.ImportAsExistsError("azurerm_servicebus_namespace", id.ID())
+			return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
 		}
+	}
+
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_servicebus_namespace", id.ID())
 	}
 
 	identity, err := expandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))
@@ -77,7 +75,7 @@ func resourceServiceBusNamespaceCreateUpdate(d *pluginsdk.ResourceData, meta int
 		},
 		Properties: &namespaces.SBNamespaceProperties{
 			Encryption:          expandServiceBusNamespaceEncryption(d.Get("customer_managed_key").([]interface{})),
-			DisableLocalAuth:    utils.Bool(!d.Get("local_auth_enabled").(bool)),
+			DisableLocalAuth:    pointer.To(!d.Get("local_auth_enabled").(bool)),
 			PublicNetworkAccess: &publicNetworkEnabled,
 		},
 		Tags: expandTags(t),
@@ -95,7 +93,7 @@ func resourceServiceBusNamespaceCreateUpdate(d *pluginsdk.ResourceData, meta int
 		if strings.EqualFold(sku, string(namespaces.SkuNamePremium)) && capacity.(int) == 0 {
 			return fmt.Errorf("service bus SKU %q only supports `capacity` of 1, 2, 4, 8 or 16", sku)
 		}
-		parameters.Sku.Capacity = utils.Int64(int64(capacity.(int)))
+		parameters.Sku.Capacity = pointer.To(int64(capacity.(int)))
 	}
 
 	if premiumMessagingUnit := d.Get("premium_messaging_partitions"); premiumMessagingUnit != nil {
@@ -105,31 +103,17 @@ func resourceServiceBusNamespaceCreateUpdate(d *pluginsdk.ResourceData, meta int
 		if strings.EqualFold(sku, string(namespaces.SkuNamePremium)) && premiumMessagingUnit.(int) == 0 {
 			return fmt.Errorf("service bus SKU %q only supports `premium_messaging_partitions` of 1, 2, 4", sku)
 		}
-		parameters.Properties.PremiumMessagingPartitions = utils.Int64(int64(premiumMessagingUnit.(int)))
+		parameters.Properties.PremiumMessagingPartitions = pointer.To(int64(premiumMessagingUnit.(int)))
 	}
 
 	if err := client.CreateOrUpdateThenPoll(ctx, id, parameters); err != nil {
-		return fmt.Errorf("creating/updating %s: %+v", id, err)
+		return fmt.Errorf("creating %s: %+v", id, err)
 	}
 
 	d.SetId(id.ID())
 
-	if d.HasChange("network_rule_set") {
-		oldNetworkRuleSet, newNetworkRuleSet := d.GetChange("network_rule_set")
-		// if the network rule set has been removed from config, reset it instead as there is no way to remove a rule set
-		if len(oldNetworkRuleSet.([]interface{})) == 1 && len(newNetworkRuleSet.([]interface{})) == 0 {
-			log.Printf("[DEBUG] Resetting Network Rule Set associated with %s..", id)
-			if err = resetNetworkRuleSetForNamespace(ctx, client, id); err != nil {
-				return err
-			}
-			log.Printf("[DEBUG] Reset the Existing Network Rule Set associated with %s", id)
-		} else {
-			log.Printf("[DEBUG] Creating the Network Rule Set associated with %s..", id)
-			if err = createNetworkRuleSetForNamespace(ctx, client, id, newNetworkRuleSet.([]interface{})); err != nil {
-				return err
-			}
-			log.Printf("[DEBUG] Created the Network Rule Set associated with %s", id)
-		}
+	if err = createNetworkRuleSetForNamespace(ctx, client, id, d.Get("network_rule_set").([]interface{})); err != nil {
+		return err
 	}
 
 	return resourceServiceBusNamespaceRead(d, meta)

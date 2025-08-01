@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2023-12-30/serverfailover"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2023-12-30/servers"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
@@ -46,6 +47,11 @@ func resourceMysqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta interface
 		return tf.ImportAsExistsError("azurerm_mysql_flexible_server", id.ID())
 	}
 
+	woPassword, err := pluginsdk.GetWriteOnly(d, "administrator_password_wo", cty.String)
+	if err != nil {
+		return err
+	}
+
 	createMode := servers.CreateMode(d.Get("create_mode").(string))
 
 	if _, ok := d.GetOk("replication_role"); ok {
@@ -68,9 +74,11 @@ func resourceMysqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta interface
 		if _, ok := d.GetOk("administrator_login"); !ok {
 			return fmt.Errorf("`administrator_login` is required when `create_mode` is `Default`")
 		}
-		if _, ok := d.GetOk("administrator_password"); !ok {
-			return fmt.Errorf("`administrator_password` is required when `create_mode` is `Default`")
+
+		if _, ok := d.GetOk("administrator_password"); !ok && woPassword.IsNull() {
+			return fmt.Errorf("`administrator_password_wo` or `administrator_password` is required when `create_mode` is `Default`")
 		}
+
 		if _, ok := d.GetOk("sku_name"); !ok {
 			return fmt.Errorf("`sku_name` is required when `create_mode` is `Default`")
 		}
@@ -110,6 +118,10 @@ func resourceMysqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta interface
 
 	if v, ok := d.GetOk("administrator_password"); ok && v.(string) != "" {
 		parameters.Properties.AdministratorLoginPassword = utils.String(v.(string))
+	}
+
+	if !woPassword.IsNull() {
+		parameters.Properties.AdministratorLoginPassword = pointer.To(woPassword.AsString())
 	}
 
 	if v, ok := d.GetOk("zone"); ok && v.(string) != "" {
