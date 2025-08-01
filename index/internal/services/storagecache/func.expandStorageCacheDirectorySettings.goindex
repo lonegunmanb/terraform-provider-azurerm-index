@@ -1,0 +1,92 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/caches"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandStorageCacheDirectorySettings(d *pluginsdk.ResourceData) *caches.CacheDirectorySettings {
+	if raw := d.Get("directory_active_directory").([]interface{}); len(raw) != 0 {
+		b := raw[0].(map[string]interface{})
+
+		var secondaryDNSPtr *string
+		if secondaryDNS := b["dns_secondary_ip"].(string); secondaryDNS != "" {
+			secondaryDNSPtr = &secondaryDNS
+		}
+
+		return &caches.CacheDirectorySettings{
+			UsernameDownload: &caches.CacheUsernameDownloadSettings{
+				ExtendedGroups: pointer.To(true),
+				UsernameSource: pointer.To(caches.UsernameSourceAD),
+			},
+			ActiveDirectory: &caches.CacheActiveDirectorySettings{
+				PrimaryDnsIPAddress:   b["dns_primary_ip"].(string),
+				SecondaryDnsIPAddress: secondaryDNSPtr,
+				DomainName:            b["domain_name"].(string),
+				CacheNetBiosName:      b["cache_netbios_name"].(string),
+				DomainNetBiosName:     b["domain_netbios_name"].(string),
+				Credentials: &caches.CacheActiveDirectorySettingsCredentials{
+					Username: b["username"].(string),
+					Password: pointer.To(b["password"].(string)),
+				},
+			},
+		}
+	}
+
+	if raw := d.Get("directory_flat_file").([]interface{}); len(raw) != 0 {
+		b := raw[0].(map[string]interface{})
+		return &caches.CacheDirectorySettings{
+			UsernameDownload: &caches.CacheUsernameDownloadSettings{
+				ExtendedGroups: pointer.To(true),
+				UsernameSource: pointer.To(caches.UsernameSourceFile),
+				GroupFileURI:   pointer.To(b["group_file_uri"].(string)),
+				UserFileURI:    pointer.To(b["password_file_uri"].(string)),
+			},
+		}
+	}
+
+	if raw := d.Get("directory_ldap").([]interface{}); len(raw) != 0 {
+		b := raw[0].(map[string]interface{})
+		var certValidationUriPtr *string
+		certValidationUri := b["certificate_validation_uri"].(string)
+		if certValidationUri != "" {
+			certValidationUriPtr = &certValidationUri
+		}
+		return &caches.CacheDirectorySettings{
+			UsernameDownload: &caches.CacheUsernameDownloadSettings{
+				ExtendedGroups:          pointer.To(true),
+				UsernameSource:          pointer.To(caches.UsernameSourceLDAP),
+				LdapServer:              pointer.To(b["server"].(string)),
+				LdapBaseDN:              pointer.To(b["base_dn"].(string)),
+				EncryptLdapConnection:   pointer.To(b["encrypted"].(bool)),
+				RequireValidCertificate: pointer.To(certValidationUriPtr != nil),
+				AutoDownloadCertificate: pointer.To(b["download_certificate_automatically"].(bool)),
+				CaCertificateURI:        certValidationUriPtr,
+				Credentials:             expandStorageCacheDirectoryLdapBind(b["bind"].([]interface{})),
+			},
+		}
+	}
+
+	return nil
+}

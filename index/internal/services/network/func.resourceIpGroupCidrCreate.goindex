@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/ipgroups"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceIpGroupCidrCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.Client.IPGroups
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	cidr := d.Get("cidr").(string)
+	cidrName := strings.ReplaceAll(cidr, "/", "_")
+	ipGroupId, err := ipgroups.ParseIPGroupID(d.Get("ip_group_id").(string))
+	if err != nil {
+		return err
+	}
+	id := parse.NewIpGroupCidrID(ipGroupId.SubscriptionId, ipGroupId.ResourceGroupName, ipGroupId.IpGroupName, cidrName)
+
+	locks.ByID(ipGroupId.ID())
+	defer locks.UnlockByID(ipGroupId.ID())
+
+	existing, err := client.Get(ctx, *ipGroupId, ipgroups.DefaultGetOperationOptions())
+	if err != nil {
+		if response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for presence of existing %s: %s", ipGroupId, err)
+		}
+	}
+
+	if existing.Model == nil {
+		return fmt.Errorf("retrieving %s: `model` was nil", ipGroupId)
+	}
+	if existing.Model.Properties == nil {
+		return fmt.Errorf("retrieving %s: `properties` was nil", ipGroupId)
+	}
+
+	if utils.SliceContainsValue(*existing.Model.Properties.IPAddresses, cidr) {
+		return tf.ImportAsExistsError("azurerm_ip_group_cidr", id.ID())
+	}
+
+	ipAddresses := make([]string, 0)
+	if existing.Model.Properties.IPAddresses != nil {
+		ipAddresses = *existing.Model.Properties.IPAddresses
+	}
+	ipAddresses = append(ipAddresses, cidr)
+
+	params := ipgroups.IPGroup{
+		Name:     &ipGroupId.IpGroupName,
+		Location: existing.Model.Location,
+		Tags:     existing.Model.Tags,
+		Properties: &ipgroups.IPGroupPropertiesFormat{
+			IPAddresses: &ipAddresses,
+		},
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, *ipGroupId, params); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceIpGroupCidrRead(d, meta)
+}

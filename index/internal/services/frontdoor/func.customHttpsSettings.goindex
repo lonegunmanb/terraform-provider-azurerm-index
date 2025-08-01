@@ -1,0 +1,30 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func customHttpsSettings(d *pluginsdk.ResourceDiff) error {
+	frontendEndpointCustomHttpsConfig := d.Get("custom_https_configuration").([]interface{})
+	customHttpsEnabled := d.Get("custom_https_provisioning_enabled").(bool)
+
+	if len(frontendEndpointCustomHttpsConfig) > 0 {
+		if !customHttpsEnabled {
+			return errors.New(`"custom_https_provisioning_enabled" is set to "false". please remove the "custom_https_configuration" block from the configuration file`)
+		}
+
+		// Verify frontend endpoints custom https configuration is valid if defined
+		if err := verifyCustomHttpsConfiguration(frontendEndpointCustomHttpsConfig); err != nil {
+			return err
+		}
+	} else if customHttpsEnabled {
+		return errors.New(`"custom_https_provisioning_enabled" is set to "true". please add a "custom_https_configuration" block to the configuration file`)
+	}
+
+	return nil
+}

@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-03-01/virtualmachineruncommands"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r VirtualMachineRunCommandResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Compute.VirtualMachineRunCommandsClient
+
+			// ErrorBlobManagedIdentity, OutputBlobManagedIdentity, ProtectedParameter, RunAsPassword, Source.ScriptUriManagedIdentity are regarded as sensitive and not returned by API
+			var config VirtualMachineRunCommandResourceSchema
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			schema := VirtualMachineRunCommandResourceSchema{
+				ErrorBlobManagedIdentity:  config.ErrorBlobManagedIdentity,
+				OutputBlobManagedIdentity: config.OutputBlobManagedIdentity,
+				ProtectedParameter:        config.ProtectedParameter,
+				RunAsPassword:             config.RunAsPassword,
+			}
+
+			id, err := virtualmachineruncommands.ParseVirtualMachineRunCommandID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.GetByVirtualMachine(ctx, *id, virtualmachineruncommands.GetByVirtualMachineOperationOptions{
+				// otherwise, the response will not contain instanceView
+				Expand: pointer.To("instanceView"),
+			})
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(*id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			schema.Name = id.RunCommandName
+			schema.VirtualMachineId = commonids.NewVirtualMachineID(id.SubscriptionId, id.ResourceGroupName, id.VirtualMachineName).ID()
+
+			if model := resp.Model; model != nil {
+				schema.Location = model.Location
+				schema.Tags = tags.Flatten(model.Tags)
+				if prop := model.Properties; prop != nil {
+					schema.Parameter = flattenVirtualMachineRunCommandInputParameter(prop.Parameters)
+					schema.RunAsUser = pointer.From(prop.RunAsUser)
+					schema.InstanceView = flattenVirtualMachineRunCommandInstanceView(prop.InstanceView)
+					schema.Source = flattenVirtualMachineRunCommandSource(prop.Source, config)
+
+					// if blob URI is SAS URL, it will not be returned by API
+					if strings.Contains(config.ErrorBlobUri, "sig=") {
+						schema.ErrorBlobUri = config.ErrorBlobUri
+					} else {
+						schema.ErrorBlobUri = pointer.From(prop.ErrorBlobUri)
+					}
+
+					if strings.Contains(config.OutputBlobUri, "sig=") {
+						schema.OutputBlobUri = config.OutputBlobUri
+					} else {
+						schema.OutputBlobUri = pointer.From(prop.OutputBlobUri)
+					}
+				}
+			}
+
+			return metadata.Encode(&schema)
+		},
+	}
+}

@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
+)
+func (DataConnectorAwsS3Resource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			id, err := parse.DataConnectorID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var plan DataConnectorAwsS3Model
+			if err := metadata.Decode(&plan); err != nil {
+				return err
+			}
+
+			client := metadata.Client.Sentinel.DataConnectorsClient
+
+			resp, err := client.Get(ctx, id.ResourceGroup, id.WorkspaceName, id.Name)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			params, ok := resp.Value.(securityinsight.AwsS3DataConnector)
+			if !ok {
+				return fmt.Errorf("%s was not an AWS S3 Data Connector", id)
+			}
+
+			if props := params.AwsS3DataConnectorProperties; props != nil {
+				if metadata.ResourceData.HasChange("aws_role_arn") {
+					props.RoleArn = &plan.AwsRoleArm
+				}
+				if metadata.ResourceData.HasChange("destination_table") {
+					props.DestinationTable = &plan.DestinationTable
+				}
+				if metadata.ResourceData.HasChange("sqs_urls") {
+					props.SqsUrls = &plan.SqsUrls
+				}
+			}
+
+			if _, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.WorkspaceName, id.Name, params); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

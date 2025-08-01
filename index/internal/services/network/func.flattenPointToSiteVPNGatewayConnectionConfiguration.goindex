@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenPointToSiteVPNGatewayConnectionConfiguration(input *[]virtualwans.P2SConnectionConfiguration) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	output := make([]interface{}, 0)
+
+	for _, v := range *input {
+		name := ""
+		if v.Name != nil {
+			name = *v.Name
+		}
+
+		route := make([]interface{}, 0)
+		addressPrefixes := make([]interface{}, 0)
+		enableInternetSecurity := false
+		if props := v.Properties; props != nil {
+			if props.VpnClientAddressPool == nil {
+				continue
+			}
+
+			if props.VpnClientAddressPool.AddressPrefixes != nil {
+				for _, prefix := range *props.VpnClientAddressPool.AddressPrefixes {
+					addressPrefixes = append(addressPrefixes, prefix)
+				}
+			}
+
+			if props.EnableInternetSecurity != nil {
+				enableInternetSecurity = *props.EnableInternetSecurity
+			}
+
+			if props.RoutingConfiguration != nil {
+				route = flattenPointToSiteVPNGatewayConnectionRouteConfiguration(props.RoutingConfiguration)
+			}
+		}
+
+		output = append(output, map[string]interface{}{
+			"name": name,
+			"vpn_client_address_pool": []interface{}{
+				map[string]interface{}{
+					"address_prefixes": addressPrefixes,
+				},
+			},
+			"route":                     route,
+			"internet_security_enabled": enableInternetSecurity,
+		})
+	}
+
+	return output
+}

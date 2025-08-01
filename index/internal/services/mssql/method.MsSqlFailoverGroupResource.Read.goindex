@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/failovergroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/servers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r MsSqlFailoverGroupResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			subscriptionId := metadata.Client.Account.SubscriptionId
+			client := metadata.Client.MSSQL.FailoverGroupsClient
+
+			id, err := failovergroups.ParseFailoverGroupID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			serverId := parse.NewServerID(subscriptionId, id.ResourceGroupName, id.ServerName)
+
+			model := MsSqlFailoverGroupModel{
+				Name:     id.FailoverGroupName,
+				ServerId: serverId.ID(),
+			}
+
+			if existing.Model != nil {
+				model.Tags = pointer.From(existing.Model.Tags)
+
+				if props := existing.Model.Properties; props != nil {
+					if props.Databases != nil {
+						model.Databases = *props.Databases
+					}
+
+					model.PartnerServers = r.flattenPartnerServers(props.PartnerServers)
+
+					if props.ReadOnlyEndpoint != nil && pointer.From(props.ReadOnlyEndpoint.FailoverPolicy) == failovergroups.ReadOnlyEndpointFailoverPolicyEnabled {
+						model.ReadonlyEndpointFailurePolicyEnabled = true
+					}
+
+					model.ReadWriteEndpointFailurePolicy = []ReadWriteEndpointFailurePolicyModel{{
+						Mode: string(props.ReadWriteEndpoint.FailoverPolicy),
+					}}
+
+					model.ReadWriteEndpointFailurePolicy[0].GraceMinutes = pointer.From(props.ReadWriteEndpoint.FailoverWithDataLossGracePeriodMinutes)
+				}
+			}
+
+			return metadata.Encode(&model)
+		},
+	}
+}

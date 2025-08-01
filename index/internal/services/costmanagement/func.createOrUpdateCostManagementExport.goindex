@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/costmanagement
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2023-08-01/exports"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func createOrUpdateCostManagementExport(ctx context.Context, client *exports.ExportsClient, metadata sdk.ResourceMetaData, id exports.ScopedExportId, etag *string) error {
+	status := exports.StatusTypeActive
+	if v := metadata.ResourceData.Get("active"); !v.(bool) {
+		status = exports.StatusTypeInactive
+	}
+
+	deliveryInfo, err := expandExportDataStorageLocation(metadata.ResourceData.Get("export_data_storage_location").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding `export_data_storage_location`: %+v", err)
+	}
+
+	format := exports.FormatType(metadata.ResourceData.Get("file_format").(string))
+
+	recurrenceType := exports.RecurrenceType(metadata.ResourceData.Get("recurrence_type").(string))
+	props := exports.Export{
+		ETag: etag,
+		Properties: &exports.ExportProperties{
+			Schedule: &exports.ExportSchedule{
+				Recurrence: &recurrenceType,
+				RecurrencePeriod: &exports.ExportRecurrencePeriod{
+					From: metadata.ResourceData.Get("recurrence_period_start_date").(string),
+					To:   utils.String(metadata.ResourceData.Get("recurrence_period_end_date").(string)),
+				},
+				Status: &status,
+			},
+			DeliveryInfo: *deliveryInfo,
+			Format:       &format,
+			Definition:   *expandExportDefinition(metadata.ResourceData.Get("export_data_options").([]interface{})),
+		},
+	}
+
+	_, err = client.CreateOrUpdate(ctx, id, props)
+
+	return err
+}

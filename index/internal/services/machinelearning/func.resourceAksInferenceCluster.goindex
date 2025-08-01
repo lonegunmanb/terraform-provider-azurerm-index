@@ -1,0 +1,133 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/machinelearningcomputes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceAksInferenceCluster() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceAksInferenceClusterCreate,
+		Read:   resourceAksInferenceClusterRead,
+		Delete: resourceAksInferenceClusterDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := machinelearningcomputes.ParseComputeID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"kubernetes_cluster_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: commonids.ValidateKubernetesClusterID,
+				// remove in 3.0 of the provider
+				DiffSuppressFunc: suppress.CaseDifference,
+			},
+
+			"location": commonschema.Location(),
+
+			"machine_learning_workspace_id": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"cluster_purpose": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+				Default:  string(machinelearningcomputes.ClusterPurposeFastProd),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(machinelearningcomputes.ClusterPurposeDevTest),
+					string(machinelearningcomputes.ClusterPurposeFastProd),
+					string(machinelearningcomputes.ClusterPurposeDenseProd),
+				}, false),
+			},
+
+			"description": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+			},
+
+			"identity": commonschema.SystemAssignedUserAssignedIdentityOptionalForceNew(),
+
+			"ssl": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				ForceNew: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"cert": {
+							Type:          pluginsdk.TypeString,
+							Optional:      true,
+							ForceNew:      true,
+							Default:       "",
+							ConflictsWith: []string{"ssl.0.leaf_domain_label", "ssl.0.overwrite_existing_domain"},
+						},
+						"key": {
+							Type:          pluginsdk.TypeString,
+							Optional:      true,
+							ForceNew:      true,
+							Default:       "",
+							ConflictsWith: []string{"ssl.0.leaf_domain_label", "ssl.0.overwrite_existing_domain"},
+						},
+						"cname": {
+							Type:          pluginsdk.TypeString,
+							Optional:      true,
+							ForceNew:      true,
+							Default:       "",
+							ConflictsWith: []string{"ssl.0.leaf_domain_label", "ssl.0.overwrite_existing_domain"},
+						},
+						"leaf_domain_label": {
+							Type:          pluginsdk.TypeString,
+							Optional:      true,
+							ForceNew:      true,
+							Default:       "",
+							ConflictsWith: []string{"ssl.0.cert", "ssl.0.key", "ssl.0.cname"},
+						},
+						"overwrite_existing_domain": {
+							Type:          pluginsdk.TypeBool,
+							Optional:      true,
+							ForceNew:      true,
+							Default:       "",
+							ConflictsWith: []string{"ssl.0.cert", "ssl.0.key", "ssl.0.cname"},
+						},
+					},
+				},
+			},
+
+			"tags": commonschema.TagsForceNew(),
+		},
+	}
+}

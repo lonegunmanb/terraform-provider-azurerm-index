@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault
+import (
+	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"math"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/google/go-cmp/cmp"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func keyVaultCertificateCreationRefreshFunc(ctx context.Context, client *keyvault.BaseClient, keyVaultBaseUrl string, name string) pluginsdk.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+		operation, err := client.GetCertificateOperation(ctx, keyVaultBaseUrl, name)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read CertificateOperation in keyVaultCertificateCreationRefreshFunc for Certificate %q in Vault %q: %s", name, keyVaultBaseUrl, err)
+		}
+		if operation.Status == nil {
+			return nil, "", fmt.Errorf("missing status in certificate operation")
+		}
+
+		if strings.EqualFold(*operation.Status, "inProgress") {
+			if issuer := operation.IssuerParameters; issuer != nil {
+				if strings.EqualFold(pointer.From(issuer.Name), "unknown") {
+					return operation, "Ready", nil
+				}
+			}
+
+			return operation, "Provisioning", nil
+		}
+
+		if strings.EqualFold(*operation.Status, "completed") {
+			return operation, "Ready", nil
+		}
+
+		return nil, "", fmt.Errorf("certifcate creation faild in state '%s'", *operation.Status)
+	}
+}

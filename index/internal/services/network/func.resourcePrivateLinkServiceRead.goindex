@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privatelinkservices"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePrivateLinkServiceRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.PrivateLinkServices
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := privatelinkservices.ParsePrivateLinkServiceID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id, privatelinkservices.DefaultGetOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[INFO] %s does not exist - removing from state", d.Id())
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.PrivateLinkServiceName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.NormalizeNilable(model.Location))
+		if props := model.Properties; props != nil {
+			d.Set("alias", props.Alias)
+			d.Set("enable_proxy_protocol", props.EnableProxyProtocol)
+
+			var autoApprovalSub []interface{}
+			if autoApproval := props.AutoApproval; autoApproval != nil {
+				autoApprovalSub = utils.FlattenStringSlice(autoApproval.Subscriptions)
+			}
+			if err := d.Set("auto_approval_subscription_ids", autoApprovalSub); err != nil {
+				return fmt.Errorf("setting `auto_approval_subscription_ids`: %+v", err)
+			}
+
+			var subscriptions []interface{}
+			if visibility := props.Visibility; visibility != nil {
+				subscriptions = utils.FlattenStringSlice(visibility.Subscriptions)
+			}
+			if err := d.Set("visibility_subscription_ids", subscriptions); err != nil {
+				return fmt.Errorf("setting `visibility_subscription_ids`: %+v", err)
+			}
+
+			if err := d.Set("fqdns", utils.FlattenStringSlice(props.Fqdns)); err != nil {
+				return fmt.Errorf("setting `fqdns`: %+v", err)
+			}
+
+			if err := d.Set("nat_ip_configuration", flattenPrivateLinkServiceIPConfiguration(props.IPConfigurations)); err != nil {
+				return fmt.Errorf("setting `nat_ip_configuration`: %+v", err)
+			}
+
+			if err := d.Set("load_balancer_frontend_ip_configuration_ids", flattenPrivateLinkServiceFrontendIPConfiguration(props.LoadBalancerFrontendIPConfigurations)); err != nil {
+				return fmt.Errorf("setting `load_balancer_frontend_ip_configuration_ids`: %+v", err)
+			}
+		}
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+	return nil
+}

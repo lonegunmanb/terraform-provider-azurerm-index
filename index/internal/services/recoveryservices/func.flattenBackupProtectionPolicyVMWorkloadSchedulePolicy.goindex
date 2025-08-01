@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenBackupProtectionPolicyVMWorkloadSchedulePolicy(input protectionpolicies.SchedulePolicy, policyType protectionpolicies.PolicyType) []Backup {
+	if input == nil {
+		return nil
+	}
+
+	backupBlock := Backup{}
+
+	if policyType == protectionpolicies.PolicyTypeLog {
+		logSchedulePolicy, _ := input.(protectionpolicies.LogSchedulePolicy)
+
+		if v := logSchedulePolicy.ScheduleFrequencyInMins; v != nil {
+			backupBlock.FrequencyInMinutes = *v
+		}
+	} else {
+		simpleSchedulePolicy, _ := input.(protectionpolicies.SimpleSchedulePolicy)
+
+		backupBlock.Frequency = string(pointer.From(simpleSchedulePolicy.ScheduleRunFrequency))
+
+		if times := simpleSchedulePolicy.ScheduleRunTimes; times != nil && len(*times) > 0 {
+			policyTime, _ := time.Parse(time.RFC3339, (*times)[0])
+			backupBlock.Time = policyTime.Format("15:04")
+		}
+
+		if days := simpleSchedulePolicy.ScheduleRunDays; days != nil {
+			weekdays := make([]string, 0)
+			for _, d := range *days {
+				weekdays = append(weekdays, string(d))
+			}
+			backupBlock.Weekdays = weekdays
+		}
+	}
+
+	return []Backup{backupBlock}
+}

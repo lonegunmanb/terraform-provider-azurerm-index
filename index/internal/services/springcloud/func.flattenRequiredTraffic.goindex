@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func flattenRequiredTraffic(input *appplatform.NetworkProfile) []interface{} {
+	if input == nil || input.RequiredTraffics == nil {
+		return []interface{}{}
+	}
+
+	result := make([]interface{}, 0)
+	for _, v := range *input.RequiredTraffics {
+		protocol := ""
+		if v.Protocol != nil {
+			protocol = *v.Protocol
+		}
+
+		port := 0
+		if v.Port != nil {
+			port = int(*v.Port)
+		}
+
+		result = append(result, map[string]interface{}{
+			"protocol":     protocol,
+			"port":         port,
+			"ip_addresses": utils.FlattenStringSlice(v.Ips),
+			"fqdns":        utils.FlattenStringSlice(v.Fqdns),
+			"direction":    string(v.Direction),
+		})
+	}
+	return result
+}

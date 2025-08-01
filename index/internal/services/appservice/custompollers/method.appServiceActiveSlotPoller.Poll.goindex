@@ -1,0 +1,24 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/custompollers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+)
+func (p appServiceActiveSlotPoller) Poll(ctx context.Context) (*pollers.PollResult, error) {
+	resp, err := p.client.Get(ctx, p.appId)
+	if err == nil {
+		if resp.Model != nil && resp.Model.Properties != nil {
+			swapStatus := resp.Model.Properties.SlotSwapStatus
+			if swapStatus == nil || pointer.From(swapStatus.SourceSlotName) != p.id.SlotName {
+				return &pollingInProgress, err
+			}
+			return &pollingSuccess, nil
+		}
+	}
+	return nil, fmt.Errorf("retrieving %s: %+v", p.appId, err)
+}

@@ -1,0 +1,87 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/firewallpolicyrulecollectiongroups"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFirewallPolicyRuleApplication(input *[]firewallpolicyrulecollectiongroups.FirewallPolicyRule) ([]interface{}, error) {
+	if input == nil {
+		return []interface{}{}, nil
+	}
+	output := make([]interface{}, 0)
+	for _, e := range *input {
+		rule, ok := e.(firewallpolicyrulecollectiongroups.ApplicationRule)
+		if !ok {
+			return nil, fmt.Errorf("unexpected non-application rule: %+v", e)
+		}
+
+		var name string
+		if rule.Name != nil {
+			name = *rule.Name
+		}
+
+		var description string
+		if rule.Description != nil {
+			description = *rule.Description
+		}
+
+		var terminate_tls bool
+		if rule.TerminateTLS != nil {
+			terminate_tls = *rule.TerminateTLS
+		}
+
+		protocols := make([]interface{}, 0)
+		if rule.Protocols != nil {
+			for _, protocol := range *rule.Protocols {
+				var port int
+				if protocol.Port != nil {
+					port = int(*protocol.Port)
+				}
+				protocols = append(protocols, map[string]interface{}{
+					"type": string(pointer.From(protocol.ProtocolType)),
+					"port": port,
+				})
+			}
+		}
+
+		httpHeaders := make([]interface{}, 0)
+		for _, header := range pointer.From(rule.HTTPHeadersToInsert) {
+			httpHeaders = append(httpHeaders, map[string]interface{}{
+				"name":  pointer.From(header.HeaderName),
+				"value": pointer.From(header.HeaderValue),
+			})
+		}
+
+		output = append(output, map[string]interface{}{
+			"name":                  name,
+			"description":           description,
+			"protocols":             protocols,
+			"http_headers":          httpHeaders,
+			"source_addresses":      utils.FlattenStringSlice(rule.SourceAddresses),
+			"source_ip_groups":      utils.FlattenStringSlice(rule.SourceIPGroups),
+			"destination_addresses": utils.FlattenStringSlice(rule.DestinationAddresses),
+			"destination_urls":      utils.FlattenStringSlice(rule.TargetURLs),
+			"destination_fqdns":     utils.FlattenStringSlice(rule.TargetFqdns),
+			"destination_fqdn_tags": utils.FlattenStringSlice(rule.FqdnTags),
+			"terminate_tls":         terminate_tls,
+			"web_categories":        utils.FlattenStringSlice(rule.WebCategories),
+		})
+	}
+
+	return output, nil
+}

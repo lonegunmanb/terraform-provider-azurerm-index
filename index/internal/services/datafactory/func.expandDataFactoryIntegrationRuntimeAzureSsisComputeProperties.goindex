@@ -1,0 +1,89 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	sqlValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func expandDataFactoryIntegrationRuntimeAzureSsisComputeProperties(d *pluginsdk.ResourceData) *datafactory.IntegrationRuntimeComputeProperties {
+	location := azure.NormalizeLocation(d.Get("location").(string))
+	computeProperties := datafactory.IntegrationRuntimeComputeProperties{
+		Location:                     &location,
+		NodeSize:                     utils.String(d.Get("node_size").(string)),
+		NumberOfNodes:                utils.Int32(int32(d.Get("number_of_nodes").(int))),
+		MaxParallelExecutionsPerNode: utils.Int32(int32(d.Get("max_parallel_executions_per_node").(int))),
+	}
+
+	if vnetIntegrations, ok := d.GetOk("vnet_integration"); ok && len(vnetIntegrations.([]interface{})) > 0 {
+		vnetProps := vnetIntegrations.([]interface{})[0].(map[string]interface{})
+		if vnetId := vnetProps["vnet_id"].(string); len(vnetId) > 0 {
+			computeProperties.VNetProperties = &datafactory.IntegrationRuntimeVNetProperties{
+				VNetID: utils.String(vnetId),
+				Subnet: utils.String(vnetProps["subnet_name"].(string)),
+			}
+		}
+		if subnetId := vnetProps["subnet_id"].(string); len(subnetId) > 0 {
+			computeProperties.VNetProperties = &datafactory.IntegrationRuntimeVNetProperties{
+				SubnetID: utils.String(subnetId),
+			}
+		}
+
+		if publicIPs := vnetProps["public_ips"].([]interface{}); len(publicIPs) > 0 {
+			computeProperties.VNetProperties.PublicIPs = utils.ExpandStringSlice(publicIPs)
+		}
+	}
+
+	if copyComputeScales, ok := d.GetOk("copy_compute_scale"); ok && len(copyComputeScales.([]interface{})) > 0 {
+		copyComputeScale := copyComputeScales.([]interface{})[0].(map[string]interface{})
+		if v := copyComputeScale["data_integration_unit"].(int); v != 0 {
+			if computeProperties.CopyComputeScaleProperties == nil {
+				computeProperties.CopyComputeScaleProperties = &datafactory.CopyComputeScaleProperties{}
+			}
+			computeProperties.CopyComputeScaleProperties.DataIntegrationUnit = pointer.To(int32(copyComputeScale["data_integration_unit"].(int)))
+		}
+		if v := copyComputeScale["time_to_live"].(int); v != 0 {
+			if computeProperties.CopyComputeScaleProperties == nil {
+				computeProperties.CopyComputeScaleProperties = &datafactory.CopyComputeScaleProperties{}
+			}
+			computeProperties.CopyComputeScaleProperties.TimeToLive = pointer.To(int32(copyComputeScale["time_to_live"].(int)))
+		}
+	}
+
+	if pipelineExternalComputeScales, ok := d.GetOk("pipeline_external_compute_scale"); ok && len(pipelineExternalComputeScales.([]interface{})) > 0 {
+		pipelineExternalComputeScale := pipelineExternalComputeScales.([]interface{})[0].(map[string]interface{})
+		if v := pipelineExternalComputeScale["number_of_external_nodes"].(int); v != 0 {
+			if computeProperties.PipelineExternalComputeScaleProperties == nil {
+				computeProperties.PipelineExternalComputeScaleProperties = &datafactory.PipelineExternalComputeScaleProperties{}
+			}
+			computeProperties.PipelineExternalComputeScaleProperties.NumberOfExternalNodes = pointer.To(int32(pipelineExternalComputeScale["number_of_external_nodes"].(int)))
+		}
+		if v := pipelineExternalComputeScale["number_of_pipeline_nodes"].(int); v != 0 {
+			if computeProperties.PipelineExternalComputeScaleProperties == nil {
+				computeProperties.PipelineExternalComputeScaleProperties = &datafactory.PipelineExternalComputeScaleProperties{}
+			}
+			computeProperties.PipelineExternalComputeScaleProperties.NumberOfPipelineNodes = pointer.To(int32(pipelineExternalComputeScale["number_of_pipeline_nodes"].(int)))
+		}
+		if v := pipelineExternalComputeScale["time_to_live"].(int); v != 0 {
+			if computeProperties.PipelineExternalComputeScaleProperties == nil {
+				computeProperties.PipelineExternalComputeScaleProperties = &datafactory.PipelineExternalComputeScaleProperties{}
+			}
+			computeProperties.PipelineExternalComputeScaleProperties.TimeToLive = pointer.To(int32(pipelineExternalComputeScale["time_to_live"].(int)))
+		}
+	}
+
+	return &computeProperties
+}

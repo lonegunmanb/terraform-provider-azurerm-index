@@ -1,0 +1,144 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventgrid
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2022-06-15/eventsubscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceEventGridEventSubscription() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceEventGridEventSubscriptionCreateUpdate,
+		Read:   resourceEventGridEventSubscriptionRead,
+		Update: resourceEventGridEventSubscriptionCreateUpdate,
+		Delete: resourceEventGridEventSubscriptionDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		CustomizeDiff: pluginsdk.CustomizeDiffShim(func(_ context.Context, d *pluginsdk.ResourceDiff, _ interface{}) error {
+			if filterRaw := d.Get("advanced_filter"); len(filterRaw.([]interface{})) == 1 {
+				filters := filterRaw.([]interface{})[0].(map[string]interface{})
+				valueCount := 0
+				for _, valRaw := range filters {
+					for _, val := range valRaw.([]interface{}) {
+						v := val.(map[string]interface{})
+						if values, ok := v["values"]; ok {
+							valueCount += len(values.([]interface{}))
+						} else if _, ok := v["value"]; ok {
+							valueCount++
+						}
+					}
+				}
+				if valueCount > 25 {
+					return fmt.Errorf("the total number of `advanced_filter` values allowed on a single event subscription is 25, but %d are configured", valueCount)
+				}
+			}
+			return nil
+		}),
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := eventsubscriptions.ParseScopedEventSubscriptionID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": eventSubscriptionSchemaEventSubscriptionName(),
+
+			"scope": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"event_delivery_schema": eventSubscriptionSchemaEventDeliverySchema(),
+
+			"expiration_time_utc": eventSubscriptionSchemaExpirationTimeUTC(),
+
+			"azure_function_endpoint": eventSubscriptionSchemaAzureFunctionEndpoint(
+				utils.RemoveFromStringArray(
+					possibleEventSubscriptionEndpointTypes(),
+					string(AzureFunctionEndpoint),
+				),
+			),
+
+			"eventhub_endpoint_id": eventSubscriptionSchemaEventHubEndpointID(
+				utils.RemoveFromStringArray(
+					possibleEventSubscriptionEndpointTypes(),
+					string(EventHubEndpointID),
+				),
+			),
+
+			"hybrid_connection_endpoint_id": eventSubscriptionSchemaHybridConnectionEndpointID(
+				utils.RemoveFromStringArray(
+					possibleEventSubscriptionEndpointTypes(),
+					string(HybridConnectionEndpointID),
+				),
+			),
+
+			// TODO: this can become `service_bus_queue_id` in 4.0
+			"service_bus_queue_endpoint_id": eventSubscriptionSchemaServiceBusQueueEndpointID(
+				utils.RemoveFromStringArray(
+					possibleEventSubscriptionEndpointTypes(),
+					string(ServiceBusQueueEndpointID),
+				),
+			),
+
+			// TODO: this can become `service_bus_topic_id` in 4.0
+			"service_bus_topic_endpoint_id": eventSubscriptionSchemaServiceBusTopicEndpointID(
+				utils.RemoveFromStringArray(
+					possibleEventSubscriptionEndpointTypes(),
+					string(ServiceBusTopicEndpointID),
+				),
+			),
+
+			"storage_queue_endpoint": eventSubscriptionSchemaStorageQueueEndpoint(
+				utils.RemoveFromStringArray(
+					possibleEventSubscriptionEndpointTypes(),
+					string(StorageQueueEndpoint),
+				),
+			),
+
+			"webhook_endpoint": eventSubscriptionSchemaWebHookEndpoint(
+				utils.RemoveFromStringArray(
+					possibleEventSubscriptionEndpointTypes(),
+					string(WebHookEndpoint),
+				),
+			),
+
+			"included_event_types": eventSubscriptionSchemaIncludedEventTypes(),
+
+			"subject_filter": eventSubscriptionSchemaSubjectFilter(),
+
+			"advanced_filter": eventSubscriptionSchemaAdvancedFilter(),
+
+			"delivery_identity": eventSubscriptionSchemaIdentity(),
+
+			"dead_letter_identity": eventSubscriptionSchemaIdentity(),
+
+			"storage_blob_dead_letter_destination": eventSubscriptionSchemaStorageBlobDeadletterDestination(),
+
+			"retry_policy": eventSubscriptionSchemaRetryPolicy(),
+
+			"labels": eventSubscriptionSchemaLabels(),
+
+			"advanced_filtering_on_arrays_enabled": eventSubscriptionSchemaEnableAdvancedFilteringOnArrays(),
+
+			"delivery_property": eventSubscriptionSchemaDeliveryProperty(),
+		},
+	}
+}

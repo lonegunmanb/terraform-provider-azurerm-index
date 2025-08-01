@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/batchaccount"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/batch/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceBatchAccountEndpointAccessProfileSchema() *pluginsdk.Schema {
+	return &pluginsdk.Schema{
+		Type:         pluginsdk.TypeList,
+		Optional:     true,
+		MaxItems:     1,
+		AtLeastOneOf: []string{"network_profile.0.account_access", "network_profile.0.node_management_access"},
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"default_action": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Default:  batchaccount.EndpointAccessDefaultActionDeny,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(batchaccount.EndpointAccessDefaultActionAllow),
+						string(batchaccount.EndpointAccessDefaultActionDeny),
+					}, false),
+				},
+
+				"ip_rule": {
+					Type:     pluginsdk.TypeList,
+					Optional: true,
+					Elem: &pluginsdk.Resource{
+						Schema: map[string]*pluginsdk.Schema{
+							"ip_range": {
+								Type:         pluginsdk.TypeString,
+								Required:     true,
+								ValidateFunc: validate.BatchAccountIpRange,
+							},
+
+							"action": {
+								Type:     pluginsdk.TypeString,
+								Optional: true,
+								Default:  string(batchaccount.IPRuleActionAllow),
+								ValidateFunc: validation.StringInSlice([]string{
+									string(batchaccount.IPRuleActionAllow),
+								}, false),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

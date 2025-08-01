@@ -1,0 +1,185 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/authorizationserver"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceApiManagementAuthorizationServer() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceApiManagementAuthorizationServerCreateUpdate,
+		Read:   resourceApiManagementAuthorizationServerRead,
+		Update: resourceApiManagementAuthorizationServerCreateUpdate,
+		Delete: resourceApiManagementAuthorizationServerDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := authorizationserver.ParseAuthorizationServerID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": schemaz.SchemaApiManagementChildName(),
+
+			"api_management_name": schemaz.SchemaApiManagementName(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"authorization_endpoint": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"authorization_methods": {
+				Type:     pluginsdk.TypeSet,
+				Required: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(authorizationserver.AuthorizationMethodDELETE),
+						string(authorizationserver.AuthorizationMethodGET),
+						string(authorizationserver.AuthorizationMethodHEAD),
+						string(authorizationserver.AuthorizationMethodOPTIONS),
+						string(authorizationserver.AuthorizationMethodPATCH),
+						string(authorizationserver.AuthorizationMethodPOST),
+						string(authorizationserver.AuthorizationMethodPUT),
+						string(authorizationserver.AuthorizationMethodTRACE),
+					}, false),
+				},
+				Set: pluginsdk.HashString,
+			},
+
+			"client_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"client_registration_endpoint": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"display_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"grant_types": {
+				Type:     pluginsdk.TypeSet,
+				Required: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(authorizationserver.GrantTypeAuthorizationCode),
+						string(authorizationserver.GrantTypeClientCredentials),
+						string(authorizationserver.GrantTypeImplicit),
+						string(authorizationserver.GrantTypeResourceOwnerPassword),
+					}, false),
+				},
+				Set: pluginsdk.HashString,
+			},
+
+			// Optional
+			"bearer_token_sending_methods": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(authorizationserver.BearerTokenSendingMethodAuthorizationHeader),
+						string(authorizationserver.BearerTokenSendingMethodQuery),
+					}, false),
+				},
+				Set: pluginsdk.HashString,
+			},
+
+			"client_authentication_method": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(authorizationserver.ClientAuthenticationMethodBasic),
+						string(authorizationserver.ClientAuthenticationMethodBody),
+					}, false),
+				},
+				Set: pluginsdk.HashString,
+			},
+
+			"client_secret": {
+				Type:      pluginsdk.TypeString,
+				Optional:  true,
+				Sensitive: true,
+			},
+
+			"default_scope": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"description": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"resource_owner_username": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"resource_owner_password": {
+				Type:      pluginsdk.TypeString,
+				Optional:  true,
+				Sensitive: true,
+			},
+
+			"support_state": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+			},
+
+			"token_body_parameter": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+						"value": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+					},
+				},
+			},
+
+			"token_endpoint": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+		},
+	}
+}

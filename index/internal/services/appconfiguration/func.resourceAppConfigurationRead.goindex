@@ -1,0 +1,123 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appconfiguration
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appconfiguration/2024-05-01/configurationstores"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appconfiguration/2024-05-01/deletedconfigurationstores"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appconfiguration/2024-05-01/operations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appconfiguration/2024-05-01/replicas"
+	"github.com/hashicorp/go-azure-sdk/sdk/client"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appconfiguration/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceAppConfigurationRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).AppConfiguration.ConfigurationStoresClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := configurationstores.ParseConfigurationStoreID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found - removing from state!", *id)
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	resultPage, err := client.ListKeysComplete(ctx, *id)
+	if err != nil {
+		return fmt.Errorf("retrieving access keys for %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.ConfigurationStoreName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.Normalize(model.Location))
+		d.Set("sku", model.Sku.Name)
+
+		if props := model.Properties; props != nil {
+			if dataPlaneProxy := props.DataPlaneProxy; dataPlaneProxy != nil {
+				d.Set("data_plane_proxy_authentication_mode", string(pointer.From(dataPlaneProxy.AuthenticationMode)))
+				d.Set("data_plane_proxy_private_link_delegation_enabled", pointer.From(dataPlaneProxy.PrivateLinkDelegation) == configurationstores.PrivateLinkDelegationEnabled)
+			}
+
+			d.Set("endpoint", props.Endpoint)
+			d.Set("encryption", flattenAppConfigurationEncryption(props.Encryption))
+			d.Set("public_network_access", string(pointer.From(props.PublicNetworkAccess)))
+
+			localAuthEnabled := true
+			if props.DisableLocalAuth != nil {
+				localAuthEnabled = !(*props.DisableLocalAuth)
+			}
+
+			d.Set("local_auth_enabled", localAuthEnabled)
+
+			purgeProtectionEnabled := false
+			if props.EnablePurgeProtection != nil {
+				purgeProtectionEnabled = *props.EnablePurgeProtection
+			}
+			d.Set("purge_protection_enabled", purgeProtectionEnabled)
+
+			softDeleteRetentionDays := 0
+			if props.SoftDeleteRetentionInDays != nil {
+				softDeleteRetentionDays = int(*props.SoftDeleteRetentionInDays)
+			}
+			d.Set("soft_delete_retention_days", softDeleteRetentionDays)
+		}
+
+		accessKeys := flattenAppConfigurationAccessKeys(resultPage.Items)
+		d.Set("primary_read_key", accessKeys.primaryReadKey)
+		d.Set("primary_write_key", accessKeys.primaryWriteKey)
+		d.Set("secondary_read_key", accessKeys.secondaryReadKey)
+		d.Set("secondary_write_key", accessKeys.secondaryWriteKey)
+
+		flattenedIdentity, err := identity.FlattenSystemAndUserAssignedMap(model.Identity)
+		if err != nil {
+			return fmt.Errorf("flattening `identity`: %+v", err)
+		}
+		if err := d.Set("identity", flattenedIdentity); err != nil {
+			return fmt.Errorf("setting `identity`: %+v", err)
+		}
+
+		replicasClient := meta.(*clients.Client).AppConfiguration.ReplicasClient
+		resp, err := replicasClient.ListByConfigurationStoreComplete(ctx, replicas.NewConfigurationStoreID(id.SubscriptionId, id.ResourceGroupName, id.ConfigurationStoreName))
+		if err != nil {
+			return fmt.Errorf("retrieving replicas for %s: %+v", *id, err)
+		}
+
+		replica, err := flattenAppConfigurationReplicas(resp.Items)
+		if err != nil {
+			return fmt.Errorf("flattening replicas for %s: %+v", *id, err)
+		}
+		d.Set("replica", replica)
+
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+
+	return nil
+}

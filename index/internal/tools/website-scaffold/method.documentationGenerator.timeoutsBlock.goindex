@@ -1,0 +1,87 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/magodo/terraform-provider-azurerm-example-gen/examplegen"
+)
+func (gen documentationGenerator) timeoutsBlock() string {
+	if gen.resource.Timeouts == nil {
+		return ""
+	}
+	timeouts := *gen.resource.Timeouts
+
+	timeoutsBlurb := "The `timeouts` block allows you to specify [timeouts](https://www.terraform.io/language/resources/syntax#operation-timeouts) for certain actions:"
+
+	timeoutToFriendlyText := func(duration time.Duration) string {
+		hours := int(math.Floor(duration.Hours()))
+		if hours > 0 {
+			var hoursText string
+			if hours > 1 {
+				hoursText = fmt.Sprintf("%d hours", hours)
+			} else {
+				hoursText = "1 hour"
+			}
+
+			minutesRemaining := int(math.Floor(duration.Minutes())) % 60.0
+			if minutesRemaining == 0 {
+				return hoursText
+			}
+
+			var minutesText string
+			if minutesRemaining > 1 {
+				minutesText = fmt.Sprintf("%d minutes", minutesRemaining)
+			} else {
+				minutesText = "1 minute"
+			}
+
+			return fmt.Sprintf("%s and %s", hoursText, minutesText)
+		}
+
+		minutes := int(duration.Minutes())
+		if minutes > 1 {
+			return fmt.Sprintf("%d minutes", minutes)
+		}
+
+		return "1 minute"
+	}
+
+	timeoutsText := ""
+	if timeouts.Create != nil {
+		friendlyText := timeoutToFriendlyText(*timeouts.Create)
+		timeoutsText += fmt.Sprintf("* `create` - (Defaults to %s) Used when creating the %s.\n", friendlyText, gen.brandName)
+	}
+
+	if timeouts.Read != nil {
+		friendlyText := timeoutToFriendlyText(*timeouts.Read)
+		timeoutsText += fmt.Sprintf("* `read` - (Defaults to %s) Used when retrieving the %s.\n", friendlyText, gen.brandName)
+	}
+
+	if timeouts.Update != nil {
+		friendlyText := timeoutToFriendlyText(*timeouts.Update)
+		timeoutsText += fmt.Sprintf("* `update` - (Defaults to %s) Used when updating the %s.\n", friendlyText, gen.brandName)
+	}
+
+	if timeouts.Delete != nil {
+		friendlyText := timeoutToFriendlyText(*timeouts.Delete)
+		timeoutsText += fmt.Sprintf("* `delete` - (Defaults to %s) Used when deleting the %s.\n", friendlyText, gen.brandName)
+	}
+
+	timeoutsText = strings.TrimSuffix(timeoutsText, "\n")
+	return fmt.Sprintf(`## Timeouts
+
+%s
+
+%s`, timeoutsBlurb, timeoutsText)
+}

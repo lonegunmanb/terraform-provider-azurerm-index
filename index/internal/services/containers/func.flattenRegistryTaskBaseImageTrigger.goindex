@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2019-06-01-preview/tasks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenRegistryTaskBaseImageTrigger(trigger *tasks.BaseImageTrigger, model ContainerRegistryTaskModel) []BaseImageTrigger {
+	if trigger == nil {
+		return nil
+	}
+
+	payloadType := ""
+	if v := trigger.UpdateTriggerPayloadType; v != nil {
+		payloadType = string(*v)
+	}
+	obj := BaseImageTrigger{
+		Type:                     string(trigger.BaseImageTriggerType),
+		Enabled:                  *trigger.Status == tasks.TriggerStatusEnabled,
+		UpdateTriggerPayloadType: payloadType,
+		Name:                     trigger.Name,
+	}
+
+	// UpdateTriggerEndpoint is not returned from API, setting it from config.
+	if len(model.BaseImageTrigger) == 1 {
+		obj.UpdateTriggerEndpoint = model.BaseImageTrigger[0].UpdateTriggerEndpoint
+	}
+
+	return []BaseImageTrigger{obj}
+}

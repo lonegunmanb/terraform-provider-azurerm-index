@@ -1,0 +1,74 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandCdnFrontDoorFirewallManagedRules(input []interface{}) (*waf.ManagedRuleSetList, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	result := make([]waf.ManagedRuleSet, 0)
+	for _, mr := range input {
+		managedRule := mr.(map[string]interface{})
+
+		ruleType := managedRule["type"].(string)
+		version := managedRule["version"].(string)
+		action := managedRule["action"].(string)
+		overrides := managedRule["override"].([]interface{})
+		exclusions := expandCdnFrontDoorFirewallManagedRuleGroupExclusion(managedRule["exclusion"].([]interface{}))
+
+		fVersion := 1.0
+		if v, err := strconv.ParseFloat(version, 64); err == nil {
+			fVersion = v
+		}
+
+		// NOTE: The API is deferring the version range from the rule type name
+		// 'DefaultRuleSet' is < 1.1 and 'Microsoft_DefaultRuleSet' >= 1.1
+		// 'AnomalyScoring' action only valid on 2.0 and above
+		if ruleType == "DefaultRuleSet" && fVersion > 1.0 {
+			return nil, fmt.Errorf("the managed rule set type %q and version %q is not supported. If you wish to use the 'DefaultRuleSet' type please update your 'version' field to be '1.0' or 'preview-0.1', got %q", ruleType, version, version)
+		} else if ruleType == "Microsoft_DefaultRuleSet" && fVersion < 1.1 {
+			return nil, fmt.Errorf("the managed rule set type %q and version %q is not supported. If you wish to use the 'Microsoft_DefaultRuleSet' type please update your 'version' field to be '1.1', '2.0' or '2.1', got %q", ruleType, version, version)
+		}
+
+		ruleGroupOverrides, err := expandCdnFrontDoorFirewallManagedRuleGroupOverride(overrides, version, fVersion, ruleType)
+		if err != nil {
+			return nil, err
+		}
+
+		managedRuleSet := waf.ManagedRuleSet{
+			Exclusions:         exclusions,
+			RuleSetVersion:     version,
+			RuleGroupOverrides: ruleGroupOverrides,
+			RuleSetType:        ruleType,
+		}
+
+		if action != "" {
+			managedRuleSet.RuleSetAction = pointer.To(waf.ManagedRuleSetActionType(action))
+		}
+
+		result = append(result, managedRuleSet)
+	}
+
+	return &waf.ManagedRuleSetList{
+		ManagedRuleSets: &result,
+	}, nil
+}

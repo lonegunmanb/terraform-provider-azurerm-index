@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/synapse/mgmt/v2.0/synapse" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandServerSecurityAlertPolicy(d *pluginsdk.ResourceData) *synapse.ServerSecurityAlertPolicy {
+	policyState := synapse.SecurityAlertPolicyState(d.Get("policy_state").(string))
+
+	policy := synapse.ServerSecurityAlertPolicy{
+		ServerSecurityAlertPolicyProperties: &synapse.ServerSecurityAlertPolicyProperties{
+			State: policyState,
+		},
+	}
+
+	props := policy.ServerSecurityAlertPolicyProperties
+
+	if v, ok := d.GetOk("disabled_alerts"); ok {
+		disabledAlerts := make([]string, 0)
+		for _, v := range v.(*pluginsdk.Set).List() {
+			disabledAlerts = append(disabledAlerts, v.(string))
+		}
+		props.DisabledAlerts = &disabledAlerts
+	}
+
+	if v, ok := d.GetOk("email_addresses"); ok {
+		emailAddresses := make([]string, 0)
+		for _, v := range v.(*pluginsdk.Set).List() {
+			emailAddresses = append(emailAddresses, v.(string))
+		}
+		props.EmailAddresses = &emailAddresses
+	}
+
+	if v, ok := d.GetOk("email_account_admins_enabled"); ok {
+		props.EmailAccountAdmins = utils.Bool(v.(bool))
+	}
+
+	if v, ok := d.GetOk("retention_days"); ok {
+		props.RetentionDays = utils.Int32(int32(v.(int)))
+	}
+
+	if v, ok := d.GetOk("storage_account_access_key"); ok {
+		props.StorageAccountAccessKey = utils.String(v.(string))
+	}
+
+	if v, ok := d.GetOk("storage_endpoint"); ok {
+		props.StorageEndpoint = utils.String(v.(string))
+	}
+
+	return &policy
+}

@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/firewallpolicyrulecollectiongroups"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFirewallPolicyRuleNat(input *[]firewallpolicyrulecollectiongroups.FirewallPolicyRule) ([]interface{}, error) {
+	if input == nil {
+		return []interface{}{}, nil
+	}
+	output := make([]interface{}, 0)
+	for _, e := range *input {
+		rule, ok := e.(firewallpolicyrulecollectiongroups.NatRule)
+		if !ok {
+			return nil, fmt.Errorf("unexpected non-nat rule: %+v", e)
+		}
+
+		var name string
+		if rule.Name != nil {
+			name = *rule.Name
+		}
+
+		protocols := make([]interface{}, 0)
+		if rule.IPProtocols != nil {
+			for _, protocol := range *rule.IPProtocols {
+				protocols = append(protocols, string(protocol))
+			}
+		}
+		destinationAddr := ""
+		if rule.DestinationAddresses != nil && len(*rule.DestinationAddresses) != 0 {
+			destinationAddr = (*rule.DestinationAddresses)[0]
+		}
+
+		translatedPort := 0
+		if rule.TranslatedPort != nil {
+			port, err := strconv.Atoi(*rule.TranslatedPort)
+			if err != nil {
+				return nil, fmt.Errorf(`The "translatedPort" property is not a valid integer (%s)`, *rule.TranslatedPort)
+			}
+			translatedPort = port
+		}
+
+		translatedAddress := ""
+		if rule.TranslatedAddress != nil {
+			translatedAddress = *rule.TranslatedAddress
+		}
+
+		translatedFQDN := ""
+		if rule.TranslatedFqdn != nil {
+			translatedFQDN = *rule.TranslatedFqdn
+		}
+
+		output = append(output, map[string]interface{}{
+			"name":                name,
+			"protocols":           protocols,
+			"source_addresses":    utils.FlattenStringSlice(rule.SourceAddresses),
+			"source_ip_groups":    utils.FlattenStringSlice(rule.SourceIPGroups),
+			"destination_address": destinationAddr,
+			"destination_ports":   utils.FlattenStringSlice(rule.DestinationPorts),
+			"translated_address":  translatedAddress,
+			"translated_port":     translatedPort,
+			"translated_fqdn":     translatedFQDN,
+			"description":         pointer.From(rule.Description),
+		})
+	}
+	return output, nil
+}

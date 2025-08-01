@@ -1,0 +1,112 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"fmt"
+	"log"
+	"math"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAppServiceLogs(input interface{}) web.SiteLogsConfigProperties {
+	configs := input.([]interface{})
+	logs := web.SiteLogsConfigProperties{}
+
+	if len(configs) == 0 || configs[0] == nil {
+		return logs
+	}
+
+	config := configs[0].(map[string]interface{})
+
+	if v, ok := config["application_logs"]; ok {
+		appLogsConfigs := v.([]interface{})
+
+		for _, config := range appLogsConfigs {
+			logs.ApplicationLogs = &web.ApplicationLogsConfig{}
+
+			if config == nil {
+				continue
+			}
+			appLogsConfig := config.(map[string]interface{})
+
+			if v, ok := appLogsConfig["file_system_level"]; ok {
+				logs.ApplicationLogs.FileSystem = &web.FileSystemApplicationLogsConfig{
+					Level: web.LogLevel(v.(string)),
+				}
+			}
+
+			if v, ok := appLogsConfig["azure_blob_storage"]; ok {
+				storageConfigs := v.([]interface{})
+
+				for _, config := range storageConfigs {
+					storageConfig := config.(map[string]interface{})
+
+					logs.ApplicationLogs.AzureBlobStorage = &web.AzureBlobStorageApplicationLogsConfig{
+						Level:           web.LogLevel(storageConfig["level"].(string)),
+						SasURL:          utils.String(storageConfig["sas_url"].(string)),
+						RetentionInDays: utils.Int32(int32(storageConfig["retention_in_days"].(int))),
+					}
+				}
+			}
+		}
+	}
+
+	if v, ok := config["http_logs"]; ok {
+		httpLogsConfigs := v.([]interface{})
+
+		for _, config := range httpLogsConfigs {
+			logs.HTTPLogs = &web.HTTPLogsConfig{}
+
+			if config == nil {
+				continue
+			}
+			httpLogsConfig := config.(map[string]interface{})
+
+			if v, ok := httpLogsConfig["file_system"]; ok {
+				fileSystemConfigs := v.([]interface{})
+
+				for _, config := range fileSystemConfigs {
+					fileSystemConfig := config.(map[string]interface{})
+
+					logs.HTTPLogs.FileSystem = &web.FileSystemHTTPLogsConfig{
+						RetentionInMb:   utils.Int32(int32(fileSystemConfig["retention_in_mb"].(int))),
+						RetentionInDays: utils.Int32(int32(fileSystemConfig["retention_in_days"].(int))),
+						Enabled:         utils.Bool(true),
+					}
+				}
+			}
+
+			if v, ok := httpLogsConfig["azure_blob_storage"]; ok {
+				storageConfigs := v.([]interface{})
+
+				for _, config := range storageConfigs {
+					storageConfig := config.(map[string]interface{})
+
+					logs.HTTPLogs.AzureBlobStorage = &web.AzureBlobStorageHTTPLogsConfig{
+						SasURL:          utils.String(storageConfig["sas_url"].(string)),
+						RetentionInDays: utils.Int32(int32(storageConfig["retention_in_days"].(int))),
+						Enabled:         utils.Bool(true),
+					}
+				}
+			}
+		}
+	}
+
+	if v, ok := config["detailed_error_messages_enabled"]; ok {
+		logs.DetailedErrorMessages = &web.EnabledConfig{
+			Enabled: utils.Bool(v.(bool)),
+		}
+	}
+
+	if v, ok := config["failed_request_tracing_enabled"]; ok {
+		logs.FailedRequestsTracing = &web.EnabledConfig{
+			Enabled: utils.Bool(v.(bool)),
+		}
+	}
+
+	return logs
+}

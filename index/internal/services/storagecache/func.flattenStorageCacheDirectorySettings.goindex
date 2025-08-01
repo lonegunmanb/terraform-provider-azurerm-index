@@ -1,0 +1,95 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/caches"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenStorageCacheDirectorySettings(d *pluginsdk.ResourceData, input *caches.CacheDirectorySettings) (ad, flatFile, ldap []interface{}, err error) {
+	if input == nil || input.UsernameDownload == nil || *input.UsernameDownload.UsernameSource == caches.UsernameSourceNone {
+		return nil, nil, nil, nil
+	}
+
+	ud := input.UsernameDownload
+	switch *ud.UsernameSource {
+	case caches.UsernameSourceAD:
+		var (
+			primaryDNS        string
+			domainName        string
+			cacheNetBiosName  string
+			username          string
+			password          string
+			domainNetBiosName string
+			secondaryDNS      string
+		)
+
+		if ad := input.ActiveDirectory; ad != nil {
+			primaryDNS = ad.PrimaryDnsIPAddress
+			domainName = ad.DomainName
+			cacheNetBiosName = ad.CacheNetBiosName
+			domainNetBiosName = ad.DomainNetBiosName
+			secondaryDNS = pointer.From(ad.SecondaryDnsIPAddress)
+		}
+		// Since the credentials are never returned from response. We will set whatever specified in the config back to state as the best effort.
+		ad := d.Get("directory_active_directory").([]interface{})
+		if len(ad) == 1 {
+			b := ad[0].(map[string]interface{})
+			username = b["username"].(string)
+			password = b["password"].(string)
+		}
+
+		return []interface{}{
+			map[string]interface{}{
+				"dns_primary_ip":      primaryDNS,
+				"domain_name":         domainName,
+				"cache_netbios_name":  cacheNetBiosName,
+				"domain_netbios_name": domainNetBiosName,
+				"dns_secondary_ip":    secondaryDNS,
+				"username":            username,
+				"password":            password,
+			},
+		}, nil, nil, nil
+
+	case caches.UsernameSourceFile:
+		return nil, []interface{}{
+			map[string]interface{}{
+				"group_file_uri":    pointer.From(ud.GroupFileURI),
+				"password_file_uri": pointer.From(ud.UserFileURI),
+			},
+		}, nil, nil
+	case caches.UsernameSourceLDAP:
+		return nil, nil, []interface{}{
+			map[string]interface{}{
+				"server":                             pointer.From(ud.LdapServer),
+				"base_dn":                            pointer.From(ud.LdapBaseDN),
+				"encrypted":                          pointer.From(ud.EncryptLdapConnection),
+				"certificate_validation_uri":         pointer.From(ud.CaCertificateURI),
+				"download_certificate_automatically": pointer.From(ud.AutoDownloadCertificate),
+				"bind":                               flattenStorageCacheDirectoryLdapBind(d),
+			},
+		}, nil
+	default:
+		return nil, nil, nil, fmt.Errorf("source type %q is not supported", *ud.UsernameSource)
+	}
+}

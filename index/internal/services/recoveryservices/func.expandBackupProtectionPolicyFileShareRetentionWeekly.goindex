@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandBackupProtectionPolicyFileShareRetentionWeekly(d *pluginsdk.ResourceData, times []string) *protectionpolicies.WeeklyRetentionSchedule {
+	if rb, ok := d.Get("retention_weekly").([]interface{}); ok && len(rb) > 0 {
+		block := rb[0].(map[string]interface{})
+
+		retention := protectionpolicies.WeeklyRetentionSchedule{
+			RetentionTimes: &times,
+			RetentionDuration: &protectionpolicies.RetentionDuration{
+				Count:        pointer.To(int64(block["count"].(int))),
+				DurationType: pointer.To(protectionpolicies.RetentionDurationTypeWeeks),
+			},
+		}
+
+		if v, ok := block["weekdays"].(*pluginsdk.Set); ok {
+			days := make([]protectionpolicies.DayOfWeek, 0)
+			for _, day := range v.List() {
+				days = append(days, protectionpolicies.DayOfWeek(day.(string)))
+			}
+			retention.DaysOfTheWeek = &days
+		}
+
+		return &retention
+	}
+
+	return nil
+}

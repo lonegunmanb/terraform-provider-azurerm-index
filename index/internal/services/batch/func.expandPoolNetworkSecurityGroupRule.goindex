@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandPoolNetworkSecurityGroupRule(list []interface{}) []pool.NetworkSecurityGroupRule {
+	if len(list) == 0 || list[0] == nil {
+		return []pool.NetworkSecurityGroupRule{}
+	}
+
+	networkSecurityGroupRule := make([]pool.NetworkSecurityGroupRule, 0)
+	for _, groupRule := range list {
+		groupRuleMap := groupRule.(map[string]interface{})
+
+		priority := int32(groupRuleMap["priority"].(int))
+		sourceAddressPrefix := groupRuleMap["source_address_prefix"].(string)
+		access := pool.NetworkSecurityGroupRuleAccess(groupRuleMap["access"].(string))
+
+		networkSecurityGroupRuleObject := pool.NetworkSecurityGroupRule{
+			Priority:            int64(priority),
+			SourceAddressPrefix: sourceAddressPrefix,
+			Access:              access,
+		}
+
+		portRanges := groupRuleMap["source_port_ranges"].([]interface{})
+		if len(portRanges) > 0 {
+			portRangesResult := make([]string, 0)
+			for _, v := range portRanges {
+				portRangesResult = append(portRangesResult, v.(string))
+			}
+			networkSecurityGroupRuleObject.SourcePortRanges = &portRangesResult
+		}
+
+		networkSecurityGroupRule = append(networkSecurityGroupRule, pool.NetworkSecurityGroupRule{
+			Priority:            int64(priority),
+			SourceAddressPrefix: sourceAddressPrefix,
+			Access:              access,
+		})
+	}
+
+	return networkSecurityGroupRule
+}

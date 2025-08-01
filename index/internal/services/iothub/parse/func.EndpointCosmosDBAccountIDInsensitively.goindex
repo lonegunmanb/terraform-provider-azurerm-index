@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+)
+func EndpointCosmosDBAccountIDInsensitively(input string) (*EndpointCosmosDBAccountId, error) {
+	id, err := resourceids.ParseAzureResourceID(input)
+	if err != nil {
+		return nil, err
+	}
+
+	resourceId := EndpointCosmosDBAccountId{
+		SubscriptionId: id.SubscriptionID,
+		ResourceGroup:  id.ResourceGroup,
+	}
+
+	if resourceId.SubscriptionId == "" {
+		return nil, errors.New("ID was missing the 'subscriptions' element")
+	}
+
+	if resourceId.ResourceGroup == "" {
+		return nil, errors.New("ID was missing the 'resourceGroups' element")
+	}
+
+	// find the correct casing for the 'iotHubs' segment
+	iotHubsKey := "iotHubs"
+	for key := range id.Path {
+		if strings.EqualFold(key, iotHubsKey) {
+			iotHubsKey = key
+			break
+		}
+	}
+	if resourceId.IotHubName, err = id.PopSegment(iotHubsKey); err != nil {
+		return nil, err
+	}
+
+	// find the correct casing for the 'endpoints' segment
+	endpointsKey := "endpoints"
+	for key := range id.Path {
+		if strings.EqualFold(key, endpointsKey) {
+			endpointsKey = key
+			break
+		}
+	}
+	if resourceId.EndpointName, err = id.PopSegment(endpointsKey); err != nil {
+		return nil, err
+	}
+
+	if err := id.ValidateNoEmptySegments(input); err != nil {
+		return nil, err
+	}
+
+	return &resourceId, nil
+}

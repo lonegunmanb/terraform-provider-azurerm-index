@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/fatih/color"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/md"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/schema"
+)
+func (d *DiffResult) ToString() string {
+	var bs strings.Builder
+	var count int
+	var possiblevalueMiss int
+	var crossCount, resourceCount int
+	var reqCount, defaultCount, timeoutCount, forceNewCount int
+	var skipCount int
+	for _, diff := range d.result {
+		if len(diff.Diffs()) > 0 {
+			resourceCount++
+			count += len(diff.Diffs())
+			bs.WriteString(diff.ToString())
+			bs.WriteString("\n")
+
+			for _, df := range diff.Diffs() {
+				if df.ShouldSkip() {
+					skipCount++
+					continue
+				}
+				switch df.(type) {
+				case propertyMissDiff:
+					crossCount++
+				case possibleValueDiff:
+					possiblevalueMiss++
+				case requireDiff:
+					reqCount++
+				case defaultDiff:
+					defaultCount++
+				case timeoutDiff:
+					timeoutCount++
+				case forceNewDiff:
+					forceNewCount++
+				}
+			}
+		}
+	}
+	fg := color.FgGreen
+	if count > 0 {
+		fg = color.FgYellow
+	}
+	bs.WriteString(
+		color.New(color.Bold, fg).Sprintf(
+			`------
+%d issues found in %d resources
+------`,
+			count, resourceCount))
+	return bs.String()
+}

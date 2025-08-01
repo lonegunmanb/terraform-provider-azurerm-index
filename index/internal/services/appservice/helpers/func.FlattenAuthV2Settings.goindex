@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/kermit/sdk/web/2022-09-01/web"
+)
+func FlattenAuthV2Settings(input webapps.SiteAuthSettingsV2) []AuthV2Settings {
+	if input.Properties == nil {
+		return []AuthV2Settings{}
+	}
+
+	settings := *input.Properties
+
+	result := AuthV2Settings{}
+
+	if platform := settings.Platform; platform != nil {
+		result.AuthEnabled = pointer.From(platform.Enabled)
+		result.RuntimeVersion = pointer.From(platform.RuntimeVersion)
+		result.ConfigFilePath = pointer.From(platform.ConfigFilePath)
+	}
+
+	if global := settings.GlobalValidation; global != nil {
+		result.RequireAuth = pointer.From(global.RequireAuthentication)
+		result.UnauthenticatedAction = string(pointer.From(global.UnauthenticatedClientAction))
+		result.DefaultAuthProvider = pointer.From(global.RedirectToProvider)
+		result.ExcludedPaths = pointer.From(global.ExcludedPaths)
+	}
+
+	if http := settings.HTTPSettings; http != nil {
+		result.RequireHTTPS = pointer.From(http.RequireHTTPS)
+		if http.Routes != nil {
+			result.HttpRoutesAPIPrefix = pointer.From(http.Routes.ApiPrefix)
+		}
+		if fp := http.ForwardProxy; fp != nil {
+			result.ForwardProxyConvention = string(pointer.From(fp.Convention))
+			result.ForwardProxyCustomHostHeaderName = pointer.From(fp.CustomHostHeaderName)
+			result.ForwardProxyCustomSchemeHeaderName = pointer.From(fp.CustomProtoHeaderName)
+		}
+	}
+
+	if login := settings.Login; login != nil {
+		result.Login = flattenAuthV2LoginSettings(login)
+	}
+
+	if authProviders := settings.IdentityProviders; authProviders != nil {
+		result.AppleAuth = flattenAppleAuthV2Settings(authProviders.Apple)
+		result.AzureActiveDirectoryAuth = flattenAadAuthV2Settings(authProviders.AzureActiveDirectory)
+		result.AzureStaticWebAuth = flattenStaticWebAppAuthV2Settings(authProviders.AzureStaticWebApps)
+		result.CustomOIDCAuth = flattenCustomOIDCAuthV2Settings(authProviders.CustomOpenIdConnectProviders)
+		result.FacebookAuth = flattenFacebookAuthV2Settings(authProviders.Facebook)
+		result.GithubAuth = flattenGitHubAuthV2Settings(authProviders.GitHub)
+		result.GoogleAuth = flattenGoogleAuthV2Settings(authProviders.Google)
+		result.MicrosoftAuth = flattenMicrosoftAuthV2Settings(authProviders.LegacyMicrosoftAccount)
+		result.TwitterAuth = flattenTwitterAuthV2Settings(authProviders.Twitter)
+	}
+
+	return []AuthV2Settings{result}
+}

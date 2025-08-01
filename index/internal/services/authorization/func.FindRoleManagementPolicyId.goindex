@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2020-10-01/rolemanagementpolicies"
+	"github.com/hashicorp/go-azure-sdk/sdk/odata"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func FindRoleManagementPolicyId(ctx context.Context, client *rolemanagementpolicies.RoleManagementPoliciesClient, scope string, roleDefinitionId string) (*rolemanagementpolicies.ScopedRoleManagementPolicyId, error) {
+	// List role management policies to find the latest policy for the provided scope and role definition
+	options := rolemanagementpolicies.ListForScopeOperationOptions{
+		Filter: pointer.To(fmt.Sprintf("roleDefinitionId eq '%s'", odata.EscapeSingleQuote(roleDefinitionId))),
+	}
+	scopeId, err := commonids.ParseScopeID(scope)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.ListForScope(ctx, *scopeId, options)
+	if err != nil {
+		return nil, fmt.Errorf("listing Role Management Policies for %s and Role Definition %q: %+v", scope, roleDefinitionId, err)
+	}
+
+	// There should be one policy to represent a given scope and role definition
+	if resp.Model == nil {
+		return nil, fmt.Errorf("listing Role Management Policies for %s and Role Definition %q: result was nil", scope, roleDefinitionId)
+	}
+
+	if len(*resp.Model) == 0 {
+		return nil, fmt.Errorf("no Role Management Policy returned for %s and Role Definition %q", scope, roleDefinitionId)
+	}
+
+	if len(*resp.Model) > 1 {
+		return nil, fmt.Errorf("more than one Role Management Policy returned for %s and Role Definition %q", scope, roleDefinitionId)
+	}
+
+	policy := (*resp.Model)[0]
+	if policy.Name == nil {
+		return nil, fmt.Errorf("retrieving Role Management Policy for %s and Role Definition %q: `name` was nil", scope, roleDefinitionId)
+	}
+
+	// Note: the "Name" is actually a UUID that changes each time the policy is updated
+	id := rolemanagementpolicies.NewScopedRoleManagementPolicyID(scope, *policy.Name)
+
+	return &id, nil
+}

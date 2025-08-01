@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/communication
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/communication/2023-03-31/domains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/communication/2023-03-31/emailservices"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/communication/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r EmailCommunicationServiceDomainResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Communication.DomainClient
+
+			var model EmailCommunicationServiceDomainResourceModel
+
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			id, err := domains.ParseDomainID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil || existing.Model == nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			domain := *existing.Model
+
+			props := pointer.From(domain.Properties)
+
+			if metadata.ResourceData.HasChange("user_engagement_tracking_enabled") {
+				userEngagementTracking := domains.UserEngagementTrackingDisabled
+				if model.UserEngagementTrackingEnabled {
+					userEngagementTracking = domains.UserEngagementTrackingEnabled
+				}
+
+				props.UserEngagementTracking = pointer.To(userEngagementTracking)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				domain.Tags = pointer.To(model.Tags)
+			}
+
+			domain.Properties = &props
+
+			if err := client.CreateOrUpdateThenPoll(ctx, *id, domain); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

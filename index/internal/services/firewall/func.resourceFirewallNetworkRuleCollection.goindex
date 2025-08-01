@@ -1,0 +1,134 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/azurefirewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceFirewallNetworkRuleCollection() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceFirewallNetworkRuleCollectionCreateUpdate,
+		Read:   resourceFirewallNetworkRuleCollectionRead,
+		Update: resourceFirewallNetworkRuleCollectionCreateUpdate,
+		Delete: resourceFirewallNetworkRuleCollectionDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.FirewallNetworkRuleCollectionID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.FirewallName,
+			},
+
+			"azure_firewall_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.FirewallName,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"priority": {
+				Type:         pluginsdk.TypeInt,
+				Required:     true,
+				ValidateFunc: validation.IntBetween(100, 65000),
+			},
+
+			"action": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(azurefirewalls.AzureFirewallRCActionTypeAllow),
+					string(azurefirewalls.AzureFirewallRCActionTypeDeny),
+				}, false),
+			},
+
+			"rule": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MinItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+						"description": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+						},
+						"source_addresses": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+						},
+						"source_ip_groups": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+						},
+						"destination_addresses": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+						},
+						"destination_ip_groups": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+						},
+						"destination_ports": {
+							Type:     pluginsdk.TypeList,
+							Required: true,
+							Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+						},
+						"destination_fqdns": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+						},
+						"protocols": {
+							Type:     pluginsdk.TypeList,
+							Required: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice([]string{
+									string(azurefirewalls.AzureFirewallNetworkRuleProtocolAny),
+									string(azurefirewalls.AzureFirewallNetworkRuleProtocolICMP),
+									string(azurefirewalls.AzureFirewallNetworkRuleProtocolTCP),
+									string(azurefirewalls.AzureFirewallNetworkRuleProtocolUDP),
+								}, false),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

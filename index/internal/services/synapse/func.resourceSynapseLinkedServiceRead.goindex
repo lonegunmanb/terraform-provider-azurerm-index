@@ -1,0 +1,128 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	artifacts "github.com/jackofallops/kermit/sdk/synapse/2021-06-01-preview/synapse"
+)
+func resourceSynapseLinkedServiceRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	synapseClient := meta.(*clients.Client).Synapse
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+	environment := meta.(*clients.Client).Account.Environment
+	synapseDomainSuffix, ok := environment.Synapse.DomainSuffix()
+	if !ok {
+		return fmt.Errorf("could not determine Synapse domain suffix for environment %q", environment.Name)
+	}
+
+	id, err := parse.LinkedServiceID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	client, err := synapseClient.LinkedServiceClient(id.WorkspaceName, *synapseDomainSuffix)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.GetLinkedService(ctx, id.Name, "")
+	if err != nil {
+		if utils.ResponseWasNotFound(resp.Response) {
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	d.Set("name", id.Name)
+	d.Set("synapse_workspace_id", parse.NewWorkspaceID(id.SubscriptionId, id.ResourceGroup, id.WorkspaceName).ID())
+
+	byteArr, err := json.Marshal(resp.Properties)
+	if err != nil {
+		return err
+	}
+
+	var m map[string]*json.RawMessage
+	if err = json.Unmarshal(byteArr, &m); err != nil {
+		return err
+	}
+
+	description := ""
+	if v, ok := m["description"]; ok && v != nil {
+		if err := json.Unmarshal(*v, &description); err != nil {
+			return err
+		}
+		delete(m, "description")
+	}
+	d.Set("description", description)
+
+	t := ""
+	if v, ok := m["type"]; ok && v != nil {
+		if err := json.Unmarshal(*v, &t); err != nil {
+			return err
+		}
+		delete(m, "type")
+	}
+	d.Set("type", t)
+
+	annotations := make([]interface{}, 0)
+	if v, ok := m["annotations"]; ok && v != nil {
+		if err := json.Unmarshal(*v, &annotations); err != nil {
+			return err
+		}
+		delete(m, "annotations")
+	}
+	d.Set("annotations", annotations)
+
+	parameters := make(map[string]*artifacts.ParameterSpecification)
+	if v, ok := m["parameters"]; ok && v != nil {
+		if err := json.Unmarshal(*v, &parameters); err != nil {
+			return err
+		}
+		delete(m, "parameters")
+	}
+	if err := d.Set("parameters", flattenSynapseParameters(parameters)); err != nil {
+		return fmt.Errorf("setting `parameters`: %+v", err)
+	}
+
+	var integrationRuntime *artifacts.IntegrationRuntimeReference
+	if v, ok := m["connectVia"]; ok && v != nil {
+		integrationRuntime = &artifacts.IntegrationRuntimeReference{}
+		if err := json.Unmarshal(*v, &integrationRuntime); err != nil {
+			return err
+		}
+		delete(m, "connectVia")
+	}
+	if err := d.Set("integration_runtime", flattenSynapseLinkedServiceIntegrationRuntimeV2(integrationRuntime)); err != nil {
+		return fmt.Errorf("setting `integration_runtime`: %+v", err)
+	}
+
+	delete(m, "typeProperties")
+
+	// set "additional_properties"
+	additionalProperties := make(map[string]interface{})
+	bytes, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(bytes, &additionalProperties); err != nil {
+		return err
+	}
+	d.Set("additional_properties", additionalProperties)
+
+	return nil
+}

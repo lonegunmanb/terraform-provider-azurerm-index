@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func (sbu BlobUpload) Create(ctx context.Context) error {
+	blobType := strings.ToLower(sbu.BlobType)
+
+	if blobType == "append" {
+		if sbu.Source != "" || sbu.SourceContent != "" || sbu.SourceUri != "" {
+			return errors.New("A source cannot be specified for an Append blob")
+		}
+
+		if sbu.ContentMD5 != "" {
+			return errors.New("`content_md5` cannot be specified for an Append blob")
+		}
+
+		return sbu.createEmptyAppendBlob(ctx)
+	}
+
+	if blobType == "block" {
+		if sbu.SourceUri != "" {
+			return sbu.copy(ctx)
+		}
+
+		if sbu.SourceContent != "" {
+			return sbu.uploadBlockBlobFromContent(ctx)
+		}
+		if sbu.Source != "" {
+			return sbu.uploadBlockBlob(ctx)
+		}
+
+		return sbu.createEmptyBlockBlob(ctx)
+	}
+
+	if blobType == "page" {
+		if sbu.ContentMD5 != "" {
+			return errors.New("`content_md5` cannot be specified for a Page blob")
+		}
+		if sbu.SourceUri != "" {
+			return sbu.copy(ctx)
+		}
+		if sbu.SourceContent != "" {
+			return sbu.uploadPageBlobFromContent(ctx)
+		}
+		if sbu.Source != "" {
+			return sbu.uploadPageBlob(ctx)
+		}
+
+		return sbu.createEmptyPageBlob(ctx)
+	}
+
+	return fmt.Errorf("unsupported Blob Type: %q", blobType)
+}

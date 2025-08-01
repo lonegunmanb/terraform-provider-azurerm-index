@@ -1,0 +1,134 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/daprcomponents"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/containerapps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (c *ContainerTemplate) flattenContainerAppScaleRules(input *[]containerapps.ScaleRule) {
+	if input != nil && len(*input) != 0 {
+		rules := *input
+		azureQueueScaleRules := make([]AzureQueueScaleRule, 0)
+		customScaleRules := make([]CustomScaleRule, 0)
+		httpScaleRules := make([]HTTPScaleRule, 0)
+		tcpScaleRules := make([]TCPScaleRule, 0)
+		for _, v := range rules {
+			if q := v.AzureQueue; q != nil {
+				rule := AzureQueueScaleRule{
+					Name:        pointer.From(v.Name),
+					QueueLength: pointer.From(q.QueueLength),
+					QueueName:   pointer.From(q.QueueName),
+				}
+
+				authentications := make([]ScaleRuleAuthentication, 0)
+				if auths := q.Auth; auths != nil {
+					for _, a := range *auths {
+						authentications = append(authentications, ScaleRuleAuthentication{
+							SecretRef:    pointer.From(a.SecretRef),
+							TriggerParam: pointer.From(a.TriggerParameter),
+						})
+					}
+				}
+
+				rule.Authentications = authentications
+
+				azureQueueScaleRules = append(azureQueueScaleRules, rule)
+				continue
+			}
+
+			if r := v.Custom; r != nil {
+				rule := CustomScaleRule{
+					Name:           pointer.From(v.Name),
+					Metadata:       pointer.From(r.Metadata),
+					CustomRuleType: pointer.From(r.Type),
+				}
+
+				authentications := make([]ScaleRuleAuthentication, 0)
+				if auths := r.Auth; auths != nil {
+					for _, a := range *auths {
+						authentications = append(authentications, ScaleRuleAuthentication{
+							SecretRef:    pointer.From(a.SecretRef),
+							TriggerParam: pointer.From(a.TriggerParameter),
+						})
+					}
+				}
+				rule.Authentications = authentications
+
+				customScaleRules = append(customScaleRules, rule)
+				continue
+			}
+
+			if r := v.HTTP; r != nil {
+				metaData := pointer.From(r.Metadata)
+				concurrentReqs := ""
+
+				if m, ok := metaData["concurrentRequests"]; ok {
+					concurrentReqs = m
+				}
+
+				rule := HTTPScaleRule{
+					Name:               pointer.From(v.Name),
+					ConcurrentRequests: concurrentReqs,
+				}
+
+				authentications := make([]ScaleRuleAuthentication, 0)
+				if auths := r.Auth; auths != nil {
+					for _, a := range *auths {
+						authentications = append(authentications, ScaleRuleAuthentication{
+							SecretRef:    pointer.From(a.SecretRef),
+							TriggerParam: pointer.From(a.TriggerParameter),
+						})
+					}
+				}
+
+				rule.Authentications = authentications
+
+				httpScaleRules = append(httpScaleRules, rule)
+				continue
+			}
+
+			if r := v.Tcp; r != nil {
+				metaData := pointer.From(r.Metadata)
+				concurrentReqs := ""
+
+				if m, ok := metaData["concurrentRequests"]; ok {
+					concurrentReqs = m
+				}
+
+				rule := TCPScaleRule{
+					Name:               pointer.From(v.Name),
+					ConcurrentRequests: concurrentReqs,
+				}
+
+				authentications := make([]ScaleRuleAuthentication, 0)
+				if auths := r.Auth; auths != nil {
+					for _, a := range *auths {
+						authentications = append(authentications, ScaleRuleAuthentication{
+							SecretRef:    pointer.From(a.SecretRef),
+							TriggerParam: pointer.From(a.TriggerParameter),
+						})
+					}
+				}
+				rule.Authentications = authentications
+
+				tcpScaleRules = append(tcpScaleRules, rule)
+				continue
+			}
+		}
+
+		c.AzureQueueScaleRules = azureQueueScaleRules
+		c.CustomScaleRules = customScaleRules
+		c.HTTPScaleRules = httpScaleRules
+		c.TCPScaleRules = tcpScaleRules
+	}
+}

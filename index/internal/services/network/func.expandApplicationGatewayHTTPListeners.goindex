@@ -1,0 +1,107 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewayHTTPListeners(d *pluginsdk.ResourceData, gatewayID string) (*[]applicationgateways.ApplicationGatewayHTTPListener, error) {
+	vs := d.Get("http_listener").(*schema.Set).List()
+
+	results := make([]applicationgateways.ApplicationGatewayHTTPListener, 0)
+
+	for _, raw := range vs {
+		v := raw.(map[string]interface{})
+
+		name := v["name"].(string)
+		frontendIPConfigName := v["frontend_ip_configuration_name"].(string)
+		frontendPortName := v["frontend_port_name"].(string)
+		protocol := v["protocol"].(string)
+		requireSNI := v["require_sni"].(bool)
+		sslProfileName := v["ssl_profile_name"].(string)
+
+		frontendIPConfigID := fmt.Sprintf("%s/frontendIPConfigurations/%s", gatewayID, frontendIPConfigName)
+		frontendPortID := fmt.Sprintf("%s/frontendPorts/%s", gatewayID, frontendPortName)
+		firewallPolicyID := v["firewall_policy_id"].(string)
+
+		customErrorConfigurations := expandApplicationGatewayCustomErrorConfigurations(v["custom_error_configuration"].([]interface{}))
+
+		listener := applicationgateways.ApplicationGatewayHTTPListener{
+			Name: pointer.To(name),
+			Properties: &applicationgateways.ApplicationGatewayHTTPListenerPropertiesFormat{
+				FrontendIPConfiguration: &applicationgateways.SubResource{
+					Id: pointer.To(frontendIPConfigID),
+				},
+				FrontendPort: &applicationgateways.SubResource{
+					Id: pointer.To(frontendPortID),
+				},
+				Protocol:                    pointer.To(applicationgateways.ApplicationGatewayProtocol(protocol)),
+				RequireServerNameIndication: pointer.To(requireSNI),
+				CustomErrorConfigurations:   customErrorConfigurations,
+			},
+		}
+
+		host := v["host_name"].(string)
+		hosts := v["host_names"].(*pluginsdk.Set).List()
+
+		if host != "" && len(hosts) > 0 {
+			return nil, fmt.Errorf("`host_name` and `host_names` cannot be specified together")
+		}
+
+		if host != "" {
+			listener.Properties.HostName = &host
+		}
+
+		if len(hosts) > 0 {
+			listener.Properties.HostNames = utils.ExpandStringSlice(hosts)
+		}
+
+		if sslCertName := v["ssl_certificate_name"].(string); sslCertName != "" {
+			certID := fmt.Sprintf("%s/sslCertificates/%s", gatewayID, sslCertName)
+			listener.Properties.SslCertificate = &applicationgateways.SubResource{
+				Id: pointer.To(certID),
+			}
+		}
+
+		if firewallPolicyID != "" && len(firewallPolicyID) > 0 {
+			listener.Properties.FirewallPolicy = &applicationgateways.SubResource{
+				Id: pointer.To(firewallPolicyID),
+			}
+		}
+
+		if sslProfileName != "" && len(sslProfileName) > 0 {
+			sslProfileID := fmt.Sprintf("%s/sslProfiles/%s", gatewayID, sslProfileName)
+			listener.Properties.SslProfile = &applicationgateways.SubResource{
+				Id: pointer.To(sslProfileID),
+			}
+		}
+
+		results = append(results, listener)
+	}
+
+	return &results, nil
+}

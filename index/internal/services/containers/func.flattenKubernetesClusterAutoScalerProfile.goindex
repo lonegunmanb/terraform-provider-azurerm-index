@@ -1,0 +1,175 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenKubernetesClusterAutoScalerProfile(profile *managedclusters.ManagedClusterPropertiesAutoScalerProfile) ([]interface{}, error) {
+	if profile == nil {
+		return []interface{}{}, nil
+	}
+
+	balanceSimilarNodeGroups := false
+	if profile.BalanceSimilarNodeGroups != nil {
+		// @tombuildsstuff: presumably this'll get converted to a Boolean at some point
+		//					at any rate we should use the proper type users expect here
+		balanceSimilarNodeGroups = strings.EqualFold(*profile.BalanceSimilarNodeGroups, "true")
+	}
+
+	daemonsetEvictionForEmptyNodes := pointer.From(profile.DaemonsetEvictionForEmptyNodes)
+
+	daemonsetEvictionForOccupiedNodes := true
+	if profile.DaemonsetEvictionForOccupiedNodes != nil {
+		daemonsetEvictionForOccupiedNodes = pointer.From(profile.DaemonsetEvictionForOccupiedNodes)
+	}
+
+	expander := ""
+	if profile.Expander != nil {
+		expander = string(*profile.Expander)
+	}
+
+	ignoreDaemonsetsUtilization := pointer.From(profile.IgnoreDaemonsetsUtilization)
+
+	maxGracefulTerminationSec := ""
+	if profile.MaxGracefulTerminationSec != nil {
+		maxGracefulTerminationSec = *profile.MaxGracefulTerminationSec
+	}
+
+	maxNodeProvisionTime := ""
+	if profile.MaxNodeProvisionTime != nil {
+		maxNodeProvisionTime = *profile.MaxNodeProvisionTime
+	}
+
+	maxUnreadyNodes := 0
+	if profile.OkTotalUnreadyCount != nil {
+		var err error
+		maxUnreadyNodes, err = strconv.Atoi(*profile.OkTotalUnreadyCount)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	maxUnreadyPercentage := 0.0
+	if profile.MaxTotalUnreadyPercentage != nil {
+		var err error
+		maxUnreadyPercentage, err = strconv.ParseFloat(*profile.MaxTotalUnreadyPercentage, 64)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	newPodScaleUpDelay := ""
+	if profile.NewPodScaleUpDelay != nil {
+		newPodScaleUpDelay = *profile.NewPodScaleUpDelay
+	}
+
+	scaleDownDelayAfterAdd := ""
+	if profile.ScaleDownDelayAfterAdd != nil {
+		scaleDownDelayAfterAdd = *profile.ScaleDownDelayAfterAdd
+	}
+
+	scaleDownDelayAfterDelete := ""
+	if profile.ScaleDownDelayAfterDelete != nil {
+		scaleDownDelayAfterDelete = *profile.ScaleDownDelayAfterDelete
+	}
+
+	scaleDownDelayAfterFailure := ""
+	if profile.ScaleDownDelayAfterFailure != nil {
+		scaleDownDelayAfterFailure = *profile.ScaleDownDelayAfterFailure
+	}
+
+	scaleDownUnneededTime := ""
+	if profile.ScaleDownUnneededTime != nil {
+		scaleDownUnneededTime = *profile.ScaleDownUnneededTime
+	}
+
+	scaleDownUnreadyTime := ""
+	if profile.ScaleDownUnreadyTime != nil {
+		scaleDownUnreadyTime = *profile.ScaleDownUnreadyTime
+	}
+
+	scaleDownUtilizationThreshold := ""
+	if profile.ScaleDownUtilizationThreshold != nil {
+		scaleDownUtilizationThreshold = *profile.ScaleDownUtilizationThreshold
+	}
+
+	emptyBulkDeleteMax := ""
+	if profile.MaxEmptyBulkDelete != nil {
+		emptyBulkDeleteMax = *profile.MaxEmptyBulkDelete
+	}
+
+	scanInterval := ""
+	if profile.ScanInterval != nil {
+		scanInterval = *profile.ScanInterval
+	}
+
+	skipNodesWithLocalStorage := true
+	if profile.SkipNodesWithLocalStorage != nil {
+		skipNodesWithLocalStorage = strings.EqualFold(*profile.SkipNodesWithLocalStorage, "true")
+	}
+
+	skipNodesWithSystemPods := true
+	if profile.SkipNodesWithSystemPods != nil {
+		skipNodesWithSystemPods = strings.EqualFold(*profile.SkipNodesWithSystemPods, "true")
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"balance_similar_node_groups":                   balanceSimilarNodeGroups,
+			"daemonset_eviction_for_empty_nodes_enabled":    daemonsetEvictionForEmptyNodes,
+			"daemonset_eviction_for_occupied_nodes_enabled": daemonsetEvictionForOccupiedNodes,
+			"expander":                              expander,
+			"ignore_daemonsets_utilization_enabled": ignoreDaemonsetsUtilization,
+			"max_graceful_termination_sec":          maxGracefulTerminationSec,
+			"max_node_provisioning_time":            maxNodeProvisionTime,
+			"max_unready_nodes":                     maxUnreadyNodes,
+			"max_unready_percentage":                maxUnreadyPercentage,
+			"new_pod_scale_up_delay":                newPodScaleUpDelay,
+			"scale_down_delay_after_add":            scaleDownDelayAfterAdd,
+			"scale_down_delay_after_delete":         scaleDownDelayAfterDelete,
+			"scale_down_delay_after_failure":        scaleDownDelayAfterFailure,
+			"scale_down_unneeded":                   scaleDownUnneededTime,
+			"scale_down_unready":                    scaleDownUnreadyTime,
+			"scale_down_utilization_threshold":      scaleDownUtilizationThreshold,
+			"empty_bulk_delete_max":                 emptyBulkDeleteMax,
+			"scan_interval":                         scanInterval,
+			"skip_nodes_with_local_storage":         skipNodesWithLocalStorage,
+			"skip_nodes_with_system_pods":           skipNodesWithSystemPods,
+		},
+	}, nil
+}

@@ -1,0 +1,139 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/capacitypools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumesreplication"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r NetAppVolumeGroupSAPHanaResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 90 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.NetApp.VolumeGroupClient
+			replicationClient := metadata.Client.NetApp.VolumeReplicationClient
+
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var model netAppModels.NetAppVolumeGroupSAPHanaModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := volumegroups.NewVolumeGroupID(subscriptionId, model.ResourceGroupName, model.AccountName, model.Name)
+
+			metadata.Logger.Infof("Import check for %s", id)
+			existing, err := client.Get(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+
+			if existing.Model != nil && existing.Model.Id != nil && *existing.Model.Id != "" {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			volumeList, err := expandNetAppVolumeGroupSAPHanaVolumes(model.Volumes)
+			if err != nil {
+				return err
+			}
+
+			// Performing some basic validations that are not possible in the schema
+			if errorList := netAppValidate.ValidateNetAppVolumeGroupSAPHanaVolumes(volumeList); len(errorList) > 0 {
+				return fmt.Errorf("one or more issues found while performing deeper validations for %s:\n%+v", id, errorList)
+			}
+
+			// Parse volume list to set secondary volumes for CRR
+			for i, volumeCrr := range pointer.From(volumeList) {
+				if volumeCrr.Properties.DataProtection != nil &&
+					volumeCrr.Properties.DataProtection.Replication != nil &&
+					strings.EqualFold(string(pointer.From(volumeCrr.Properties.DataProtection.Replication.EndpointType)), string(volumegroups.EndpointTypeDst)) {
+					// Modify volumeType as data protection type on main volumeList
+					// so it gets created correctly as data protection volume
+					(pointer.From(volumeList))[i].Properties.VolumeType = utils.String("DataProtection")
+				}
+			}
+
+			parameters := volumegroups.VolumeGroupDetails{
+				Location: utils.String(location.Normalize(model.Location)),
+				Properties: &volumegroups.VolumeGroupProperties{
+					GroupMetaData: &volumegroups.VolumeGroupMetaData{
+						GroupDescription:      utils.String(model.GroupDescription),
+						ApplicationType:       pointer.To(volumegroups.ApplicationTypeSAPNegativeHANA),
+						ApplicationIdentifier: utils.String(model.ApplicationIdentifier),
+					},
+					Volumes: volumeList,
+				},
+			}
+
+			if err = client.CreateThenPoll(ctx, id, parameters); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			// Waiting for volume group be completely provisioned
+			if err := waitForVolumeGroupCreateOrUpdate(ctx, client, id); err != nil {
+				return fmt.Errorf("waiting for create of %s: %+v", id, err)
+			}
+
+			// CRR - Authorizing secondaries from primary volumes
+			for _, volumeCrr := range pointer.From(volumeList) {
+				if volumeCrr.Properties.DataProtection != nil &&
+					volumeCrr.Properties.DataProtection.Replication != nil &&
+					strings.EqualFold(string(pointer.From(volumeCrr.Properties.DataProtection.Replication.EndpointType)), string(volumegroups.EndpointTypeDst)) {
+					capacityPoolId, err := capacitypools.ParseCapacityPoolID(pointer.From(volumeCrr.Properties.CapacityPoolResourceId))
+					if err != nil {
+						return err
+					}
+
+					// Getting secondary volume resource id
+					secondaryId := volumes.NewVolumeID(subscriptionId,
+						model.ResourceGroupName,
+						model.AccountName,
+						capacityPoolId.CapacityPoolName,
+						getUserDefinedVolumeName(volumeCrr.Name),
+					)
+
+					// Getting primary resource id
+					primaryId, err := volumesreplication.ParseVolumeID(volumeCrr.Properties.DataProtection.Replication.RemoteVolumeResourceId)
+					if err != nil {
+						return err
+					}
+
+					// Authorizing
+					if err = replicationClient.VolumesAuthorizeReplicationThenPoll(ctx, pointer.From(primaryId), volumesreplication.AuthorizeRequest{
+						RemoteVolumeResourceId: utils.String(secondaryId.ID()),
+					},
+					); err != nil {
+						return fmt.Errorf("cannot authorize volume replication: %v", err)
+					}
+
+					// Wait for volume replication authorization to complete
+					log.Printf("[DEBUG] Waiting for replication authorization on %s to complete", id)
+					if err := waitForReplAuthorization(ctx, replicationClient, pointer.From(primaryId)); err != nil {
+						return err
+					}
+				}
+			}
+
+			metadata.SetID(id)
+
+			return nil
+		},
+	}
+}

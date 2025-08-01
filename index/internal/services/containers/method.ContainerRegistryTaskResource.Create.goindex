@@ -1,0 +1,98 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2019-06-01-preview/tasks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r ContainerRegistryTaskResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Containers.ContainerRegistryClient_v2019_06_01_preview.Tasks
+			registryClient := metadata.Client.Containers.ContainerRegistryClient.Registries
+
+			var model ContainerRegistryTaskModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding %+v", err)
+			}
+
+			registryId, err := registries.ParseRegistryID(model.ContainerRegistryId)
+			if err != nil {
+				return err
+			}
+
+			registry, err := registryClient.Get(ctx, *registryId)
+			if err != nil {
+				return fmt.Errorf("getting registry %s: %+v", registryId, err)
+			}
+
+			id := tasks.NewTaskID(registryId.SubscriptionId, registryId.ResourceGroupName, registryId.RegistryName, model.Name)
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			status := tasks.TaskStatusDisabled
+			if model.Enabled {
+				status = tasks.TaskStatusEnabled
+			}
+
+			expandedIdentity, err := identity.ExpandSystemAndUserAssignedMap(metadata.ResourceData.Get("identity").([]interface{}))
+			if err != nil {
+				return fmt.Errorf("expanding `identity`: %+v", err)
+			}
+
+			params := tasks.Task{
+				Properties: &tasks.TaskProperties{
+					Platform:           expandRegistryTaskPlatform(model.Platform),
+					Step:               expandRegistryTaskStep(model),
+					Trigger:            expandRegistryTaskTrigger(model),
+					Status:             pointer.To(status),
+					IsSystemTask:       &model.IsSystemTask,
+					Timeout:            pointer.To(model.TimeoutInSec),
+					Credentials:        expandRegistryTaskCredentials(model.RegistryCredential),
+					AgentConfiguration: expandRegistryTaskAgentProperties(model.AgentConfig),
+				},
+
+				// The location of the task must be the same as the registry, otherwise the API will raise error complaining can't find the registry.
+				Location: location.Normalize(registry.Model.Location),
+				Identity: expandedIdentity,
+				Tags:     &model.Tags,
+			}
+
+			if model.AgentPoolName != "" {
+				params.Properties.AgentPoolName = &model.AgentPoolName
+			}
+			if model.LogTemplate != "" {
+				params.Properties.LogTemplate = &model.LogTemplate
+			}
+
+			if err := client.CreateThenPoll(ctx, id, params); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

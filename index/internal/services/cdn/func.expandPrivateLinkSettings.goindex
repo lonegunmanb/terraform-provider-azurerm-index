@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/privatelinkservices"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandPrivateLinkSettings(input []interface{}, skuName profiles.SkuName, enableCertNameCheck bool) (*cdn.SharedPrivateLinkResourceProperties, error) {
+	if len(input) == 0 {
+		// NOTE: This cannot return an empty object, the service team requires this to be set to nil else you will get the following error during creation:
+		// Property 'AfdOrigin.SharedPrivateLinkResource.PrivateLink' is required but it was not set; Property 'AfdOrigin.SharedPrivateLinkResource.RequestMessage' is required but it was not set
+		return nil, nil
+	}
+
+	if skuName != profiles.SkuNamePremiumAzureFrontDoor {
+		return nil, fmt.Errorf("the 'private_link' field can only be configured when the Frontdoor Profile is using a 'Premium_AzureFrontDoor' SKU, got %q", skuName)
+	}
+
+	if !enableCertNameCheck {
+		return nil, fmt.Errorf("the 'private_link' field can only be configured when 'certificate_name_check_enabled' is set to 'true'")
+	}
+
+	// Check if this a Load Balancer Private Link or not, the Load Balancer Private Link requires
+	// that you stand up your own Private Link Service, which is why I am attempting to parse a
+	// Private Link Service ID here...
+	settings := input[0].(map[string]interface{})
+	targetType := settings["target_type"].(string)
+	_, err := privatelinkservices.ParsePrivateLinkServiceID(settings["private_link_target_id"].(string))
+	if err != nil && targetType == "" {
+		// It is not a Load Balancer and the Target Type is empty, which is invalid...
+		return nil, fmt.Errorf("either 'private_link' or 'target_type' must be specified")
+	}
+
+	config := input[0].(map[string]interface{})
+
+	resourceId := config["private_link_target_id"].(string)
+	location := location.Normalize(config["location"].(string))
+	groupId := config["target_type"].(string)
+	requestMessage := config["request_message"].(string)
+
+	return &cdn.SharedPrivateLinkResourceProperties{
+		PrivateLink: &cdn.ResourceReference{
+			ID: utils.String(resourceId),
+		},
+		GroupID:             utils.String(groupId),
+		PrivateLinkLocation: utils.String(location),
+		RequestMessage:      utils.String(requestMessage),
+	}, nil
+}

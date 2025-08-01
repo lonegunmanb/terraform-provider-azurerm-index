@@ -1,0 +1,105 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2022-10-01-preview/accessconnector"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	mlworkspace "github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenWorkspaceCustomParameters(input *workspaces.WorkspaceCustomParameters, publicSubnetAssociation, privateSubnetAssociation *string) ([]interface{}, string) {
+	if input == nil {
+		return nil, ""
+	}
+
+	var backendAddressPoolId, backendName, loadBalancerId string
+	parameters := make(map[string]interface{})
+
+	if publicSubnetAssociation != nil && *publicSubnetAssociation != "" {
+		parameters["public_subnet_network_security_group_association_id"] = *publicSubnetAssociation
+	}
+
+	if privateSubnetAssociation != nil && *privateSubnetAssociation != "" {
+		parameters["private_subnet_network_security_group_association_id"] = *privateSubnetAssociation
+	}
+
+	if v := input.LoadBalancerBackendPoolName; v != nil {
+		backendName = v.Value
+	}
+
+	if v := input.LoadBalancerId; v != nil {
+		loadBalancerId = v.Value
+	}
+
+	if v := input.NatGatewayName; v != nil {
+		parameters["nat_gateway_name"] = v.Value
+	}
+
+	if v := input.PublicIPName; v != nil {
+		parameters["public_ip_name"] = v.Value
+	}
+
+	if v := input.StorageAccountName; v != nil {
+		parameters["storage_account_name"] = v.Value
+	}
+
+	if v := input.StorageAccountSkuName; v != nil {
+		parameters["storage_account_sku_name"] = v.Value
+	}
+
+	if v := input.VnetAddressPrefix; v != nil {
+		parameters["vnet_address_prefix"] = v.Value
+	}
+
+	if v := input.AmlWorkspaceId; v != nil {
+		parameters["machine_learning_workspace_id"] = v.Value
+	}
+
+	if v := input.EnableNoPublicIP; v != nil {
+		parameters["no_public_ip"] = v.Value
+	}
+
+	if v := input.CustomPrivateSubnetName; v != nil {
+		parameters["private_subnet_name"] = v.Value
+	}
+
+	if v := input.CustomPublicSubnetName; v != nil {
+		parameters["public_subnet_name"] = v.Value
+	}
+
+	if v := input.CustomVirtualNetworkId; v != nil {
+		parameters["virtual_network_id"] = v.Value
+	}
+
+	lbId, err := loadbalancers.ParseLoadBalancerIDInsensitively(loadBalancerId)
+
+	if err == nil {
+		backendId := loadbalancers.NewLoadBalancerBackendAddressPoolID(lbId.SubscriptionId, lbId.ResourceGroupName, lbId.LoadBalancerName, backendName)
+		backendAddressPoolId = backendId.ID()
+	}
+
+	return []interface{}{parameters}, backendAddressPoolId
+}

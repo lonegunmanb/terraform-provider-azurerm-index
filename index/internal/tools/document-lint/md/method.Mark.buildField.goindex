@@ -1,0 +1,101 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/md
+import (
+	"fmt"
+	"os"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func (m *Mark) buildField() {
+	var inBlock bool
+	var block Block
+	var pos model.PosType
+
+	for _, item := range m.Items {
+		content := item.content()
+		switch item.Type {
+		case ItemHeader1:
+			trimmed := strings.TrimFunc(content, func(r rune) bool {
+				if unicode.IsSpace(r) || r == '#' {
+					return true
+				}
+				return false
+			})
+			if !strings.Contains(trimmed, " ") {
+				m.ResourceType = trimmed
+			}
+		case ItemField:
+			if pos == model.PosTimeout {
+				item.Type = ItemTimeout
+				continue
+			}
+			if pos > model.PosAttr {
+				continue
+			}
+
+			f := newFieldFromLine(content)
+			f.Line = item.FromLine
+			f.Pos = pos
+			item.Field = f
+			if inBlock {
+				block.addField(f)
+			} else {
+				// field exists in both Argument and Attribute
+				if arg, ok := m.Fields[f.Name]; ok {
+					arg.SameNameAttr = f
+				} else {
+					m.Fields[f.Name] = f
+				}
+			}
+		case ItemBlockHead:
+			if pos > model.PosAttr {
+				continue
+			}
+			if inBlock {
+				m.addBlock(block)
+			}
+			names := extractBlockNames(item.lines[0])
+			// of/within block
+			var of string
+			for _, sep := range []string{" of ", " within "} {
+				if idx := strings.Index(content, sep); idx > 0 {
+					of = util.FirstCodeValue(content[idx:])
+				}
+			}
+
+			block = Block{
+				Names:    names,
+				Name:     names[0],
+				Of:       of,
+				pos:      pos,
+				HeadLine: item.FromLine,
+			}
+			inBlock = true
+		case ItemSeparator:
+			if inBlock {
+				m.addBlock(block)
+			}
+			inBlock = false
+		case ItemHeader2, ItemHeader3:
+			switch {
+			case strings.Contains(content, "Argument"), strings.Contains(content, "Blocks Reference"):
+				pos = model.PosArgs
+			case strings.Contains(content, "Attributes"):
+				pos = model.PosAttr
+			case strings.Contains(content, "Timeout"):
+				pos = model.PosTimeout
+			case strings.Contains(content, "Import"):
+				pos = model.PosImport
+			default:
+				pos = model.PosOther
+			}
+
+			if inBlock {
+				m.addBlock(block)
+			}
+			inBlock = false
+		}
+	}
+}

@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/provider
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/sdk/auth"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func buildClient(ctx context.Context, p *schema.Provider, d *schema.ResourceData, authConfig *auth.Credentials) (*clients.Client, diag.Diagnostics) {
+	providerRegistrations := d.Get("resource_provider_registrations").(string)
+
+	// TODO: Remove in v5.0
+	if d.Get("skip_provider_registration").(bool) {
+		if providerRegistrations != resourceproviders.ProviderRegistrationsLegacy {
+			return nil, diag.Errorf("provider property `skip_provider_registration` cannot be set at the same time as `resource_provider_registrations`, please remove `skip_provider_registration` from your configuration or unset the `ARM_SKIP_PROVIDER_REGISTRATION` environment variable")
+		}
+		providerRegistrations = resourceproviders.ProviderRegistrationsNone
+	}
+
+	requiredResourceProviders, err := resourceproviders.GetResourceProvidersSet(providerRegistrations)
+	if err != nil {
+		return nil, diag.FromErr(err)
+	}
+
+	if features.FourPointOhBeta() {
+		additionalProvidersToRegister := make(resourceproviders.ResourceProviders)
+		for _, rp := range d.Get("resource_providers_to_register").([]interface{}) {
+			additionalProvidersToRegister.Add(rp.(string))
+		}
+		requiredResourceProviders.Merge(additionalProvidersToRegister)
+	}
+
+	clientBuilder := clients.ClientBuilder{
+		AuthConfig:                  authConfig,
+		DisableCorrelationRequestID: d.Get("disable_correlation_request_id").(bool),
+		DisableTerraformPartnerID:   d.Get("disable_terraform_partner_id").(bool),
+		Features:                    expandFeatures(d.Get("features").([]interface{})),
+		MetadataHost:                d.Get("metadata_host").(string),
+		PartnerID:                   d.Get("partner_id").(string),
+		RegisteredResourceProviders: requiredResourceProviders,
+		StorageUseAzureAD:           d.Get("storage_use_azuread").(bool),
+		SubscriptionID:              d.Get("subscription_id").(string),
+		TerraformVersion:            p.TerraformVersion,
+
+		// this field is intentionally not exposed in the provider block, since it's only used for
+		// platform level tracing
+		CustomCorrelationRequestID: os.Getenv("ARM_CORRELATION_REQUEST_ID"),
+	}
+
+	//lint:ignore SA1019 SDKv2 migration - staticcheck's own linter directives are currently being ignored under golangci-lint
+	stopCtx, ok := schema.StopContext(ctx) //nolint:staticcheck
+	if !ok {
+		stopCtx = ctx
+	}
+
+	client, err := clients.Build(stopCtx, clientBuilder)
+	if err != nil {
+		return nil, diag.FromErr(err)
+	}
+
+	client.StopContext = stopCtx
+
+	subscriptionId := commonids.NewSubscriptionID(client.Account.SubscriptionId)
+
+	ctx2, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	if err = resourceproviders.EnsureRegistered(ctx2, client.Resource.ResourceProvidersClient, subscriptionId, requiredResourceProviders); err != nil {
+		return nil, diag.FromErr(err)
+	}
+
+	return client, nil
+}

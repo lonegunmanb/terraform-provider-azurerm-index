@@ -1,0 +1,200 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/search
+import (
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/adminkeys"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/querykeys"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/services"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceSearchService() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSearchServiceCreate,
+		Read:   resourceSearchServiceRead,
+		Update: resourceSearchServiceUpdate,
+		Delete: resourceSearchServiceDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(60 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := services.ParseSearchServiceID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"location": commonschema.Location(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"sku": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(services.SkuNameFree),
+					string(services.SkuNameBasic),
+					string(services.SkuNameStandard),
+					string(services.SkuNameStandardTwo),
+					string(services.SkuNameStandardThree),
+					string(services.SkuNameStorageOptimizedLOne),
+					string(services.SkuNameStorageOptimizedLTwo),
+				}, false),
+			},
+
+			"replica_count": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      1,
+				ValidateFunc: validation.IntBetween(1, 12),
+			},
+
+			"partition_count": {
+				Type:     pluginsdk.TypeInt,
+				Optional: true,
+				Default:  1,
+				ValidateFunc: validation.IntInSlice([]int{
+					1,
+					2,
+					3,
+					4,
+					6,
+					12,
+				}),
+			},
+
+			"local_authentication_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"authentication_failure_mode": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(services.AadAuthFailureModeHTTPFourZeroOneWithBearerChallenge),
+					string(services.AadAuthFailureModeHTTPFourZeroThree),
+				}, false),
+			},
+
+			"hosting_mode": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+				Default:  string(services.HostingModeDefault),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(services.HostingModeDefault),
+					string(services.HostingModeHighDensity),
+				}, false),
+			},
+
+			"customer_managed_key_enforcement_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"customer_managed_key_encryption_compliance_status": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"primary_key": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"secondary_key": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"query_keys": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"key": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"public_network_access_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"semantic_search_sku": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(services.SearchSemanticSearchFree),
+					string(services.SearchSemanticSearchStandard),
+				}, false),
+			},
+
+			"allowed_ips": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.Any(
+						validate.IPv4Address,
+						validate.CIDR,
+					),
+				},
+			},
+
+			"network_rule_bypass_option": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(services.SearchBypassAzureServices),
+					string(services.SearchBypassNone),
+				}, false),
+				Default: string(services.SearchBypassNone),
+			},
+
+			"identity": commonschema.SystemAssignedUserAssignedIdentityOptional(),
+
+			"tags": commonschema.Tags(),
+		},
+	}
+}

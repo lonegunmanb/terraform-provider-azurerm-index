@@ -1,0 +1,132 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/security/mgmt/v3.0/security" // nolint: staticcheck
+	"github.com/google/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/security/2021-06-01/assessmentsmetadata"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceArmSecurityCenterAssessmentPolicy() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceArmSecurityCenterAssessmentPolicyCreate,
+		Read:   resourceArmSecurityCenterAssessmentPolicyRead,
+		Update: resourceArmSecurityCenterAssessmentPolicyUpdate,
+		Delete: resourceArmSecurityCenterAssessmentPolicyDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := assessmentsmetadata.ParseProviderAssessmentMetadataID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"description": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"display_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"severity": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(security.SeverityMedium),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(security.SeverityLow),
+					string(security.SeverityMedium),
+					string(security.SeverityHigh),
+				}, false),
+			},
+
+			// API would return `Unknown` when `categories` isn't set.
+			// After synced with service team, they confirmed will add `Unknown` as possible value to this property and it will be published as a new version of this API.
+			// https://github.com/Azure/azure-rest-api-specs/issues/14918
+			"categories": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Computed: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{
+						"Unknown",
+						string(security.Compute),
+						string(security.Data),
+						string(security.IdentityAndAccess),
+						string(security.IoT),
+						string(security.Networking),
+					}, false),
+				},
+			},
+
+			"implementation_effort": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(security.ImplementationEffortLow),
+					string(security.ImplementationEffortModerate),
+					string(security.ImplementationEffortHigh),
+				}, false),
+			},
+
+			"remediation_description": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"threats": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{
+						"AccountBreach",
+						"DataExfiltration",
+						"DataSpillage",
+						"MaliciousInsider",
+						"ElevationOfPrivilege",
+						"ThreatResistance",
+						"MissingCoverage",
+						"DenialOfService",
+					}, false),
+				},
+			},
+
+			"user_impact": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(security.UserImpactLow),
+					string(security.UserImpactModerate),
+					string(security.UserImpactHigh),
+				}, false),
+			},
+
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+		},
+	}
+}

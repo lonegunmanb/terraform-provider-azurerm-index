@@ -1,0 +1,29 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"regexp"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func SSHKeySchemaHash(v interface{}) int {
+	var buf bytes.Buffer
+
+	if m, ok := v.(map[string]interface{}); ok {
+		normalisedKey, err := suppress.NormalizeSSHKey(m["public_key"].(string))
+		if err != nil {
+			log.Printf("[DEBUG] error normalising ssh key %q: %+v", m["public_key"].(string), err)
+		}
+		buf.WriteString(fmt.Sprintf("%s-", *normalisedKey))
+		buf.WriteString(fmt.Sprintf("%s", m["username"]))
+	}
+
+	return pluginsdk.HashString(buf.String())
+}

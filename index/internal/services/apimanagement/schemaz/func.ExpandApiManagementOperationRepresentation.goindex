@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apioperation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandApiManagementOperationRepresentation(d *pluginsdk.ResourceData, schemaPath string, input []interface{}) (*[]apioperation.RepresentationContract, error) {
+	if len(input) == 0 {
+		return &[]apioperation.RepresentationContract{}, nil
+	}
+
+	outputs := make([]apioperation.RepresentationContract, 0)
+
+	for i, v := range input {
+		vs := v.(map[string]interface{})
+
+		contentType := vs["content_type"].(string)
+		formParametersRaw := vs["form_parameter"].([]interface{})
+		formParameters := ExpandApiManagementOperationParameterContract(d, fmt.Sprintf("%s.%d.form_parameter", schemaPath, i), formParametersRaw)
+		schemaId := vs["schema_id"].(string)
+		typeName := vs["type_name"].(string)
+
+		examples := make(map[string]apioperation.ParameterExampleContract)
+		if vs["example"] != nil {
+			examplesRaw := vs["example"].([]interface{})
+			examples = ExpandApiManagementOperationParameterExampleContract(examplesRaw)
+		}
+
+		output := apioperation.RepresentationContract{
+			ContentType: contentType,
+			Examples:    pointer.To(examples),
+		}
+
+		contentTypeIsFormData := strings.EqualFold(contentType, "multipart/form-data") || strings.EqualFold(contentType, "application/x-www-form-urlencoded")
+
+		// Representation formParameters can only be specified for form data content types (multipart/form-data, application/x-www-form-urlencoded)
+		if contentTypeIsFormData {
+			output.FormParameters = formParameters
+		} else if len(*formParameters) > 0 {
+			return nil, fmt.Errorf("`form_parameter` can only be specified for form data content types (multipart/form-data, application/x-www-form-urlencoded)")
+		}
+
+		// Representation schemaId can only be specified for non form data content types (multipart/form-data, application/x-www-form-urlencoded).
+		// Representation typeName can only be specified for non form data content types (multipart/form-data, application/x-www-form-urlencoded).
+		// nolint gocritic
+		if !contentTypeIsFormData {
+			output.SchemaId = pointer.To(schemaId)
+			output.TypeName = pointer.To(typeName)
+		} else if schemaId != "" {
+			return nil, fmt.Errorf("`schema_id` cannot be specified for non-form data content types (multipart/form-data, application/x-www-form-urlencoded)")
+		} else if typeName != "" {
+			return nil, fmt.Errorf("`type_name` cannot be specified for non-form data content types (multipart/form-data, application/x-www-form-urlencoded)")
+		}
+
+		outputs = append(outputs, output)
+	}
+
+	return &outputs, nil
+}

@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/publicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	compute2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	intStor "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func expandAzureRmVirtualMachineOsProfile(d *pluginsdk.ResourceData) (*virtualmachines.OSProfile, error) {
+	osProfiles := d.Get("os_profile").(*pluginsdk.Set).List()
+
+	osProfile := osProfiles[0].(map[string]interface{})
+
+	adminUsername := osProfile["admin_username"].(string)
+	adminPassword := osProfile["admin_password"].(string)
+	computerName := osProfile["computer_name"].(string)
+
+	profile := &virtualmachines.OSProfile{
+		AdminUsername: &adminUsername,
+		ComputerName:  &computerName,
+	}
+
+	if adminPassword != "" {
+		profile.AdminPassword = &adminPassword
+	}
+
+	if _, ok := d.GetOk("os_profile_windows_config"); ok {
+		winConfig := expandAzureRmVirtualMachineOsProfileWindowsConfig(d)
+		if winConfig != nil {
+			profile.WindowsConfiguration = winConfig
+		}
+	}
+
+	if _, ok := d.GetOk("os_profile_linux_config"); ok {
+		linuxConfig := expandAzureRmVirtualMachineOsProfileLinuxConfig(d)
+		if linuxConfig != nil {
+			profile.LinuxConfiguration = linuxConfig
+		}
+	}
+
+	if profile.LinuxConfiguration == nil && profile.WindowsConfiguration == nil {
+		return nil, fmt.Errorf("either a `os_profile_linux_config` or a `os_profile_windows_config` must be specified")
+	}
+
+	if _, ok := d.GetOk("os_profile_secrets"); ok {
+		secrets := expandAzureRmVirtualMachineOsProfileSecrets(d)
+		if secrets != nil {
+			profile.Secrets = secrets
+		}
+	}
+
+	if v := osProfile["custom_data"].(string); v != "" {
+		v = utils.Base64EncodeIfNot(v)
+		profile.CustomData = &v
+	}
+
+	return profile, nil
+}

@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/integrationaccountpartners"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceLogicAppIntegrationAccountPartner() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceLogicAppIntegrationAccountPartnerCreateUpdate,
+		Read:   resourceLogicAppIntegrationAccountPartnerRead,
+		Update: resourceLogicAppIntegrationAccountPartnerCreateUpdate,
+		Delete: resourceLogicAppIntegrationAccountPartnerDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := integrationaccountpartners.ParsePartnerID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.IntegrationAccountPartnerName(),
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"integration_account_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.IntegrationAccountName(),
+			},
+
+			"business_identity": {
+				Type:     pluginsdk.TypeSet,
+				Required: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"qualifier": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validate.IntegrationAccountPartnerBusinessIdentityQualifier(),
+						},
+
+						"value": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validate.IntegrationAccountPartnerBusinessIdentityValue(),
+						},
+					},
+				},
+			},
+
+			"metadata": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				ValidateFunc:     validation.StringIsJSON,
+				DiffSuppressFunc: pluginsdk.SuppressJsonDiff,
+			},
+		},
+	}
+}

@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/static-analysis/rules
+import (
+	"fmt"
+	"reflect"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+)
+func (r TypedSDKBitCheck) Run() (errors []error) {
+	for _, s := range provider.SupportedTypedServices() {
+		for _, resource := range s.Resources() {
+			modelType := reflect.TypeOf(resource.ModelObject())
+			switch {
+			case modelType != nil && modelType.Kind() == reflect.Ptr:
+				model := modelType.Elem()
+				if model.Kind() != reflect.Struct {
+					errors = append(errors, fmt.Errorf("%s is not a pointer to a struct\n", modelType.Name()))
+					continue
+				}
+
+				errors = append(errors, checkForBits(model)...)
+
+			case modelType == nil:
+				continue
+
+			default:
+				errors = append(errors, fmt.Errorf("%q cannot be bit checked, ModelObject did not return a pointer\n", resource.ResourceType()))
+			}
+		}
+		for _, datasource := range s.DataSources() {
+			modelType := reflect.TypeOf(datasource.ModelObject())
+			if modelType != nil && modelType.Kind() == reflect.Ptr { // Have to nil-check here due to base types not having a model. e.g. roleAssignmentBaseResource
+				model := modelType.Elem()
+				if model.Kind() != reflect.Struct {
+					errors = append(errors, fmt.Errorf("%s is not a pointer to a struct", modelType.Name()))
+					continue
+				}
+
+				errors = append(errors, checkForBits(model)...)
+			} else {
+				errors = append(errors, fmt.Errorf("%q cannot be bit checked, ModelObject did not return a pointer", datasource.ResourceType()))
+			}
+		}
+	}
+
+	return
+}

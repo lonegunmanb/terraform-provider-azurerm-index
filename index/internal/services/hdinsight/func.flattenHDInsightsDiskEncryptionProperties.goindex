@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/extensions"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVault "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenHDInsightsDiskEncryptionProperties(input *clusters.DiskEncryptionProperties) (*[]interface{}, error) {
+	if input == nil {
+		return pointer.To(make([]interface{}, 0)), nil
+	}
+	encryptionAlgorithm := ""
+	if input.EncryptionAlgorithm != nil {
+		encryptionAlgorithm = string(*input.EncryptionAlgorithm)
+	}
+
+	keyName := pointer.From(input.KeyName)
+	keyVersion := pointer.From(input.KeyVersion)
+	keyVaultKeyId := ""
+	if (keyName != "" || keyVersion != "") && input.VaultUri != nil {
+		keyVaultKeyIdRaw, err := parse.NewNestedItemID(*input.VaultUri, parse.NestedItemTypeKey, keyName, keyVersion)
+		if err != nil {
+			return nil, err
+		}
+		keyVaultKeyId = keyVaultKeyIdRaw.ID()
+	}
+
+	return &[]interface{}{
+		map[string]interface{}{
+			"encryption_algorithm":          encryptionAlgorithm,
+			"encryption_at_host_enabled":    pointer.From(input.EncryptionAtHost),
+			"key_vault_key_id":              keyVaultKeyId,
+			"key_vault_managed_identity_id": pointer.From(input.MsiResourceId),
+		},
+	}, nil
+}

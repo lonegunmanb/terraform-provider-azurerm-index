@@ -1,0 +1,100 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"fmt"
+	"log"
+	"math/big"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+	"golang.org/x/crypto/ssh"
+)
+func resourceKeyVaultKeyUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	keyVaultsClient := meta.(*clients.Client).KeyVault
+	client := meta.(*clients.Client).KeyVault.ManagementClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.ParseNestedItemID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	keyVaultId, err := commonids.ParseKeyVaultID(d.Get("key_vault_id").(string))
+	if err != nil {
+		return err
+	}
+
+	meta.(*clients.Client).KeyVault.AddToCache(*keyVaultId, id.KeyVaultBaseUrl)
+
+	ok, err := keyVaultsClient.Exists(ctx, *keyVaultId)
+	if err != nil {
+		return fmt.Errorf("checking if key vault %q for Key %q in Vault at url %q exists: %v", *keyVaultId, id.Name, id.KeyVaultBaseUrl, err)
+	}
+	if !ok {
+		log.Printf("[DEBUG] Key %q Key Vault %q was not found in Key Vault at URI %q - removing from state", id.Name, *keyVaultId, id.KeyVaultBaseUrl)
+		d.SetId("")
+		return nil
+	}
+
+	keyOptions := expandKeyVaultKeyOptions(d)
+	t := d.Get("tags").(map[string]interface{})
+
+	parameters := keyvault.KeyUpdateParameters{
+		KeyOps: keyOptions,
+		KeyAttributes: &keyvault.KeyAttributes{
+			Enabled: utils.Bool(true),
+		},
+		Tags: tags.Expand(t),
+	}
+
+	if v, ok := d.GetOk("not_before_date"); ok {
+		notBeforeDate, _ := time.Parse(time.RFC3339, v.(string)) // validated by schema
+		notBeforeUnixTime := date.UnixTime(notBeforeDate)
+		parameters.KeyAttributes.NotBefore = &notBeforeUnixTime
+	}
+
+	if v, ok := d.GetOk("expiration_date"); ok {
+		expirationDate, _ := time.Parse(time.RFC3339, v.(string)) // validated by schema
+		expirationUnixTime := date.UnixTime(expirationDate)
+		parameters.KeyAttributes.Expires = &expirationUnixTime
+	}
+
+	if _, err = client.UpdateKey(ctx, id.KeyVaultBaseUrl, id.Name, "", parameters); err != nil {
+		return err
+	}
+
+	if d.HasChange("rotation_policy"); ok {
+		if respPolicy, err := client.UpdateKeyRotationPolicy(ctx, id.KeyVaultBaseUrl, id.Name, expandKeyVaultKeyRotationPolicy(d.Get("rotation_policy").([]interface{}))); err != nil {
+			if utils.ResponseWasForbidden(respPolicy.Response) {
+				return fmt.Errorf("current client lacks permissions to update Key Rotation Policy for Key %q (%q, Vault url: %q), please update this as described here: %s : %v", id.Name, *keyVaultId, id.KeyVaultBaseUrl, "https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/key_vault_key#example-usage", err)
+			}
+			return fmt.Errorf("creating Key Rotation Policy: %+v", err)
+		}
+	}
+
+	return resourceKeyVaultKeyRead(d, meta)
+}

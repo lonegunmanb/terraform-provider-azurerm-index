@@ -1,0 +1,103 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (s *SiteConfigWindows) Flatten(appSiteConfig *webapps.SiteConfig, currentStack string) error {
+	if appSiteConfig != nil {
+		s.AlwaysOn = pointer.From(appSiteConfig.AlwaysOn)
+		s.AppCommandLine = pointer.From(appSiteConfig.AppCommandLine)
+		s.AutoHealSettings = flattenAutoHealSettingsWindows(appSiteConfig.AutoHealRules)
+		s.ContainerRegistryUserMSI = pointer.From(appSiteConfig.AcrUserManagedIdentityID)
+		s.Cors = FlattenCorsSettings(appSiteConfig.Cors)
+		s.DetailedErrorLogging = pointer.From(appSiteConfig.DetailedErrorLoggingEnabled)
+		s.FtpsState = string(pointer.From(appSiteConfig.FtpsState))
+		s.HealthCheckPath = pointer.From(appSiteConfig.HealthCheckPath)
+		s.Http2Enabled = pointer.From(appSiteConfig.HTTP20Enabled)
+		s.IpRestriction = FlattenIpRestrictions(appSiteConfig.IPSecurityRestrictions)
+		s.LoadBalancing = string(pointer.From(appSiteConfig.LoadBalancing))
+		s.LocalMysql = pointer.From(appSiteConfig.LocalMySqlEnabled)
+		s.ManagedPipelineMode = string(pointer.From(appSiteConfig.ManagedPipelineMode))
+		s.MinTlsVersion = string(pointer.From(appSiteConfig.MinTlsVersion))
+		s.WorkerCount = pointer.From(appSiteConfig.NumberOfWorkers)
+		s.RemoteDebugging = pointer.From(appSiteConfig.RemoteDebuggingEnabled)
+		s.RemoteDebuggingVersion = strings.ToUpper(pointer.From(appSiteConfig.RemoteDebuggingVersion))
+		s.ScmIpRestriction = FlattenIpRestrictions(appSiteConfig.ScmIPSecurityRestrictions)
+		s.ScmMinTlsVersion = string(pointer.From(appSiteConfig.ScmMinTlsVersion))
+		s.ScmType = string(pointer.From(appSiteConfig.ScmType))
+		s.ScmUseMainIpRestriction = pointer.From(appSiteConfig.ScmIPSecurityRestrictionsUseMain)
+		s.Use32BitWorker = pointer.From(appSiteConfig.Use32BitWorkerProcess)
+		s.UseManagedIdentityACR = pointer.From(appSiteConfig.AcrUseManagedIdentityCreds)
+		s.HandlerMapping = flattenHandlerMapping(appSiteConfig.HandlerMappings)
+		s.VirtualApplications = flattenVirtualApplications(appSiteConfig.VirtualApplications)
+		s.WebSockets = pointer.From(appSiteConfig.WebSocketsEnabled)
+		s.VnetRouteAllEnabled = pointer.From(appSiteConfig.VnetRouteAllEnabled)
+		s.IpRestrictionDefaultAction = string(pointer.From(appSiteConfig.IPSecurityRestrictionsDefaultAction))
+		s.ScmIpRestrictionDefaultAction = string(pointer.From(appSiteConfig.ScmIPSecurityRestrictionsDefaultAction))
+	}
+
+	if appSiteConfig.ApiManagementConfig != nil && appSiteConfig.ApiManagementConfig.Id != nil {
+		apiId, err := parse.ApiIDInsensitively(pointer.From(appSiteConfig.ApiManagementConfig.Id))
+		if err != nil {
+			return fmt.Errorf("could not parse API Management ID: %+v", err)
+		}
+		s.ApiManagementConfigId = apiId.ID()
+	}
+
+	if appSiteConfig.ApiDefinition != nil && appSiteConfig.ApiDefinition.Url != nil {
+		s.ApiDefinition = *appSiteConfig.ApiDefinition.Url
+	}
+
+	if appSiteConfig.DefaultDocuments != nil {
+		s.DefaultDocuments = *appSiteConfig.DefaultDocuments
+	}
+
+	if appSiteConfig.NumberOfWorkers != nil {
+		s.WorkerCount = *appSiteConfig.NumberOfWorkers
+	}
+
+	var winAppStack ApplicationStackWindows
+	if currentStack == CurrentStackDotNetCore {
+		winAppStack.NetCoreVersion = pointer.From(appSiteConfig.NetFrameworkVersion)
+	} else {
+		winAppStack.NetFrameworkVersion = pointer.From(appSiteConfig.NetFrameworkVersion)
+	}
+
+	winAppStack.PhpVersion = pointer.From(appSiteConfig.PhpVersion)
+	if winAppStack.PhpVersion == "" {
+		winAppStack.PhpVersion = PhpVersionOff
+	}
+	winAppStack.PythonVersion = pointer.From(appSiteConfig.PythonVersion) // This _should_ always be `""`
+	winAppStack.Python = currentStack == CurrentStackPython
+
+	// we should only set JavaVersion when  currentStack is java since the API will return the value of JavaVersion that was once set
+	if currentStack == "java" {
+		winAppStack.JavaVersion = pointer.From(appSiteConfig.JavaVersion)
+	}
+	switch pointer.From(appSiteConfig.JavaContainer) {
+	case JavaContainerTomcat:
+		winAppStack.TomcatVersion = pointer.From(appSiteConfig.JavaContainerVersion)
+		winAppStack.JavaVersion = pointer.From(appSiteConfig.JavaVersion)
+	case JavaContainerEmbeddedServer:
+		winAppStack.JavaEmbeddedServer = true
+		winAppStack.JavaVersion = pointer.From(appSiteConfig.JavaVersion)
+	}
+
+	s.WindowsFxVersion = pointer.From(appSiteConfig.WindowsFxVersion)
+
+	winAppStack.CurrentStack = currentStack
+
+	s.ApplicationStack = []ApplicationStackWindows{winAppStack}
+
+	return nil
+}

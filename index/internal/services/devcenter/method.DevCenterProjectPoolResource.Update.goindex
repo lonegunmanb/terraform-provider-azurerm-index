@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2023-04-01/pools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2023-04-01/projects"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r DevCenterProjectPoolResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DevCenter.V20230401.Pools
+
+			id, err := pools.ParsePoolID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var model DevCenterProjectPoolResourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			parameters := pools.PoolUpdate{
+				Properties: &pools.PoolUpdateProperties{},
+			}
+
+			if metadata.ResourceData.HasChange("dev_box_definition_name") {
+				parameters.Properties.DevBoxDefinitionName = pointer.To(model.DevBoxDefinitionName)
+			}
+
+			if metadata.ResourceData.HasChange("local_administrator_enabled") {
+				if model.LocalAdministratorEnabled {
+					parameters.Properties.LocalAdministrator = pointer.To(pools.LocalAdminStatusEnabled)
+				} else {
+					parameters.Properties.LocalAdministrator = pointer.To(pools.LocalAdminStatusDisabled)
+				}
+			}
+
+			if metadata.ResourceData.HasChange("dev_center_attached_network_name") {
+				parameters.Properties.NetworkConnectionName = pointer.To(model.DevCenterAttachedNetworkName)
+			}
+
+			if metadata.ResourceData.HasChange("stop_on_disconnect_grace_period_minutes") {
+				parameters.Properties.StopOnDisconnect = expandDevCenterProjectPoolStopOnDisconnect(model.StopOnDisconnectGracePeriodMinutes)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				parameters.Tags = pointer.To(model.Tags)
+			}
+
+			if err := client.UpdateThenPoll(ctx, *id, parameters); err != nil {
+				return fmt.Errorf("updating %s: %+v", *id, err)
+			}
+
+			return nil
+		},
+	}
+}

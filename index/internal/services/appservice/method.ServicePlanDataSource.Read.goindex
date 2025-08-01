@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r ServicePlanDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.AppService.ServicePlanClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var servicePlan ServicePlanDataSourceModel
+			if err := metadata.Decode(&servicePlan); err != nil {
+				return err
+			}
+
+			id := commonids.NewAppServicePlanID(subscriptionId, servicePlan.ResourceGroup, servicePlan.Name)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("%s not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if model := existing.Model; model != nil {
+				servicePlan.Location = location.Normalize(model.Location)
+				servicePlan.Kind = pointer.From(model.Kind)
+
+				if sku := model.Sku; sku != nil {
+					if sku.Name != nil {
+						servicePlan.Sku = *sku.Name
+						if sku.Capacity != nil {
+							servicePlan.WorkerCount = *sku.Capacity
+						}
+					}
+				}
+
+				if props := model.Properties; props != nil {
+					servicePlan.OSType = OSTypeWindows
+					if props.HyperV != nil && *props.HyperV {
+						servicePlan.OSType = OSTypeWindowsContainer
+					}
+					if props.Reserved != nil && *props.Reserved {
+						servicePlan.OSType = OSTypeLinux
+					}
+
+					if props.HostingEnvironmentProfile != nil && props.HostingEnvironmentProfile.Id != nil {
+						servicePlan.AppServiceEnvironmentId = pointer.From(props.HostingEnvironmentProfile.Id)
+					}
+
+					servicePlan.PerSiteScaling = pointer.From(props.PerSiteScaling)
+					servicePlan.Reserved = pointer.From(props.Reserved)
+					servicePlan.ZoneBalancing = pointer.From(props.ZoneRedundant)
+					servicePlan.MaximumElasticWorkerCount = pointer.From(props.MaximumElasticWorkerCount)
+				}
+				servicePlan.Tags = pointer.From(model.Tags)
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&servicePlan)
+		},
+	}
+}

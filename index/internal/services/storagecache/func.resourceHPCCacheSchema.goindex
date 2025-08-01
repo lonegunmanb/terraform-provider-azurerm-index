@@ -1,0 +1,345 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/caches"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceHPCCacheSchema() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"resource_group_name": commonschema.ResourceGroupName(),
+
+		"location": commonschema.Location(),
+
+		"cache_size_in_gb": {
+			Type:     pluginsdk.TypeInt,
+			Required: true,
+			ForceNew: true,
+			ValidateFunc: validation.IntInSlice([]int{
+				3072,
+				6144,
+				12288,
+				21623,
+				24576,
+				43246,
+				49152,
+				86491,
+			}),
+		},
+
+		"subnet_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: commonids.ValidateSubnetID,
+		},
+
+		"sku_name": {
+			Type:     pluginsdk.TypeString,
+			Required: true,
+			ForceNew: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				"Standard_2G",
+				"Standard_4G",
+				"Standard_8G",
+				"Standard_L4_5G",
+				"Standard_L9G",
+				"Standard_L16G",
+			}, false),
+		},
+
+		"mtu": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Default:      1500,
+			ValidateFunc: validation.IntBetween(576, 1500),
+		},
+
+		"ntp_server": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      "time.windows.com",
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"dns": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"servers": {
+						Type:     pluginsdk.TypeList,
+						Required: true,
+						MaxItems: 3,
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeString,
+							ValidateFunc: validation.IsIPAddress,
+						},
+					},
+
+					"search_domain": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+				},
+			},
+		},
+
+		"directory_active_directory": {
+			Type:     pluginsdk.TypeList,
+			MaxItems: 1,
+			Optional: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"dns_primary_ip": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.IsIPAddress,
+					},
+					"domain_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"cache_netbios_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringMatch(regexp.MustCompile(`^[-0-9a-zA-Z]{1,15}$`), ""),
+					},
+					"domain_netbios_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringMatch(regexp.MustCompile(`^[-0-9a-zA-Z]{1,15}$`), ""),
+					},
+					"username": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"password": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						Sensitive:    true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"dns_secondary_ip": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validation.IsIPAddress,
+					},
+				},
+			},
+			ConflictsWith: []string{"directory_flat_file", "directory_ldap"},
+		},
+
+		"directory_flat_file": {
+			Type:     pluginsdk.TypeList,
+			MaxItems: 1,
+			Optional: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"group_file_uri": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"password_file_uri": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+				},
+			},
+			ConflictsWith: []string{"directory_active_directory", "directory_ldap"},
+		},
+
+		"directory_ldap": {
+			Type:     pluginsdk.TypeList,
+			MaxItems: 1,
+			Optional: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"server": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+
+					"base_dn": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+
+					"encrypted": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+					},
+
+					"certificate_validation_uri": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+
+					"download_certificate_automatically": {
+						Type:         pluginsdk.TypeBool,
+						Optional:     true,
+						RequiredWith: []string{"directory_ldap.0.certificate_validation_uri"},
+					},
+
+					"bind": {
+						Type:     pluginsdk.TypeList,
+						MaxItems: 1,
+						Optional: true,
+						Computed: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"dn": {
+									Type:         pluginsdk.TypeString,
+									Required:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+								"password": {
+									Type:         pluginsdk.TypeString,
+									Sensitive:    true,
+									Required:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+							},
+						},
+					},
+				},
+			},
+			ConflictsWith: []string{"directory_active_directory", "directory_flat_file"},
+		},
+
+		"default_access_policy": {
+			Type:     pluginsdk.TypeList,
+			MinItems: 1,
+			MaxItems: 1,
+			Optional: true,
+			// This is computed because there is always a "default" policy in the cache. It is created together with the cache, and users can't remove it.
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"access_rule": {
+						Type:     pluginsdk.TypeSet,
+						Required: true,
+						MinItems: 1,
+						MaxItems: 3,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"scope": {
+									Type:     pluginsdk.TypeString,
+									Required: true,
+									ValidateFunc: validation.StringInSlice([]string{
+										string(caches.NfsAccessRuleScopeDefault),
+										string(caches.NfsAccessRuleScopeNetwork),
+										string(caches.NfsAccessRuleScopeHost),
+									}, false),
+								},
+
+								"access": {
+									Type:     pluginsdk.TypeString,
+									Required: true,
+									ValidateFunc: validation.StringInSlice([]string{
+										string(caches.NfsAccessRuleAccessRw),
+										string(caches.NfsAccessRuleAccessRo),
+										string(caches.NfsAccessRuleAccessNo),
+									}, false),
+								},
+
+								"filter": {
+									Type:         pluginsdk.TypeString,
+									Optional:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+
+								"suid_enabled": {
+									Type:     pluginsdk.TypeBool,
+									Optional: true,
+								},
+
+								"submount_access_enabled": {
+									Type:     pluginsdk.TypeBool,
+									Optional: true,
+								},
+
+								"root_squash_enabled": {
+									Type:     pluginsdk.TypeBool,
+									Optional: true,
+								},
+
+								"anonymous_uid": {
+									Type:         pluginsdk.TypeInt,
+									Optional:     true,
+									ValidateFunc: validation.IntAtLeast(0),
+								},
+
+								"anonymous_gid": {
+									Type:         pluginsdk.TypeInt,
+									Optional:     true,
+									ValidateFunc: validation.IntAtLeast(0),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+
+		"mount_addresses": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+		},
+
+		"identity": commonschema.SystemAssignedUserAssignedIdentityOptionalForceNew(),
+
+		"key_vault_key_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: keyVaultValidate.NestedItemId,
+			RequiredWith: []string{"identity"},
+		},
+
+		"automatically_rotate_key_to_latest_enabled": {
+			Type:         pluginsdk.TypeBool,
+			Optional:     true,
+			RequiredWith: []string{"key_vault_key_id"},
+		},
+
+		"tags": commonschema.Tags(),
+	}
+}

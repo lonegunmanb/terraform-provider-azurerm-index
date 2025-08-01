@@ -1,0 +1,103 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/security/mgmt/v3.0/security" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	pricings_v2023_01_01 "github.com/hashicorp/go-azure-sdk/resource-manager/security/2023-01-01/pricings"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSecurityCenterSubscriptionPricing() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSecurityCenterSubscriptionPricingUpdate,
+		Read:   resourceSecurityCenterSubscriptionPricingRead,
+		Update: resourceSecurityCenterSubscriptionPricingUpdate,
+		Delete: resourceSecurityCenterSubscriptionPricingDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.PricingID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(60 * time.Minute),
+		},
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.SubscriptionPricingV0ToV1{},
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"tier": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(security.PricingTierFree),
+					string(security.PricingTierStandard),
+				}, false),
+			},
+			"resource_type": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  "VirtualMachines",
+				ValidateFunc: validation.StringInSlice([]string{
+					"Api",
+					"AppServices",
+					"ContainerRegistry",
+					"KeyVaults",
+					"KubernetesService",
+					"SqlServers",
+					"SqlServerVirtualMachines",
+					"StorageAccounts",
+					"VirtualMachines",
+					"Arm",
+					"Dns",
+					"OpenSourceRelationalDatabases",
+					"Containers",
+					"CosmosDbs",
+					"CloudPosture",
+				}, false),
+			},
+			"subplan": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+			"extension": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotWhiteSpace,
+						},
+						"additional_extension_properties": {
+							Type:     pluginsdk.TypeMap,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.StringIsNotWhiteSpace,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

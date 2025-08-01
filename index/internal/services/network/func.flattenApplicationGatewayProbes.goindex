@@ -1,0 +1,109 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenApplicationGatewayProbes(input *[]applicationgateways.ApplicationGatewayProbe) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	for _, v := range *input {
+		output := map[string]interface{}{}
+
+		if v.Id != nil {
+			output["id"] = *v.Id
+		}
+
+		if v.Name != nil {
+			output["name"] = *v.Name
+		}
+
+		if props := v.Properties; props != nil {
+			output["protocol"] = string(pointer.From(props.Protocol))
+
+			if host := props.Host; host != nil {
+				output["host"] = *host
+			}
+
+			if path := props.Path; path != nil {
+				output["path"] = *path
+			}
+
+			if interval := props.Interval; interval != nil {
+				output["interval"] = int(*interval)
+			}
+
+			if timeout := props.Timeout; timeout != nil {
+				output["timeout"] = int(*timeout)
+			}
+
+			if threshold := props.UnhealthyThreshold; threshold != nil {
+				output["unhealthy_threshold"] = int(*threshold)
+			}
+
+			port := 0
+			if props.Port != nil {
+				port = int(*props.Port)
+			}
+			output["port"] = port
+
+			if pickHostNameFromBackendHTTPSettings := props.PickHostNameFromBackendHTTPSettings; pickHostNameFromBackendHTTPSettings != nil {
+				output["pick_host_name_from_backend_http_settings"] = *pickHostNameFromBackendHTTPSettings
+			}
+
+			if minServers := props.MinServers; minServers != nil {
+				output["minimum_servers"] = int(*minServers)
+			}
+
+			matches := make([]interface{}, 0)
+			if match := props.Match; match != nil {
+				matchConfig := map[string]interface{}{}
+				if body := match.Body; body != nil {
+					matchConfig["body"] = *body
+				}
+
+				statusCodes := make([]interface{}, 0)
+				if match.StatusCodes != nil {
+					for _, status := range *match.StatusCodes {
+						statusCodes = append(statusCodes, status)
+					}
+				}
+				matchConfig["status_code"] = statusCodes
+				matches = append(matches, matchConfig)
+			}
+			output["match"] = matches
+		}
+
+		results = append(results, output)
+	}
+
+	return results
+}

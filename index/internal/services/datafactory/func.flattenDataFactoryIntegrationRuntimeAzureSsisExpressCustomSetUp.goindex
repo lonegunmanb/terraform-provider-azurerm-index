@@ -1,0 +1,115 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	sqlValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func flattenDataFactoryIntegrationRuntimeAzureSsisExpressCustomSetUp(input *[]datafactory.BasicCustomSetupBase, d *pluginsdk.ResourceData) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	// retrieve old state
+	oldState := make(map[string]interface{})
+	if arr := d.Get("express_custom_setup").([]interface{}); len(arr) > 0 {
+		oldState = arr[0].(map[string]interface{})
+	}
+	oldComponents := make([]interface{}, 0)
+	if rawComponent, ok := oldState["component"]; ok {
+		if v := rawComponent.([]interface{}); len(v) > 0 {
+			oldComponents = v
+		}
+	}
+	oldCmdKey := make([]interface{}, 0)
+	if rawCmdKey, ok := oldState["command_key"]; ok {
+		if v := rawCmdKey.([]interface{}); len(v) > 0 {
+			oldCmdKey = v
+		}
+	}
+
+	env := make(map[string]interface{})
+	powershellVersion := ""
+	components := make([]interface{}, 0)
+	cmdkeys := make([]interface{}, 0)
+	for _, item := range *input {
+		switch v := item.(type) {
+		case datafactory.AzPowerShellSetup:
+			if v.Version != nil {
+				powershellVersion = *v.Version
+			}
+		case datafactory.ComponentSetup:
+			var name string
+			if v.ComponentName != nil {
+				name = *v.ComponentName
+			}
+			var keyVaultLicense *datafactory.AzureKeyVaultSecretReference
+			if v.LicenseKey != nil {
+				if reference, ok := v.LicenseKey.AsAzureKeyVaultSecretReference(); ok {
+					keyVaultLicense = reference
+				}
+			}
+			components = append(components, map[string]interface{}{
+				"name":              name,
+				"key_vault_license": flattenDataFactoryIntegrationRuntimeAzureSsisKeyVaultSecretReference(keyVaultLicense),
+				"license": readBackSensitiveValue(oldComponents, "license", map[string]string{
+					"name": name,
+				}),
+			})
+		case datafactory.EnvironmentVariableSetup:
+			if v.VariableName != nil && v.VariableValue != nil {
+				env[*v.VariableName] = *v.VariableValue
+			}
+		case datafactory.CmdkeySetup:
+			var name, userName string
+			if v.TargetName != nil {
+				if v, ok := v.TargetName.(string); ok {
+					name = v
+				}
+			}
+			if v.UserName != nil {
+				if v, ok := v.UserName.(string); ok {
+					userName = v
+				}
+			}
+			var keyVaultPassword *datafactory.AzureKeyVaultSecretReference
+			if v.Password != nil {
+				if reference, ok := v.Password.AsAzureKeyVaultSecretReference(); ok {
+					keyVaultPassword = reference
+				}
+			}
+			cmdkeys = append(cmdkeys, map[string]interface{}{
+				"target_name": name,
+				"user_name":   userName,
+				"password": readBackSensitiveValue(oldCmdKey, "password", map[string]string{
+					"target_name": name,
+					"user_name":   userName,
+				}),
+				"key_vault_password": flattenDataFactoryIntegrationRuntimeAzureSsisKeyVaultSecretReference(keyVaultPassword),
+			})
+		}
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"environment":        env,
+			"powershell_version": powershellVersion,
+			"component":          components,
+			"command_key":        cmdkeys,
+		},
+	}
+}

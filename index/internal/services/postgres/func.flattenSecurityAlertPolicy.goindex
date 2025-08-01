@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/replicas"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/serversecurityalertpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSecurityAlertPolicy(props *serversecurityalertpolicies.SecurityAlertPolicyProperties, accessKey string) interface{} {
+	if props == nil {
+		return nil
+	}
+
+	// check if its an empty block as in its never been set before
+	if props.DisabledAlerts != nil && len(*props.DisabledAlerts) == 1 && (*props.DisabledAlerts)[0] == "" &&
+		props.EmailAddresses != nil && len(*props.EmailAddresses) == 1 && (*props.EmailAddresses)[0] == "" &&
+		props.StorageAccountAccessKey != nil && *props.StorageAccountAccessKey == "" &&
+		props.StorageEndpoint != nil && *props.StorageEndpoint == "" &&
+		props.RetentionDays != nil && *props.RetentionDays == 0 &&
+		props.EmailAccountAdmins != nil && !*props.EmailAccountAdmins &&
+		props.State == serversecurityalertpolicies.ServerSecurityAlertPolicyStateDisabled {
+		return nil
+	}
+
+	block := map[string]interface{}{}
+
+	block["enabled"] = props.State == serversecurityalertpolicies.ServerSecurityAlertPolicyStateEnabled
+
+	block["disabled_alerts"] = flattenSecurityAlertPolicySet(props.DisabledAlerts)
+	block["email_addresses"] = flattenSecurityAlertPolicySet(props.EmailAddresses)
+
+	if v := props.EmailAccountAdmins; v != nil {
+		block["email_account_admins"] = *v
+	}
+	if v := props.RetentionDays; v != nil {
+		block["retention_days"] = *v
+	}
+	if v := props.StorageEndpoint; v != nil {
+		block["storage_endpoint"] = *v
+	}
+
+	block["storage_account_access_key"] = accessKey
+
+	return []interface{}{block}
+}

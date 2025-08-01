@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenCdnFrontDoorFirewallCustomRules(input *waf.CustomRuleList) []interface{} {
+	if input == nil || input.Rules == nil {
+		return []interface{}{}
+	}
+
+	results := make([]interface{}, 0)
+	for _, v := range *input.Rules {
+		action := string(v.Action)
+		priority := int(v.Priority)
+		ruleType := string(v.RuleType)
+
+		enabled := false
+		if v.EnabledState != nil {
+			enabled = pointer.From(v.EnabledState) == waf.CustomRuleEnabledStateEnabled
+		}
+
+		name := ""
+		if v.Name != nil {
+			name = *v.Name
+		}
+
+		rateLimitDurationInMinutes := 0
+		if v.RateLimitDurationInMinutes != nil {
+			rateLimitDurationInMinutes = int(*v.RateLimitDurationInMinutes)
+		}
+
+		rateLimitThreshold := 0
+		if v.RateLimitThreshold != nil {
+			rateLimitThreshold = int(*v.RateLimitThreshold)
+		}
+
+		results = append(results, map[string]interface{}{
+			"action":                         action,
+			"enabled":                        enabled,
+			"match_condition":                flattenCdnFrontDoorFirewallMatchConditions(v.MatchConditions),
+			"rate_limit_duration_in_minutes": rateLimitDurationInMinutes,
+			"rate_limit_threshold":           rateLimitThreshold,
+			"priority":                       priority,
+			"name":                           name,
+			"type":                           ruleType,
+		})
+	}
+
+	return results
+}

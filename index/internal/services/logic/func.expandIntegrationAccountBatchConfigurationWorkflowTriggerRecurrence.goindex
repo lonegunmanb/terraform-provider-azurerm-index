@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/integrationaccountbatchconfigurations"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandIntegrationAccountBatchConfigurationWorkflowTriggerRecurrence(input []interface{}) *integrationaccountbatchconfigurations.WorkflowTriggerRecurrence {
+	if len(input) == 0 {
+		return nil
+	}
+	v := input[0].(map[string]interface{})
+
+	frequency := integrationaccountbatchconfigurations.RecurrenceFrequency(v["frequency"].(string))
+	result := integrationaccountbatchconfigurations.WorkflowTriggerRecurrence{
+		Frequency: &frequency,
+		Interval:  utils.Int64(int64(v["interval"].(int))),
+	}
+
+	if startTime := v["start_time"].(string); startTime != "" {
+		result.StartTime = utils.String(startTime)
+	}
+
+	if endTime := v["end_time"].(string); endTime != "" {
+		result.EndTime = utils.String(endTime)
+	}
+
+	if timeZone := v["time_zone"].(string); timeZone != "" {
+		result.TimeZone = utils.String(timeZone)
+	}
+
+	if schedule := v["schedule"].([]interface{}); len(schedule) != 0 {
+		result.Schedule = expandIntegrationAccountBatchConfigurationRecurrenceSchedule(schedule)
+	}
+
+	return &result
+}

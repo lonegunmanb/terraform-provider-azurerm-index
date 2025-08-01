@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func (s SpringCloudAcceleratorResource) Delete() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.AppPlatform.ApplicationAcceleratorClient
+
+			id, err := parse.SpringCloudAcceleratorID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			future, err := client.Delete(ctx, id.ResourceGroup, id.SpringName, id.ApplicationAcceleratorName)
+			if err != nil {
+				return fmt.Errorf("deleting %s: %+v", *id, err)
+			}
+
+			if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+				if !response.WasNotFound(future.Response()) {
+					return fmt.Errorf("waiting for deletion of %s: %+v", *id, err)
+				}
+			}
+
+			return nil
+		},
+	}
+}

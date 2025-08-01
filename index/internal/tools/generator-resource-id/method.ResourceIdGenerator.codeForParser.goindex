@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+)
+func (id ResourceIdGenerator) codeForParser() string {
+	directAssignments := make([]string, 0)
+	if id.HasSubscriptionId {
+		directAssignments = append(directAssignments, "\t\tSubscriptionId: id.SubscriptionID,")
+	}
+	if id.HasResourceGroup {
+		directAssignments = append(directAssignments, "\t\tResourceGroup: id.ResourceGroup,")
+	}
+	directAssignmentsStr := strings.Join(directAssignments, "\n")
+
+	parserStatements := make([]string, 0)
+	for _, segment := range id.Segments {
+		isSubscription := strings.EqualFold(segment.FieldName, "SubscriptionId") && id.HasSubscriptionId
+		isResourceGroup := strings.EqualFold(segment.FieldName, "ResourceGroup") && id.HasResourceGroup
+		if isSubscription || isResourceGroup {
+			parserStatements = append(parserStatements, fmt.Sprintf(`
+	if resourceId.%[1]s == "" {
+		return nil, errors.New("ID was missing the '%[2]s' element")
+	}
+`, segment.FieldName, segment.SegmentKey))
+			continue
+		}
+
+		fmtString := "\tif resourceId.%[1]s, err = id.PopSegment(\"%[2]s\"); err != nil {\n\t\treturn nil, err\n\t}"
+		parserStatements = append(parserStatements, fmt.Sprintf(fmtString, segment.FieldName, segment.SegmentKey))
+	}
+	parserStatementsStr := strings.Join(parserStatements, "\n")
+	return fmt.Sprintf(`
+// %[1]sID parses a %[1]s ID into an %[1]sId struct 
+func %[1]sID(input string) (*%[1]sId, error) {
+	id, err := resourceids.ParseAzureResourceID(input)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %%q as an %[1]s ID: %%+v", input, err)
+	}
+
+	resourceId := %[1]sId{
+%[2]s
+	}
+
+%[3]s
+
+	if err := id.ValidateNoEmptySegments(input); err != nil {
+		return nil, err
+	}
+
+	return &resourceId, nil
+}
+`, id.TypeName, directAssignmentsStr, parserStatementsStr)
+}

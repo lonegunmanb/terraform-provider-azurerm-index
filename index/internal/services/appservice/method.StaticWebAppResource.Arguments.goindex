@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/staticsites"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/sdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r StaticWebAppResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.StaticWebAppName,
+		},
+
+		"resource_group_name": commonschema.ResourceGroupName(),
+
+		"location": commonschema.Location(),
+
+		"configuration_file_changes_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"preview_environments_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"public_network_access_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"sku_tier": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  string(resourceproviders.SkuNameFree),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(resourceproviders.SkuNameStandard),
+				string(resourceproviders.SkuNameFree),
+			}, false),
+		},
+
+		"sku_size": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  string(resourceproviders.SkuNameFree),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(resourceproviders.SkuNameStandard),
+				string(resourceproviders.SkuNameFree),
+			}, false),
+		},
+
+		"app_settings": {
+			Type:     pluginsdk.TypeMap,
+			Optional: true,
+			Elem: &pluginsdk.Schema{
+				Type: pluginsdk.TypeString,
+			},
+		},
+
+		"basic_auth": helpers.BasicAuthSchema(),
+
+		"identity": commonschema.SystemAssignedUserAssignedIdentityOptional(),
+
+		"repository_url": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.IsURLWithHTTPorHTTPS,
+			RequiredWith: []string{"repository_token", "repository_branch"},
+		},
+
+		"repository_token": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Sensitive:    true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			RequiredWith: []string{"repository_url", "repository_branch"},
+		},
+
+		"repository_branch": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			RequiredWith: []string{"repository_url", "repository_token"},
+		},
+
+		"tags": tags.Schema(),
+	}
+}

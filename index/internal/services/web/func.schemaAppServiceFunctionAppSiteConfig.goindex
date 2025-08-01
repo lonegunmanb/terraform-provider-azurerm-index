@@ -1,0 +1,175 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/google/uuid"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func schemaAppServiceFunctionAppSiteConfig() *pluginsdk.Schema {
+	return &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Optional: true,
+		Computed: true,
+		MaxItems: 1,
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"always_on": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				"cors": SchemaWebCorsSettings(),
+
+				"ftps_state": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.FtpsStateAllAllowed),
+						string(web.FtpsStateDisabled),
+						string(web.FtpsStateFtpsOnly),
+					}, false),
+				},
+
+				"http2_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				"ip_restriction": schemaAppServiceIpRestriction(),
+
+				"linux_fx_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+				},
+
+				"min_tls_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.SupportedTLSVersionsOneFullStopZero),
+						string(web.SupportedTLSVersionsOneFullStopOne),
+						string(web.SupportedTLSVersionsOneFullStopTwo),
+					}, false),
+				},
+
+				"pre_warmed_instance_count": {
+					Type:         pluginsdk.TypeInt,
+					Optional:     true,
+					Computed:     true,
+					ValidateFunc: validation.IntBetween(0, 20),
+				},
+
+				"scm_ip_restriction": schemaAppServiceIpRestriction(),
+
+				"scm_type": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.ScmTypeBitbucketGit),
+						string(web.ScmTypeBitbucketHg),
+						string(web.ScmTypeCodePlexGit),
+						string(web.ScmTypeCodePlexHg),
+						string(web.ScmTypeDropbox),
+						string(web.ScmTypeExternalGit),
+						string(web.ScmTypeExternalHg),
+						string(web.ScmTypeGitHub),
+						string(web.ScmTypeLocalGit),
+						string(web.ScmTypeNone),
+						string(web.ScmTypeOneDrive),
+						string(web.ScmTypeTfs),
+						string(web.ScmTypeVSO),
+						string(web.ScmTypeVSTSRM),
+					}, false),
+				},
+
+				"scm_use_main_ip_restriction": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				"use_32_bit_worker_process": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  true,
+				},
+
+				"websockets_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				// The following is only used for "slots"
+				"auto_swap_slot_name": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+				},
+
+				"health_check_path": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+				},
+
+				"java_version": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.StringInSlice([]string{"1.8", "11", "17"}, false),
+				},
+
+				"elastic_instance_minimum": {
+					Type:     pluginsdk.TypeInt,
+					Optional: true,
+					Computed: true,
+					ValidateFunc: func() pluginsdk.SchemaValidateFunc {
+						return validation.IntBetween(1, 20)
+					}(),
+				},
+
+				"app_scale_limit": {
+					Type:         pluginsdk.TypeInt,
+					Optional:     true,
+					Computed:     true,
+					ValidateFunc: validation.IntAtLeast(0),
+				},
+
+				"runtime_scale_monitoring_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				"dotnet_framework_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Default:  "v4.0",
+					ValidateFunc: validation.StringInSlice([]string{
+						"v4.0",
+						"v5.0",
+						"v6.0",
+					}, false),
+				},
+
+				"vnet_route_all_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Computed: true,
+				},
+			},
+		},
+	}
+}

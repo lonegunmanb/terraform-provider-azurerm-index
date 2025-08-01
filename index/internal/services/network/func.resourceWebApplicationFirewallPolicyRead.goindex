@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceWebApplicationFirewallPolicyRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.WebApplicationFirewallPolicies
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := webapplicationfirewallpolicies.ParseApplicationGatewayWebApplicationFirewallPolicyID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[INFO] Web Application Firewall Policy %q does not exist - removing from state", d.Id())
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("reading %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.ApplicationGatewayWebApplicationFirewallPolicyName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+	if model := resp.Model; model != nil {
+		d.Set("location", location.NormalizeNilable(model.Location))
+		if prop := model.Properties; prop != nil {
+			if err := d.Set("custom_rules", flattenWebApplicationFirewallPolicyWebApplicationFirewallCustomRule(prop.CustomRules)); err != nil {
+				return fmt.Errorf("setting `custom_rules`: %+v", err)
+			}
+			if err := d.Set("policy_settings", flattenWebApplicationFirewallPolicyPolicySettings(prop.PolicySettings)); err != nil {
+				return fmt.Errorf("setting `policy_settings`: %+v", err)
+			}
+			if err := d.Set("managed_rules", flattenWebApplicationFirewallPolicyManagedRulesDefinition(prop.ManagedRules)); err != nil {
+				return fmt.Errorf("setting `managed_rules`: %+v", err)
+			}
+			if err := d.Set("http_listener_ids", flattenWebApplicationFirewallPoliciesSubResourcesToIDs(prop.HTTPListeners)); err != nil {
+				return fmt.Errorf("setting `http_listeners`: %+v", err)
+			}
+			if err := d.Set("path_based_rule_ids", flattenWebApplicationFirewallPoliciesSubResourcesToIDs(prop.PathBasedRules)); err != nil {
+				return fmt.Errorf("setting `path_based_rules`: %+v", err)
+			}
+		}
+
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+	return nil
+}

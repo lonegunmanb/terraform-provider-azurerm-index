@@ -1,0 +1,101 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/arckubernetes
+import (
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	arckubernetes "github.com/hashicorp/go-azure-sdk/resource-manager/hybridkubernetes/2024-01-01/connectedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceArcKubernetesCluster() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceArcKubernetesClusterCreate,
+		Read:   resourceArcKubernetesClusterRead,
+		Update: resourceArcKubernetesClusterUpdate,
+		Delete: resourceArcKubernetesClusterDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := arckubernetes.ParseConnectedClusterID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringMatch(
+					regexp.MustCompile("^[-_a-zA-Z0-9]{1,260}$"),
+					"The name of Arc Kubernetes Cluster can only include alphanumeric characters, underscores, hyphens, has a maximum length of 260 characters, and must be unique.",
+				),
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"agent_public_key_certificate": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: azValidate.Base64EncodedString,
+			},
+
+			"identity": commonschema.SystemAssignedIdentityRequiredForceNew(),
+
+			"location": commonschema.Location(),
+
+			"agent_version": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"distribution": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"infrastructure": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"kubernetes_version": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"offering": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"total_core_count": {
+				Type:     pluginsdk.TypeInt,
+				Computed: true,
+			},
+
+			"total_node_count": {
+				Type:     pluginsdk.TypeInt,
+				Computed: true,
+			},
+
+			"tags": commonschema.Tags(),
+		},
+	}
+}

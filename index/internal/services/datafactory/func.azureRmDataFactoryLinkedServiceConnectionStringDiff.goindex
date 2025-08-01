@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"log"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func azureRmDataFactoryLinkedServiceConnectionStringDiff(_, old string, new string, _ *pluginsdk.ResourceData) bool {
+	oldSplit := strings.Split(strings.ToLower(old), ";")
+	newSplit := strings.Split(strings.ToLower(new), ";")
+
+	sort.Strings(oldSplit)
+	sort.Strings(newSplit)
+
+	// We need to remove the password from the new string since it isn't returned from the api
+	for i, v := range newSplit {
+		if strings.HasPrefix(v, "password") {
+			newSplit = append(newSplit[:i], newSplit[i+1:]...)
+		}
+	}
+
+	if len(oldSplit) != len(newSplit) {
+		return false
+	}
+
+	// We'll error out if we find any differences between the old and the new connection strings
+	for i := range oldSplit {
+		if !strings.EqualFold(oldSplit[i], newSplit[i]) {
+			return false
+		}
+	}
+
+	return true
+}

@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFrontDoorBackend(input *[]frontdoors.Backend) []interface{} {
+	if input == nil {
+		return make([]interface{}, 0)
+	}
+	output := make([]interface{}, 0)
+	for _, v := range *input {
+		result := make(map[string]interface{})
+		if address := v.Address; address != nil {
+			result["address"] = *address
+		}
+		if backendHostHeader := v.BackendHostHeader; backendHostHeader != nil {
+			result["host_header"] = *backendHostHeader
+		}
+		if v.EnabledState != nil {
+			result["enabled"] = *v.EnabledState == frontdoors.BackendEnabledStateEnabled
+		}
+		if httpPort := v.HTTPPort; httpPort != nil {
+			result["http_port"] = int(*httpPort)
+		}
+		if httpsPort := v.HTTPSPort; httpsPort != nil {
+			result["https_port"] = int(*httpsPort)
+		}
+		if priority := v.Priority; priority != nil {
+			result["priority"] = int(*priority)
+		}
+		if weight := v.Weight; weight != nil {
+			result["weight"] = int(*weight)
+		}
+		output = append(output, result)
+	}
+
+	return output
+}

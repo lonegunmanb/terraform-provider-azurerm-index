@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFrontDoorFirewallManagedRules(input []interface{}) *webapplicationfirewallpolicies.ManagedRuleSetList {
+	if len(input) == 0 {
+		return nil
+	}
+
+	managedRules := make([]webapplicationfirewallpolicies.ManagedRuleSet, 0)
+
+	for _, mr := range input {
+		managedRule := mr.(map[string]interface{})
+
+		ruleType := managedRule["type"].(string)
+		version := managedRule["version"].(string)
+		overrides := managedRule["override"].([]interface{})
+		exclusions := managedRule["exclusion"].([]interface{})
+
+		managedRuleSet := webapplicationfirewallpolicies.ManagedRuleSet{
+			RuleSetType:    ruleType,
+			RuleSetVersion: version,
+		}
+
+		if exclusions := expandFrontDoorFirewallManagedRuleGroupExclusion(exclusions); exclusions != nil {
+			managedRuleSet.Exclusions = exclusions
+		}
+
+		if ruleGroupOverrides := expandFrontDoorFirewallManagedRuleGroupOverride(overrides); ruleGroupOverrides != nil {
+			managedRuleSet.RuleGroupOverrides = ruleGroupOverrides
+		}
+
+		managedRules = append(managedRules, managedRuleSet)
+	}
+
+	return &webapplicationfirewallpolicies.ManagedRuleSetList{
+		ManagedRuleSets: &managedRules,
+	}
+}

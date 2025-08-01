@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/customipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r CustomIpPrefixResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			r.client = metadata.Client.Network.Client.CustomIPPrefixes
+
+			id, err := customipprefixes.ParseCustomIPPrefixID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			existing, err := r.client.Get(ctx, *id, customipprefixes.DefaultGetOperationOptions())
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			state := CustomIpPrefixModel{
+				Name:              id.CustomIPPrefixName,
+				ResourceGroupName: id.ResourceGroupName,
+			}
+
+			if model := existing.Model; model != nil {
+				state.Location = location.NormalizeNilable(model.Location)
+				state.Tags = tags.Flatten(model.Tags)
+				state.Zones = pointer.From(model.Zones)
+
+				if props := model.Properties; props != nil {
+					state.CIDR = pointer.From(props.Cidr)
+					state.InternetAdvertisingDisabled = pointer.From(props.NoInternetAdvertise)
+					state.WANValidationSignedMessage = pointer.From(props.SignedMessage)
+
+					if parent := props.CustomIPPrefixParent; parent != nil {
+						state.ParentCustomIPPrefixID = pointer.From(parent.Id)
+					}
+
+					if props.AuthorizationMessage != nil {
+						authMessage := strings.Split(*props.AuthorizationMessage, "|")
+						if len(authMessage) == 3 {
+							if roaValidityEndDate, err := time.Parse("20060102", authMessage[2]); err == nil {
+								state.ROAValidityEndDate = roaValidityEndDate.Format("2006-01-02")
+							}
+						}
+					}
+
+					switch pointer.From(props.CommissionedState) {
+					case customipprefixes.CommissionedStateCommissioning, customipprefixes.CommissionedStateCommissioned, customipprefixes.CommissionedStateCommissionedNoInternetAdvertise:
+						state.CommissioningEnabled = true
+					default:
+						state.CommissioningEnabled = false
+					}
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

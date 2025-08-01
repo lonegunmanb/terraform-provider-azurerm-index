@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
+)
+func flattenStorageTableACLsWithMetadata(acls *[]tables.SignedIdentifier) []ACLModel {
+	if acls == nil {
+		return []ACLModel{}
+	}
+
+	output := make([]ACLModel, 0, len(*acls))
+	for _, acl := range *acls {
+		var accessPolicies []AccessPolicyModel
+		for _, policy := range []tables.AccessPolicy{acl.AccessPolicy} {
+			accessPolicies = append(accessPolicies, AccessPolicyModel{
+				Start:       policy.Start,
+				Expiry:      policy.Expiry,
+				Permissions: policy.Permission,
+			})
+		}
+
+		output = append(output, ACLModel{
+			Id:           acl.Id,
+			AccessPolicy: accessPolicies,
+		})
+	}
+
+	return output
+}

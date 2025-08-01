@@ -1,0 +1,254 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/ddosprotectionplans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/routetables"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/serviceendpointpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/subnets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworks"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceVirtualNetworkSchema() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"resource_group_name": commonschema.ResourceGroupName(),
+
+		"location": commonschema.Location(),
+
+		"address_space": {
+			Type:     pluginsdk.TypeSet,
+			Required: true,
+			MinItems: 1,
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+		},
+
+		// Optional
+		"bgp_community": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validate.VirtualNetworkBgpCommunity,
+		},
+
+		"ddos_protection_plan": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: ddosprotectionplans.ValidateDdosProtectionPlanID,
+					},
+
+					"enable": {
+						Type:     pluginsdk.TypeBool,
+						Required: true,
+					},
+				},
+			},
+		},
+
+		"encryption": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"enforcement": {
+						Type:     pluginsdk.TypeString,
+						Required: true,
+						ValidateFunc: validation.StringInSlice([]string{
+							string(virtualnetworks.VirtualNetworkEncryptionEnforcementDropUnencrypted),
+							string(virtualnetworks.VirtualNetworkEncryptionEnforcementAllowUnencrypted),
+						}, false),
+					},
+				},
+			},
+		},
+
+		"dns_servers": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Computed: true,
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+		},
+
+		"edge_zone": commonschema.EdgeZoneOptionalForceNew(),
+
+		"flow_timeout_in_minutes": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			ValidateFunc: validation.IntBetween(4, 30),
+		},
+
+		"guid": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"subnet": {
+			Type:       pluginsdk.TypeSet,
+			Optional:   true,
+			Computed:   true,
+			ConfigMode: pluginsdk.SchemaConfigModeAttr,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+
+					"address_prefixes": {
+						Type:     pluginsdk.TypeList,
+						Required: true,
+						MinItems: 1,
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeString,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+					},
+
+					"default_outbound_access_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Default:  true,
+						Optional: true,
+					},
+
+					"delegation": {
+						Type:       pluginsdk.TypeList,
+						Optional:   true,
+						MaxItems:   1,
+						ConfigMode: pluginsdk.SchemaConfigModeAttr,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"name": {
+									Type:     pluginsdk.TypeString,
+									Required: true,
+								},
+								"service_delegation": {
+									Type:       pluginsdk.TypeList,
+									Required:   true,
+									MaxItems:   1,
+									ConfigMode: pluginsdk.SchemaConfigModeAttr,
+									Elem: &pluginsdk.Resource{
+										Schema: map[string]*pluginsdk.Schema{
+											"name": {
+												Type:         pluginsdk.TypeString,
+												Required:     true,
+												ValidateFunc: validation.StringInSlice(subnetDelegationServiceNames, false),
+											},
+
+											"actions": {
+												Type:     pluginsdk.TypeSet,
+												Optional: true,
+												Elem: &pluginsdk.Schema{
+													Type: pluginsdk.TypeString,
+													ValidateFunc: validation.StringInSlice([]string{
+														"Microsoft.Network/networkinterfaces/*",
+														"Microsoft.Network/publicIPAddresses/join/action",
+														"Microsoft.Network/publicIPAddresses/read",
+														"Microsoft.Network/virtualNetworks/read",
+														"Microsoft.Network/virtualNetworks/subnets/action",
+														"Microsoft.Network/virtualNetworks/subnets/join/action",
+														"Microsoft.Network/virtualNetworks/subnets/prepareNetworkPolicies/action",
+														"Microsoft.Network/virtualNetworks/subnets/unprepareNetworkPolicies/action",
+													}, false),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+
+					"private_endpoint_network_policies": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Default:      string(subnets.VirtualNetworkPrivateEndpointNetworkPoliciesDisabled),
+						ValidateFunc: validation.StringInSlice(subnets.PossibleValuesForVirtualNetworkPrivateEndpointNetworkPolicies(), false),
+					},
+
+					"private_link_service_network_policies_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						Default:  true,
+					},
+
+					"route_table_id": commonschema.ResourceIDReferenceOptional(&routetables.RouteTableId{}),
+
+					"security_group": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+
+					"service_endpoints": {
+						Type:     pluginsdk.TypeSet,
+						Optional: true,
+						Elem: &pluginsdk.Schema{
+							Type: pluginsdk.TypeString,
+						},
+						Set: pluginsdk.HashString,
+					},
+
+					"service_endpoint_policy_ids": {
+						Type:     pluginsdk.TypeSet,
+						Optional: true,
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeString,
+							ValidateFunc: serviceendpointpolicies.ValidateServiceEndpointPolicyID,
+						},
+					},
+
+					"id": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+				},
+			},
+		},
+
+		"private_endpoint_vnet_policies": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      string(virtualnetworks.PrivateEndpointVNetPoliciesDisabled),
+			ValidateFunc: validation.StringInSlice(virtualnetworks.PossibleValuesForPrivateEndpointVNetPolicies(), false),
+		},
+
+		"tags": commonschema.Tags(),
+	}
+}

@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2022-04-01/roledefinitions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2023-07-01/managedhsms"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func flattenKeyVaultMHSMRolePermission(perms *[]keyvault.Permission) []Permission {
+	if perms == nil {
+		return make([]Permission, 0)
+	}
+
+	res := make([]Permission, 0, len(*perms))
+	for _, perm := range *perms {
+		var data, notData []string
+		for _, item := range pointer.From(perm.DataActions) {
+			data = append(data, string(item))
+		}
+		for _, item := range pointer.From(perm.NotDataActions) {
+			notData = append(notData, string(item))
+		}
+
+		res = append(res, Permission{
+			Actions:        pointer.From(perm.Actions),
+			NotActions:     pointer.From(perm.NotActions),
+			DataActions:    data,
+			NotDataActions: notData,
+		})
+	}
+	return res
+}

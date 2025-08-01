@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/images"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandImageOSDisk(input []interface{}) *images.ImageOSDisk {
+	if len(input) > 0 {
+		config := input[0].(map[string]interface{})
+
+		out := &images.ImageOSDisk{}
+
+		if v := config["os_type"].(string); v != "" {
+			out.OsType = images.OperatingSystemTypes(v)
+		}
+
+		if v := config["os_state"].(string); v != "" {
+			out.OsState = images.OperatingSystemStateTypes(v)
+		}
+		managedDiskID := config["managed_disk_id"].(string)
+		if managedDiskID != "" {
+			managedDisk := &images.SubResource{
+				Id: &managedDiskID,
+			}
+			out.ManagedDisk = managedDisk
+		}
+
+		blobURI := config["blob_uri"].(string)
+		out.BlobUri = &blobURI
+
+		if v := config["caching"].(string); v != "" {
+			out.Caching = pointer.To(images.CachingTypes(v))
+		}
+
+		if size := config["size_gb"]; size != 0 {
+			out.DiskSizeGB = pointer.To(int64(size.(int)))
+		}
+
+		if id := config["disk_encryption_set_id"].(string); id != "" {
+			out.DiskEncryptionSet = &images.SubResource{
+				Id: pointer.To(id),
+			}
+		}
+
+		out.StorageAccountType = pointer.To(images.StorageAccountTypes(config["storage_type"].(string)))
+
+		return out
+	}
+
+	return nil
+}

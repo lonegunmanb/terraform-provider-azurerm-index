@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/batch/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandBatchPoolScaleSettings(d *pluginsdk.ResourceData) (*pool.ScaleSettings, error) {
+	scaleSettings := &pool.ScaleSettings{}
+
+	autoScaleValue, autoScaleOk := d.GetOk("auto_scale")
+	fixedScaleValue, fixedScaleOk := d.GetOk("fixed_scale")
+
+	if !autoScaleOk && !fixedScaleOk {
+		return nil, fmt.Errorf("auto_scale block or fixed_scale block need to be specified")
+	}
+
+	if autoScaleOk && fixedScaleOk {
+		return nil, fmt.Errorf("auto_scale and fixed_scale blocks cannot be specified at the same time")
+	}
+
+	if autoScaleOk {
+		autoScale := autoScaleValue.([]interface{})
+		if len(autoScale) == 0 {
+			return nil, fmt.Errorf("when scale mode is Auto, auto_scale block is required")
+		}
+
+		autoScaleSettings := autoScale[0].(map[string]interface{})
+
+		autoScaleEvaluationInterval := autoScaleSettings["evaluation_interval"].(string)
+		autoScaleFormula := autoScaleSettings["formula"].(string)
+
+		scaleSettings.AutoScale = &pool.AutoScaleSettings{
+			EvaluationInterval: &autoScaleEvaluationInterval,
+			Formula:            autoScaleFormula,
+		}
+	} else if fixedScaleOk {
+		fixedScale := fixedScaleValue.([]interface{})
+		if len(fixedScale) == 0 {
+			return nil, fmt.Errorf("when scale mode is Fixed, fixed_scale block is required")
+		}
+
+		fixedScaleSettings := fixedScale[0].(map[string]interface{})
+		nodeDeallocationOption := pool.ComputeNodeDeallocationOption(fixedScaleSettings["node_deallocation_method"].(string))
+		targetDedicatedNodes := int32(fixedScaleSettings["target_dedicated_nodes"].(int))
+		targetLowPriorityNodes := int32(fixedScaleSettings["target_low_priority_nodes"].(int))
+		resizeTimeout := fixedScaleSettings["resize_timeout"].(string)
+
+		scaleSettings.FixedScale = &pool.FixedScaleSettings{
+			NodeDeallocationOption: &nodeDeallocationOption,
+			ResizeTimeout:          &resizeTimeout,
+			TargetDedicatedNodes:   utils.Int64(int64(targetDedicatedNodes)),
+			TargetLowPriorityNodes: utils.Int64(int64(targetLowPriorityNodes)),
+		}
+	}
+
+	return scaleSettings, nil
+}

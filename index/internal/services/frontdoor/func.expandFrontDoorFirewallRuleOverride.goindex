@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFrontDoorFirewallRuleOverride(input []interface{}) *[]webapplicationfirewallpolicies.ManagedRuleOverride {
+	if len(input) == 0 {
+		return nil
+	}
+
+	managedRuleOverrides := make([]webapplicationfirewallpolicies.ManagedRuleOverride, 0)
+	for _, v := range input {
+		rule := v.(map[string]interface{})
+
+		enabled := webapplicationfirewallpolicies.ManagedRuleEnabledStateDisabled
+		if rule["enabled"].(bool) {
+			enabled = webapplicationfirewallpolicies.ManagedRuleEnabledStateEnabled
+		}
+		ruleId := rule["rule_id"].(string)
+		action := webapplicationfirewallpolicies.ActionType(rule["action"].(string))
+		exclusions := rule["exclusion"].([]interface{})
+
+		managedRuleOverride := webapplicationfirewallpolicies.ManagedRuleOverride{
+			RuleId:       ruleId,
+			EnabledState: &enabled,
+			Action:       &action,
+		}
+
+		if exclusions := expandFrontDoorFirewallManagedRuleGroupExclusion(exclusions); exclusions != nil {
+			managedRuleOverride.Exclusions = exclusions
+		}
+
+		managedRuleOverrides = append(managedRuleOverrides, managedRuleOverride)
+	}
+
+	return &managedRuleOverrides
+}

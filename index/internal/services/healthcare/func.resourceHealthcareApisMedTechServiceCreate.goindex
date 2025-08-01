@@ -1,0 +1,99 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/healthcare
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/healthcareapis/2022-12-01/iotconnectors"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/healthcareapis/2024-03-31/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	eventhubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/healthcare/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/healthcare/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceHealthcareApisMedTechServiceCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).HealthCare.HealthcareWorkspaceIotConnectorsClient
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+	log.Printf("[INFO] preparing arguments for AzureRM Healthcare MedTech Service creation.")
+
+	workspace, err := workspaces.ParseWorkspaceID(d.Get("workspace_id").(string))
+	if err != nil {
+		return fmt.Errorf("parsing healthcare api workspace error: %+v", err)
+	}
+	id := iotconnectors.NewIotConnectorID(workspace.SubscriptionId, workspace.ResourceGroupName, workspace.WorkspaceName, d.Get("name").(string))
+
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_healthcare_medtech_service", id.ID())
+		}
+	}
+
+	namespaceName := d.Get("eventhub_namespace_name").(string) + ".servicebus.windows.net"
+
+	i, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding `identity`: %+v", err)
+	}
+
+	parameters := iotconnectors.IotConnector{
+		Location: pointer.To(location.Normalize(d.Get("location").(string))),
+		Identity: i,
+		Properties: &iotconnectors.IotConnectorProperties{
+			IngestionEndpointConfiguration: &iotconnectors.IotEventHubIngestionEndpointConfiguration{
+				EventHubName:                    pointer.To(d.Get("eventhub_name").(string)),
+				ConsumerGroup:                   pointer.To(d.Get("eventhub_consumer_group_name").(string)),
+				FullyQualifiedEventHubNamespace: &namespaceName,
+			},
+		},
+		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	deviceContentMap := iotconnectors.IotMappingProperties{}
+	deviceMappingJson := fmt.Sprintf(`{ "content": %s }`, d.Get("device_mapping_json").(string))
+	if err := json.Unmarshal([]byte(deviceMappingJson), &deviceContentMap); err != nil {
+		return err
+	}
+	parameters.Properties.DeviceMapping = &deviceContentMap
+
+	err = client.CreateOrUpdateThenPoll(ctx, id, parameters)
+	if err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	stateConf := &pluginsdk.StateChangeConf{
+		ContinuousTargetOccurence: 12,
+		Delay:                     60 * time.Second,
+		MinTimeout:                10 * time.Second,
+		Pending:                   []string{"Creating", "Updating"},
+		Target:                    []string{"Succeeded"},
+		Refresh:                   medTechServiceCreateStateRefreshFunc(ctx, client, id),
+		Timeout:                   d.Timeout(pluginsdk.TimeoutUpdate),
+	}
+	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for MedTech Service %s to settle down: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceHealthcareApisMedTechServiceRead(d, meta)
+}

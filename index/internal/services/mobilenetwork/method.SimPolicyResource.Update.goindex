@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mobilenetwork
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/datanetwork"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/mobilenetwork"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/service"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/simpolicy"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/slice"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r SimPolicyResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 60 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MobileNetwork.SIMPolicyClient
+
+			id, err := simpolicy.ParseSimPolicyID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var plan SimPolicyResourceModel
+			if err := metadata.Decode(&plan); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			resp, err := client.SimPoliciesGet(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if resp.Model == nil {
+				return fmt.Errorf("retrieving %s: properties was nil", id)
+			}
+
+			model := *resp.Model
+
+			if metadata.ResourceData.HasChange("default_slice") {
+				model.Properties.DefaultSlice = simpolicy.SliceResourceId{Id: plan.DefaultSliceId}
+			}
+
+			if metadata.ResourceData.HasChange("registration_timer_in_seconds") {
+				model.Properties.RegistrationTimer = &plan.RegistrationTimer
+			}
+
+			if metadata.ResourceData.HasChange("rat_frequency_selection_priority_index") {
+				model.Properties.RfspIndex = &plan.RfspIndex
+			}
+
+			if metadata.ResourceData.HasChange("slice") {
+				model.Properties.SliceConfigurations = expandSliceConfigurationResourceModel(plan.SliceConfigurations)
+			}
+
+			if metadata.ResourceData.HasChange("user_equipment_aggregate_maximum_bit_rate") {
+				model.Properties.UeAmbr = expandAmbrResourceModel(plan.UeAmbr)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				model.Tags = &plan.Tags
+			}
+
+			if err := client.SimPoliciesCreateOrUpdateThenPoll(ctx, *id, model); err != nil {
+				return fmt.Errorf("updating %s: %+v", *id, err)
+			}
+
+			return nil
+		},
+	}
+}

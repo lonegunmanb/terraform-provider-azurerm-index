@@ -1,0 +1,148 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/applications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/extensions"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func hdinsightClusterUpdate(clusterKind string, readFunc pluginsdk.ReadFunc) pluginsdk.UpdateFunc {
+	return func(d *pluginsdk.ResourceData, meta interface{}) error {
+		client := meta.(*clients.Client).HDInsight.Clusters
+		extensionsClient := meta.(*clients.Client).HDInsight.Extensions
+		applicationsClient := meta.(*clients.Client).HDInsight.Applications
+		ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+		defer cancel()
+
+		id, err := commonids.ParseHDInsightClusterID(d.Id())
+		if err != nil {
+			return err
+		}
+
+		if d.HasChange("tags") {
+			payload := clusters.ClusterPatchParameters{
+				Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+			}
+			if _, err := client.Update(ctx, *id, payload); err != nil {
+				return fmt.Errorf("updating Tags for %s %s: %+v", clusterKind, id, err)
+			}
+		}
+
+		if d.HasChange("roles.0.worker_node") {
+			log.Printf("[DEBUG] Resizing the HDInsight %q Cluster", clusterKind)
+			rolesRaw := d.Get("roles").([]interface{})
+			roles := rolesRaw[0].(map[string]interface{})
+			workerNodes := roles["worker_node"].([]interface{})
+			workerNode := workerNodes[0].(map[string]interface{})
+			if d.HasChange("roles.0.worker_node.0.target_instance_count") {
+				targetInstanceCount := workerNode["target_instance_count"].(int)
+				payload := clusters.ClusterResizeParameters{
+					TargetInstanceCount: pointer.To(int64(targetInstanceCount)),
+				}
+
+				if err := client.ResizeThenPoll(ctx, *id, payload); err != nil {
+					return fmt.Errorf("resizing %s %s: %+v", clusterKind, id, err)
+				}
+			}
+
+			if d.HasChange("roles.0.worker_node.0.autoscale") {
+				autoscale := ExpandHDInsightNodeAutoScaleDefinition(workerNode["autoscale"].([]interface{}))
+				payload := clusters.AutoscaleConfigurationUpdateParameter{
+					Autoscale: autoscale,
+				}
+
+				if err := client.UpdateAutoScaleConfigurationThenPoll(ctx, *id, payload); err != nil {
+					return fmt.Errorf("updating the AutoScale Configuration for %s %s: %+v", clusterKind, id, err)
+				}
+			}
+		}
+
+		// The API can add an edge node but can't remove them without force newing the pluginsdk. We'll check for adding here
+		// and can come back to removing if that functionality gets added. https://feedback.azure.com/forums/217335-hdinsight/suggestions/5663773-start-stop-cluster-hdinsight?page=3&per_page=20
+		if clusterKind == "Hadoop" {
+			if d.HasChange("roles.0.edge_node") {
+				log.Printf("[DEBUG] Detected change in edge nodes")
+				edgeNodeRaw := d.Get("roles.0.edge_node").([]interface{})
+				edgeNodeConfig := edgeNodeRaw[0].(map[string]interface{})
+
+				oldEdgeNodeCount, newEdgeNodeCount := d.GetChange("roles.0.edge_node.0.target_instance_count")
+				oldEdgeNodeInt := oldEdgeNodeCount.(int)
+				newEdgeNodeInt := newEdgeNodeCount.(int)
+				applicationId := applications.NewApplicationID(id.SubscriptionId, id.ResourceGroupName, id.ClusterName, id.ClusterName) // two `id.ClusterName`'s is intentional
+
+				// Note: API currently doesn't support updating number of edge nodes
+				// if anything in the edge nodes changes, delete edge nodes then recreate them
+				if oldEdgeNodeInt != 0 {
+					if err := applicationsClient.DeleteThenPoll(ctx, applicationId); err != nil {
+						return fmt.Errorf("deleting Edge Nodes for %s %s: %+v", clusterKind, id, err)
+					}
+				}
+
+				if newEdgeNodeInt != 0 {
+					err = createHDInsightEdgeNodes(ctx, applicationsClient, applicationId, edgeNodeConfig)
+					if err != nil {
+						return err
+					}
+				}
+
+				// we can't rely on the use of the Future here due to the node being successfully completed but now the cluster is applying those changes.
+				log.Printf("[DEBUG] Waiting for %s %s to finish applying edge node..", clusterKind, id)
+				pollerType := custompollers.NewEdgeNodePoller(client, *id)
+				poller := pollers.NewPoller(pollerType, 10*time.Second, pollers.DefaultNumberOfDroppedConnectionsToAllow)
+				if err := poller.PollUntilDone(ctx); err != nil {
+					return fmt.Errorf("waiting for %s %s to finish applying the edge nodes: %+v", clusterKind, id, err)
+				}
+			}
+		}
+
+		if d.HasChange("monitor") {
+			log.Printf("[DEBUG] Change Azure Monitor for the HDInsight %q Cluster", clusterKind)
+			if v, ok := d.GetOk("monitor"); ok {
+				monitorRaw := v.([]interface{})
+				if err := enableHDInsightMonitoring(ctx, extensionsClient, *id, monitorRaw); err != nil {
+					return err
+				}
+			} else if err := disableHDInsightMonitoring(ctx, extensionsClient, *id); err != nil {
+				return err
+			}
+		}
+		if d.HasChange("extension") {
+			log.Printf("[DEBUG] Change Azure Monitor for the HDInsight %q Cluster", clusterKind)
+			if v, ok := d.GetOk("extension"); ok {
+				extensionRaw := v.([]interface{})
+				if err := enableHDInsightAzureMonitor(ctx, extensionsClient, *id, extensionRaw); err != nil {
+					return err
+				}
+			} else if err := disableHDInsightAzureMonitor(ctx, extensionsClient, *id); err != nil {
+				return err
+			}
+		}
+		if d.HasChange("gateway") {
+			log.Printf("[DEBUG] Updating the HDInsight %q Cluster gateway", clusterKind)
+			vs := d.Get("gateway").([]interface{})[0].(map[string]interface{})
+
+			payload := clusters.UpdateGatewaySettingsParameters{
+				RestAuthCredentialIsEnabled: pointer.To(true),
+				RestAuthCredentialUsername:  pointer.To(vs["username"].(string)),
+				RestAuthCredentialPassword:  pointer.To(vs["password"].(string)),
+			}
+			if err := client.UpdateGatewaySettingsThenPoll(ctx, *id, payload); err != nil {
+				return fmt.Errorf("updating the Gateway Settings for %s: %+v", *id, err)
+			}
+		}
+
+		return readFunc(d, meta)
+	}
+}

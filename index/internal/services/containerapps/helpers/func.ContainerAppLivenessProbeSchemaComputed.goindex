@@ -1,0 +1,104 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/daprcomponents"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/containerapps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ContainerAppLivenessProbeSchemaComputed() *pluginsdk.Schema {
+	schema := &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Computed: true,
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"transport": {
+					Type:        pluginsdk.TypeString,
+					Computed:    true,
+					Description: "Type of probe. Possible values are `TCP`, `HTTP`, and `HTTPS`.",
+				},
+
+				"port": {
+					Type:        pluginsdk.TypeInt,
+					Computed:    true,
+					Description: "The port number on which to connect. Possible values are between `1` and `65535`.",
+				},
+
+				"host": {
+					Type:        pluginsdk.TypeString,
+					Computed:    true,
+					Description: "The probe hostname. Defaults to the pod IP address. Setting a value for `Host` in `headers` can be used to override this for `http` and `https` type probes.",
+				},
+
+				"path": {
+					Type:        pluginsdk.TypeString,
+					Computed:    true,
+					Description: "The URI to use with the `host` for http type probes. Not valid for `TCP` type probes. Defaults to `/`.",
+				},
+
+				"header": {
+					Type:     pluginsdk.TypeList,
+					Computed: true,
+					Elem: &pluginsdk.Resource{
+						Schema: map[string]*pluginsdk.Schema{
+							"name": {
+								Type:        pluginsdk.TypeString,
+								Computed:    true,
+								Description: "The HTTP Header Name.",
+							},
+
+							"value": {
+								Type:        pluginsdk.TypeString,
+								Computed:    true,
+								Description: "The HTTP Header value.",
+							},
+						},
+					},
+				},
+
+				"initial_delay": {
+					Type:        pluginsdk.TypeInt,
+					Computed:    true,
+					Description: "The number of seconds elapsed after the container has started before the probe is initiated. Possible values are between `0` and `60`. Defaults to `1` seconds.",
+				},
+
+				"interval_seconds": {
+					Type:        pluginsdk.TypeInt,
+					Computed:    true,
+					Description: "How often, in seconds, the probe should run. Possible values are between `1` and `240`. Defaults to `10`",
+				},
+
+				"timeout": {
+					Type:        pluginsdk.TypeInt,
+					Computed:    true,
+					Description: "Time in seconds after which the probe times out. Possible values are between `1` an `240`. Defaults to `1`.",
+				},
+
+				"failure_count_threshold": {
+					Type:        pluginsdk.TypeInt,
+					Computed:    true,
+					Description: "The number of consecutive failures required to consider this probe as failed. Possible values are between `1` and `30`. Defaults to `3`.",
+				},
+			},
+		},
+	}
+
+	if !features.FivePointOh() {
+		schema.Elem.(*pluginsdk.Resource).Schema["termination_grace_period_seconds"] = &pluginsdk.Schema{
+			Type:        pluginsdk.TypeInt,
+			Computed:    true,
+			Description: "The time in seconds after the container is sent the termination signal before the process if forcibly killed.",
+		}
+	}
+
+	return schema
+}

@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/scopeconnections"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ManagerScopeConnectionResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model ManagerScopeConnectionModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			client := metadata.Client.Network.ScopeConnections
+			networkManagerId, err := scopeconnections.ParseNetworkManagerID(model.NetworkManagerId)
+			if err != nil {
+				return err
+			}
+
+			id := scopeconnections.NewScopeConnectionID(networkManagerId.SubscriptionId, networkManagerId.ResourceGroupName, networkManagerId.NetworkManagerName, model.Name)
+			existing, err := client.Get(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for existing %s: %+v", id, err)
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			scopeConnection := scopeconnections.ScopeConnection{
+				Properties: &scopeconnections.ScopeConnectionProperties{},
+			}
+
+			if model.Description != "" {
+				scopeConnection.Properties.Description = &model.Description
+			}
+
+			if model.ResourceId != "" {
+				scopeConnection.Properties.ResourceId = &model.ResourceId
+			}
+
+			if model.TenantId != "" {
+				scopeConnection.Properties.TenantId = &model.TenantId
+			}
+
+			if _, err := client.CreateOrUpdate(ctx, id, scopeConnection); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

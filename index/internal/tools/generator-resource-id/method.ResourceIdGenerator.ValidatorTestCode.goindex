@@ -1,0 +1,122 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+)
+func (id ResourceIdGenerator) ValidatorTestCode() string {
+	testCases := make([]string, 0)
+	testCases = append(testCases, `
+		{
+			// empty
+			Input: "",
+			Valid: false,
+		},
+`)
+	for _, segment := range id.Segments {
+		testCaseFmt := `
+		{
+			// missing %s
+			Input: %q,
+			Valid: false,
+		},`
+		// missing the key
+		resourceIdToThisPointIndex := strings.Index(id.IDRaw, segment.SegmentKey)
+		resourceIdToThisPoint := id.IDRaw[0:resourceIdToThisPointIndex]
+		testCases = append(testCases, fmt.Sprintf(testCaseFmt, segment.FieldName, resourceIdToThisPoint))
+
+		// missing the value
+		resourceIdToThisPointIndex = strings.Index(id.IDRaw, segment.SegmentValue)
+		resourceIdToThisPoint = id.IDRaw[0:resourceIdToThisPointIndex]
+		testCases = append(testCases, fmt.Sprintf(testCaseFmt, fmt.Sprintf("value for %s", segment.FieldName), resourceIdToThisPoint))
+	}
+
+	// add a successful test case
+	testCases = append(testCases, fmt.Sprintf(`
+		{
+			// valid
+			Input: %q,
+			Valid: true,
+		},
+`, id.IDRaw))
+
+	// add an intentionally failing upper-cased test case
+	testCases = append(testCases, fmt.Sprintf(`
+		{
+			// upper-cased
+			Input: %q,
+			Valid: false,
+		},`, strings.ToUpper(id.IDRaw)))
+
+	testCasesStr := strings.Join(testCases, "\n")
+
+	if id.TestPackageSuffix == "" {
+		return fmt.Sprintf(`
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
+package validate
+
+// NOTE: this file is generated via 'go:generate' - manual changes will be overwritten
+
+import "testing"
+
+func Test%[1]sID(t *testing.T) {
+	cases := []struct {
+		Input    string
+		Valid bool
+	}{%[2]s
+	}
+	for _, tc := range cases {
+		t.Logf("[DEBUG] Testing Value %%s", tc.Input)
+		_, errors := %[1]sID(tc.Input, "test")
+		valid := len(errors) == 0
+
+		if tc.Valid != valid {
+			t.Fatalf("Expected %%t but got %%t", tc.Valid, valid)
+		}
+	}
+}
+`, id.TypeName, testCasesStr)
+	}
+
+	return fmt.Sprintf(`// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
+package validate%[1]s
+
+// NOTE: this file is generated via 'go:generate' - manual changes will be overwritten
+
+import (
+	"testing"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/%[4]s/validate"
+)
+
+func Test%[2]sID(t *testing.T) {
+	cases := []struct {
+		Input    string
+		Valid bool
+	}{%[3]s
+	}
+	for _, tc := range cases {
+		t.Logf("[DEBUG] Testing Value %%s", tc.Input)
+		_, errors := validate.%[2]sID(tc.Input, "test")
+		valid := len(errors) == 0
+
+		if tc.Valid != valid {
+			t.Fatalf("Expected %%t but got %%t", tc.Valid, valid)
+		}
+	}
+}
+`, id.TestPackageSuffix, id.TypeName, testCasesStr, id.ServicePackageName)
+}

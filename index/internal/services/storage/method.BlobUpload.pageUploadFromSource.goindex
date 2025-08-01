@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func (sbu BlobUpload) pageUploadFromSource(ctx context.Context, file io.ReaderAt, fileSize int64) error {
+	workerCount := sbu.Parallelism * runtime.NumCPU()
+
+	// first we chunk the file and assign them to 'pages'
+	pageList, err := sbu.storageBlobPageSplit(file, fileSize)
+	if err != nil {
+		return fmt.Errorf("splitting source file %q into pages: %s", sbu.Source, err)
+	}
+
+	// finally we upload the contents of said file
+	pages := make(chan storageBlobPage, len(pageList))
+	errors := make(chan error, len(pageList))
+	wg := &sync.WaitGroup{}
+	wg.Add(len(pageList))
+
+	total := int64(0)
+	for _, page := range pageList {
+		total += page.section.Size()
+		pages <- page
+	}
+	close(pages)
+
+	for i := 0; i < workerCount; i++ {
+		go sbu.blobPageUploadWorker(ctx, blobPageUploadContext{
+			blobSize: fileSize,
+			pages:    pages,
+			errors:   errors,
+			wg:       wg,
+		})
+	}
+
+	wg.Wait()
+
+	if len(errors) > 0 {
+		return fmt.Errorf("while uploading source file %q: %s", sbu.Source, <-errors)
+	}
+
+	return nil
+}

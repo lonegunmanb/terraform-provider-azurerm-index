@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/azurestackhci
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/azurestackhci/2024-01-01/deploymentsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/azurestackhci/2024-01-01/storagecontainers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resourceconnector/2022-10-27/appliances"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenDeploymentSettingScaleUnits(input []deploymentsettings.ScaleUnits) []ScaleUnitModel {
+	if len(input) == 0 {
+		return make([]ScaleUnitModel, 0)
+	}
+
+	results := make([]ScaleUnitModel, 0, len(input))
+	for _, item := range input {
+		result := ScaleUnitModel{
+			ActiveDirectoryOrganizationalUnitPath: pointer.From(item.DeploymentData.AdouPath),
+			Cluster:                               flattenDeploymentSettingCluster(item.DeploymentData.Cluster),
+			DomainFqdn:                            pointer.From(item.DeploymentData.DomainFqdn),
+			HostNetwork:                           flattenDeploymentSettingHostNetwork(item.DeploymentData.HostNetwork),
+			InfrastructureNetwork:                 flattenDeploymentSettingInfrastructureNetwork(item.DeploymentData.InfrastructureNetwork),
+			NamePrefix:                            pointer.From(item.DeploymentData.NamingPrefix),
+			OptionalService:                       flattenDeploymentSettingOptionalService(item.DeploymentData.OptionalServices),
+			PhysicalNode:                          flattenDeploymentSettingPhysicalNode(item.DeploymentData.PhysicalNodes),
+			SecretsLocation:                       pointer.From(item.DeploymentData.SecretsLocation),
+			Storage:                               flattenDeploymentSettingStorage(item.DeploymentData.Storage),
+		}
+
+		if observability := item.DeploymentData.Observability; observability != nil {
+			result.EpisodicDataUploadEnabled = pointer.From(observability.EpisodicDataUpload)
+			result.EuLocationEnabled = pointer.From(observability.EuLocation)
+			result.StreamingDataClientEnabled = pointer.From(observability.StreamingDataClient)
+		}
+
+		if securitySettings := item.DeploymentData.SecuritySettings; securitySettings != nil {
+			result.BitlockerBootVolumeEnabled = pointer.From(securitySettings.BitlockerBootVolume)
+			result.BitlockerDataVolumeEnabled = pointer.From(securitySettings.BitlockerDataVolumes)
+			result.CredentialGuardEnabled = pointer.From(securitySettings.CredentialGuardEnforced)
+			result.DriftControlEnabled = pointer.From(securitySettings.DriftControlEnforced)
+			result.DrtmProtectionEnabled = pointer.From(securitySettings.DrtmProtection)
+			result.HvciProtectionEnabled = pointer.From(securitySettings.HvciProtection)
+			result.SideChannelMitigationEnabled = pointer.From(securitySettings.SideChannelMitigationEnforced)
+			result.SmbClusterEncryptionEnabled = pointer.From(securitySettings.SmbClusterEncryption)
+			result.SmbSigningEnabled = pointer.From(securitySettings.SmbSigningEnforced)
+			result.WdacEnabled = pointer.From(securitySettings.WdacEnforced)
+		}
+
+		results = append(results, result)
+	}
+
+	return results
+}

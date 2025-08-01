@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/instancefailovergroups"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r MsSqlManagedInstanceFailoverGroupResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.ValidateMsSqlManagedInstanceFailoverGroupName,
+		},
+
+		"location": commonschema.Location(),
+
+		"managed_instance_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.ManagedInstanceID,
+		},
+
+		"partner_managed_instance_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: azure.ValidateResourceID,
+		},
+
+		"readonly_endpoint_failover_policy_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"read_write_endpoint_failover_policy": {
+			Type:     pluginsdk.TypeList,
+			Required: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"mode": {
+						Type:     pluginsdk.TypeString,
+						Required: true,
+						ValidateFunc: validation.StringInSlice([]string{
+							string(instancefailovergroups.ReadWriteEndpointFailoverPolicyAutomatic),
+							string(instancefailovergroups.ReadWriteEndpointFailoverPolicyManual),
+						}, false),
+					},
+
+					"grace_minutes": {
+						Type:         pluginsdk.TypeInt,
+						Optional:     true,
+						ValidateFunc: validation.IntAtLeast(60),
+					},
+				},
+			},
+		},
+
+		"secondary_type": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      string(instancefailovergroups.SecondaryInstanceTypeGeo),
+			ValidateFunc: validation.StringInSlice(instancefailovergroups.PossibleValuesForSecondaryInstanceType(), false),
+		},
+	}
+}

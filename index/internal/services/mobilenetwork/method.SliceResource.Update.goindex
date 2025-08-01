@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mobilenetwork
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/mobilenetwork"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/slice"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r SliceResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 180 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MobileNetwork.SliceClient
+
+			id, err := slice.ParseSliceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var model SliceResourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if resp.Model == nil {
+				return fmt.Errorf("retrieving %s: properties were nil", id)
+			}
+
+			updateModel := resp.Model
+
+			if metadata.ResourceData.HasChange("description") {
+				if model.Description != "" {
+					updateModel.Properties.Description = &model.Description
+				} else {
+					updateModel.Properties.Description = nil
+				}
+			}
+
+			if metadata.ResourceData.HasChange("snssai") {
+				updateModel.Properties.Snssai = expandSingleNetworkSliceSelectionAssistanceInformationResourceModel(model.SingleNetworkSliceSelectionAssistanceInformation)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				updateModel.Tags = &model.Tags
+			}
+
+			if err := client.CreateOrUpdateThenPoll(ctx, *id, *updateModel); err != nil {
+				return fmt.Errorf("updating %s: %+v", *id, err)
+			}
+
+			return nil
+		},
+	}
+}

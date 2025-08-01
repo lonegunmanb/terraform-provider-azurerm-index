@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper
+import (
+	"github.com/Azure/azure-sdk-for-go/services/preview/sql/mgmt/v5.0/sql" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func FlattenMsSqlDBBlobAuditingPolicies(extendedDatabaseBlobAuditingPolicy *sql.ExtendedDatabaseBlobAuditingPolicy, d *pluginsdk.ResourceData) []interface{} {
+	if extendedDatabaseBlobAuditingPolicy == nil || extendedDatabaseBlobAuditingPolicy.State == sql.BlobAuditingPolicyStateDisabled {
+		return []interface{}{}
+	}
+
+	var storageAccessKey, storageEndpoint string
+	// storage_account_access_key will not be returned, so we transfer the schema value
+	if v, ok := d.GetOk("extended_auditing_policy.0.storage_account_access_key"); ok {
+		storageAccessKey = v.(string)
+	}
+
+	if extendedDatabaseBlobAuditingPolicy.StorageEndpoint != nil {
+		storageEndpoint = *extendedDatabaseBlobAuditingPolicy.StorageEndpoint
+	}
+	var secondKeyInUse bool
+	if extendedDatabaseBlobAuditingPolicy.IsStorageSecondaryKeyInUse != nil {
+		secondKeyInUse = *extendedDatabaseBlobAuditingPolicy.IsStorageSecondaryKeyInUse
+	}
+	var retentionDays int32
+	if extendedDatabaseBlobAuditingPolicy.RetentionDays != nil {
+		retentionDays = *extendedDatabaseBlobAuditingPolicy.RetentionDays
+	}
+	var monitor bool
+	if extendedDatabaseBlobAuditingPolicy.IsAzureMonitorTargetEnabled != nil {
+		monitor = *extendedDatabaseBlobAuditingPolicy.IsAzureMonitorTargetEnabled
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"storage_account_access_key":              storageAccessKey,
+			"storage_endpoint":                        storageEndpoint,
+			"storage_account_access_key_is_secondary": secondKeyInUse,
+			"retention_in_days":                       retentionDays,
+			"log_monitoring_enabled":                  monitor,
+		},
+	}
+}

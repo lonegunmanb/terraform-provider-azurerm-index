@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/firewallpolicyrulecollectiongroups"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFirewallPolicyFilterRuleCollection(input []interface{}, f func(input []interface{}) *[]firewallpolicyrulecollectiongroups.FirewallPolicyRule) []firewallpolicyrulecollectiongroups.FirewallPolicyRuleCollection {
+	result := make([]firewallpolicyrulecollectiongroups.FirewallPolicyRuleCollection, 0)
+	for _, e := range input {
+		rule := e.(map[string]interface{})
+		output := &firewallpolicyrulecollectiongroups.FirewallPolicyFilterRuleCollection{
+			Action: &firewallpolicyrulecollectiongroups.FirewallPolicyFilterRuleCollectionAction{
+				Type: pointer.To(firewallpolicyrulecollectiongroups.FirewallPolicyFilterRuleCollectionActionType(rule["action"].(string))),
+			},
+			Name:     utils.String(rule["name"].(string)),
+			Priority: utils.Int64(int64(rule["priority"].(int))),
+			Rules:    f(rule["rule"].([]interface{})),
+		}
+		result = append(result, output)
+	}
+	return result
+}

@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/applications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/extensions"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func enableHDInsightMonitoring(ctx context.Context, client *extensions.ExtensionsClient, clusterId commonids.HDInsightClusterId, input []interface{}) error {
+	payload := ExpandHDInsightsMonitor(input)
+
+	// This API is an LRO without a header or `provisioningState` - so we need to do custom polling on the field
+	// ctx: https://github.com/hashicorp/go-azure-sdk/issues/518
+	if _, err := client.EnableMonitoring(ctx, clusterId, payload); err != nil {
+		return fmt.Errorf("enabling the Monitoring for %s: %+v", clusterId, err)
+	}
+
+	pollType := custompollers.NewEnableMonitoringPoller(client, clusterId)
+	poller := pollers.NewPoller(pollType, 10*time.Second, pollers.DefaultNumberOfDroppedConnectionsToAllow)
+	if err := poller.PollUntilDone(ctx); err != nil {
+		return fmt.Errorf("polling to check if the Monitoring has been enabled for %s: %+v", clusterId, err)
+	}
+
+	return nil
+}

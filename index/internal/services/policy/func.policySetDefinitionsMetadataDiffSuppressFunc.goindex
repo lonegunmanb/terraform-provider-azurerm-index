@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"reflect"
+	"strconv"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/resources/mgmt/2021-06-01-preview/policy" // nolint: staticcheck
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	mgmtGrpParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func policySetDefinitionsMetadataDiffSuppressFunc(_, old, new string, _ *pluginsdk.ResourceData) bool {
+	var oldPolicySetDefinitionsMetadata map[string]interface{}
+	errOld := json.Unmarshal([]byte(old), &oldPolicySetDefinitionsMetadata)
+	if errOld != nil {
+		return false
+	}
+
+	var newPolicySetDefinitionsMetadata map[string]interface{}
+	errNew := json.Unmarshal([]byte(new), &newPolicySetDefinitionsMetadata)
+	if errNew != nil {
+		return false
+	}
+
+	// Ignore the following keys if they're found in the metadata JSON
+	ignoreKeys := [4]string{"createdBy", "createdOn", "updatedBy", "updatedOn"}
+	for _, key := range ignoreKeys {
+		delete(oldPolicySetDefinitionsMetadata, key)
+		delete(newPolicySetDefinitionsMetadata, key)
+	}
+
+	return reflect.DeepEqual(oldPolicySetDefinitionsMetadata, newPolicySetDefinitionsMetadata)
+}

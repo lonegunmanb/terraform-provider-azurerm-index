@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/communication
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/communication/2023-03-31/emailservices"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/communication/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r EmailCommunicationServiceResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Communication.EmailServicesClient
+
+			var model EmailCommunicationServiceResourceModel
+
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			id, err := emailservices.ParseEmailServiceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil || existing.Model == nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			emailService := *existing.Model
+
+			props := pointer.From(emailService.Properties)
+
+			if metadata.ResourceData.HasChange("data_location") {
+				props.DataLocation = model.DataLocation
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				emailService.Tags = pointer.To(model.Tags)
+			}
+
+			emailService.Properties = &props
+
+			if err := client.CreateOrUpdateThenPoll(ctx, *id, emailService); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

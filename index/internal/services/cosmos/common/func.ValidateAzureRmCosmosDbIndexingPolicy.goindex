@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cosmosdb/2024-08-15/cosmosdb"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ValidateAzureRmCosmosDbIndexingPolicy(indexingPolicy *cosmosdb.IndexingPolicy) error {
+	if indexingPolicy == nil {
+		return nil
+	}
+
+	// Ensure includedPaths or excludedPaths are not set if indexingMode is "None".
+	if *indexingPolicy.IndexingMode == cosmosdb.IndexingModeNone {
+		if indexingPolicy.IncludedPaths != nil {
+			return fmt.Errorf("included_path must not be set if indexing_mode is %q", string(cosmosdb.IndexingModeNone))
+		}
+
+		if indexingPolicy.ExcludedPaths != nil {
+			return fmt.Errorf("excluded_path must not be set if indexing_mode is %q", string(cosmosdb.IndexingModeNone))
+		}
+	}
+
+	// Any indexing policy has to include the root path /* as either an included or an excluded path.
+	rootPath := "/*"
+	includedPathsDefined := indexingPolicy.IncludedPaths != nil
+	includedPathsContainRootPath := false
+
+	if includedPathsDefined {
+		for _, includedPath := range *indexingPolicy.IncludedPaths {
+			if includedPathsContainRootPath {
+				break
+			}
+
+			includedPathsContainRootPath = *includedPath.Path == rootPath
+		}
+	}
+
+	excludedPathsContainRootPath := false
+	excludedPathsDefined := indexingPolicy.ExcludedPaths != nil
+
+	if excludedPathsDefined {
+		for _, excludedPath := range *indexingPolicy.ExcludedPaths {
+			if excludedPathsContainRootPath {
+				break
+			}
+
+			excludedPathsContainRootPath = *excludedPath.Path == rootPath
+		}
+	}
+
+	// The root path can't be included and excluded at the same time.
+	if includedPathsContainRootPath && excludedPathsContainRootPath {
+		return fmt.Errorf("only one of included_path or excluded_path may include the path %q", rootPath)
+	}
+
+	// The root path must be included or excluded
+	if (includedPathsDefined || excludedPathsDefined) && !(includedPathsContainRootPath || excludedPathsContainRootPath) {
+		return fmt.Errorf("either included_path or excluded_path must include the path %q", rootPath)
+	}
+
+	return nil
+}

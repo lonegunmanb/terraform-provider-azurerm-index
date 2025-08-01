@@ -1,0 +1,136 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ContainerAppEnvironmentResource) Arguments() map[string]*pluginsdk.Schema {
+	schema := map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.ManagedEnvironmentName,
+			Description:  "The name of the Container Apps Managed Environment.",
+		},
+
+		"location": commonschema.Location(),
+
+		"resource_group_name": commonschema.ResourceGroupName(),
+
+		"dapr_application_insights_connection_string": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			Sensitive:    true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			Description:  "Application Insights connection string used by Dapr to export Service to Service communication telemetry.",
+		},
+
+		"log_analytics_workspace_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: workspaces.ValidateWorkspaceID,
+			Description:  "The ID for the Log Analytics Workspace to link this Container Apps Managed Environment to.",
+		},
+
+		"logs_destination": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  LogsDestinationNone,
+			ValidateFunc: validation.StringInSlice([]string{
+				LogsDestinationAzureMonitor,
+				LogsDestinationLogAnalytics,
+			}, false),
+			Description: "The destination for the application logs. Possible values include `log-analytics` and `azure-monitor`.  Omitting this value will result in logs being streamed only.",
+		},
+
+		"infrastructure_resource_group_name": {
+			Type:                  pluginsdk.TypeString,
+			Optional:              true,
+			ForceNew:              true,
+			RequiredWith:          []string{"workload_profile"},
+			ValidateFunc:          resourcegroups.ValidateName,
+			DiffSuppressOnRefresh: true,
+			DiffSuppressFunc: func(k, oldValue, newValue string, d *pluginsdk.ResourceData) bool { // If this is omitted, and there is a non-consumption profile, then the service generates a value for the required manage resource group.
+				if profiles := d.Get("workload_profile").(*pluginsdk.Set).List(); len(profiles) > 0 && newValue == "" {
+					for _, profile := range profiles {
+						if profile.(map[string]interface{})["workload_profile_type"].(string) != string(helpers.WorkloadProfileSkuConsumption) {
+							return true
+						}
+					}
+				}
+				return false
+			},
+			Description: "Name of the platform-managed resource group created for the Managed Environment to host infrastructure resources. **Note:** Only valid if a `workload_profile` is specified. If `infrastructure_subnet_id` is specified, this resource group will be created in the same subscription as `infrastructure_subnet_id`.",
+		},
+
+		"infrastructure_subnet_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			ValidateFunc: commonids.ValidateSubnetID,
+			Description:  "The existing Subnet to use for the Container Apps Control Plane. **NOTE:** The Subnet must have a `/21` or larger address space.",
+		},
+
+		"internal_load_balancer_enabled": {
+			Type:         pluginsdk.TypeBool,
+			Optional:     true,
+			ForceNew:     true,
+			Default:      false,
+			RequiredWith: []string{"infrastructure_subnet_id"},
+			Description:  "Should the Container Environment operate in Internal Load Balancing Mode? Defaults to `false`. **Note:** can only be set to `true` if `infrastructure_subnet_id` is specified.",
+		},
+
+		"workload_profile": helpers.WorkloadProfileSchema(),
+
+		"zone_redundancy_enabled": {
+			Type:         pluginsdk.TypeBool,
+			Optional:     true,
+			ForceNew:     true,
+			Default:      false,
+			RequiredWith: []string{"infrastructure_subnet_id"},
+		},
+
+		"mutual_tls_enabled": {
+			Description: "Should mutual transport layer security (mTLS) be enabled? Defaults to `false`. **Note:** This feature is in public preview. Enabling mTLS for your applications may increase response latency and reduce maximum throughput in high-load scenarios.",
+			Type:        pluginsdk.TypeBool,
+			Optional:    true,
+			Default:     false,
+		},
+
+		"tags": commonschema.Tags(),
+	}
+
+	if !features.FivePointOh() {
+		schema["logs_destination"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Computed: true, // NOTE: O+C as the introduction of this property is a behavioural change where we previously set it behind the scenes if `log_analytics_workspace_id` was set.
+			ValidateFunc: validation.StringInSlice([]string{
+				LogsDestinationAzureMonitor,
+				LogsDestinationNone,
+				LogsDestinationLogAnalytics,
+			}, false),
+		}
+	}
+
+	return schema
+}

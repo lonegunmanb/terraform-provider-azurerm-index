@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFrontDoorRedirectConfiguration(input []interface{}) frontdoors.RedirectConfiguration {
+	if len(input) == 0 {
+		return frontdoors.RedirectConfiguration{}
+	}
+
+	v := input[0].(map[string]interface{})
+	redirectType := frontdoors.FrontDoorRedirectType(v["redirect_type"].(string))
+	redirectProtocol := frontdoors.FrontDoorRedirectProtocol(v["redirect_protocol"].(string))
+	customHost := v["custom_host"].(string)
+	customPath := v["custom_path"].(string)
+	customFragment := v["custom_fragment"].(string)
+	customQueryString := v["custom_query_string"].(string)
+
+	redirectConfiguration := frontdoors.RedirectConfiguration{
+		CustomHost:       utils.String(customHost),
+		RedirectType:     &redirectType,
+		RedirectProtocol: &redirectProtocol,
+	}
+	// The way the API works is if you don't include the attribute in the structure
+	// it is treated as Preserve instead of Replace...
+	if customHost != "" {
+		redirectConfiguration.CustomHost = utils.String(customHost)
+	}
+	if customPath != "" {
+		redirectConfiguration.CustomPath = utils.String(customPath)
+	}
+	if customFragment != "" {
+		redirectConfiguration.CustomFragment = utils.String(customFragment)
+	}
+	if customQueryString != "" {
+		redirectConfiguration.CustomQueryString = utils.String(customQueryString)
+	}
+	return redirectConfiguration
+}

@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func resourceSpringCloudAppUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).AppPlatform.AppsClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.SpringCloudAppID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	identity, err := expandSpringCloudAppIdentity(d.Get("identity").([]interface{}))
+	if err != nil {
+		return err
+	}
+
+	addonConfig, err := expandSpringCloudAppAddon(d.Get("addon_json").(string))
+	if err != nil {
+		return err
+	}
+
+	app := appplatform.AppResource{
+		Identity: identity,
+		Properties: &appplatform.AppResourceProperties{
+			AddonConfigs:          addonConfig,
+			EnableEndToEndTLS:     utils.Bool(d.Get("tls_enabled").(bool)),
+			Public:                utils.Bool(d.Get("is_public").(bool)),
+			HTTPSOnly:             utils.Bool(d.Get("https_only").(bool)),
+			IngressSettings:       expandSpringCloudAppIngressSetting(d.Get("ingress_settings").([]interface{})),
+			PersistentDisk:        expandSpringCloudAppPersistentDisk(d.Get("persistent_disk").([]interface{})),
+			CustomPersistentDisks: expandAppCustomPersistentDiskResourceArray(d.Get("custom_persistent_disk").([]interface{}), *id),
+		},
+	}
+	if enabled := d.Get("public_endpoint_enabled").(bool); enabled {
+		app.Properties.VnetAddons = &appplatform.AppVNetAddons{
+			PublicEndpoint: utils.Bool(enabled),
+		}
+	}
+	future, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.SpringName, id.AppName, app)
+	if err != nil {
+		return fmt.Errorf("update %s: %+v", id, err)
+	}
+	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("waiting for update of %s: %+v", id, err)
+	}
+
+	return resourceSpringCloudAppRead(d, meta)
+}

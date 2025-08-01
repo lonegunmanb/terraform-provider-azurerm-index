@@ -1,0 +1,103 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2022-10-01-preview/accessconnector"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	mlworkspace "github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func checkSubnetDelegations(ctx context.Context, client *subnets.SubnetsClient, vnetID, publicSubnetName, privateSubnetName string) error {
+	requiredDelegationService := "Microsoft.Databricks/workspaces"
+
+	if vnetID == "" || (publicSubnetName == "" && privateSubnetName == "") {
+		return nil
+	}
+
+	id, err := commonids.ParseVirtualNetworkID(vnetID)
+	if err != nil {
+		return err
+	}
+
+	if publicSubnetName != "" {
+		subnetID := commonids.NewSubnetID(id.SubscriptionId, id.ResourceGroupName, id.VirtualNetworkName, publicSubnetName)
+		resp, err := client.Get(ctx, subnetID, subnets.DefaultGetOperationOptions())
+		if err != nil || resp.Model == nil || resp.Model.Properties == nil {
+			return fmt.Errorf("failed to check public subnet delegation for %s: %s", publicSubnetName, err)
+		}
+		if resp.Model.Properties.Delegations == nil {
+			return fmt.Errorf("required public subnet delegation to %s on %s not found", requiredDelegationService, publicSubnetName)
+		}
+
+		if delegations := resp.Model.Properties.Delegations; delegations == nil {
+			return fmt.Errorf("required public subnet delegation to %s on %s not found", requiredDelegationService, publicSubnetName)
+		} else {
+			found := false
+			for _, v := range *delegations {
+				if v.Properties == nil {
+					continue
+				}
+				if pointer.From(v.Properties.ServiceName) == requiredDelegationService {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return fmt.Errorf("required public subnet delegation to %s on %s not found", requiredDelegationService, publicSubnetName)
+			}
+		}
+	}
+
+	if privateSubnetName != "" {
+		subnetID := commonids.NewSubnetID(id.SubscriptionId, id.ResourceGroupName, id.VirtualNetworkName, privateSubnetName)
+		resp, err := client.Get(ctx, subnetID, subnets.DefaultGetOperationOptions())
+		if err != nil || resp.Model == nil || resp.Model.Properties == nil {
+			return fmt.Errorf("failed to check private subnet delegation for %s: %s", privateSubnetName, err)
+		}
+
+		if delegations := resp.Model.Properties.Delegations; delegations == nil {
+			return fmt.Errorf("required private subnet delegation to %s on %s not found", requiredDelegationService, privateSubnetName)
+		} else {
+			found := false
+			for _, v := range *delegations {
+				if v.Properties == nil {
+					continue
+				}
+				if pointer.From(v.Properties.ServiceName) == requiredDelegationService {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return fmt.Errorf("required private subnet delegation to %s on %s not found", requiredDelegationService, privateSubnetName)
+			}
+		}
+	}
+
+	return nil
+}

@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/firewallrules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceMsSqlFirewallRule() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceMsSqlFirewallRuleCreateUpdate,
+		Read:   resourceMsSqlFirewallRuleRead,
+		Update: resourceMsSqlFirewallRuleCreateUpdate,
+		Delete: resourceMsSqlFirewallRuleDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := firewallrules.ParseFirewallRuleID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"server_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.ServerID,
+			},
+
+			"start_ip_address": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.All(
+					validation.IsIPAddress,
+					validation.StringIsNotEmpty,
+				),
+			},
+
+			"end_ip_address": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.All(
+					validation.IsIPAddress,
+					validation.StringIsNotEmpty,
+				),
+			},
+		},
+	}
+}

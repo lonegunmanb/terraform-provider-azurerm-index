@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/domainservices
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/aad/2021-05-01/domainservices"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/domainservices/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/domainservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenDomainServiceSecurity(input *domainservices.DomainSecuritySettings) []interface{} {
+	if input == nil {
+		return make([]interface{}, 0)
+	}
+
+	result := map[string]bool{
+		"kerberos_armoring_enabled":       false,
+		"kerberos_rc4_encryption_enabled": false,
+		"ntlm_v1_enabled":                 false,
+		"sync_kerberos_passwords":         false,
+		"sync_ntlm_passwords":             false,
+		"sync_on_prem_passwords":          false,
+		"tls_v1_enabled":                  false,
+	}
+	if input.KerberosArmoring != nil && *input.KerberosArmoring == domainservices.KerberosArmoringEnabled {
+		result["kerberos_armoring_enabled"] = true
+	}
+	if input.KerberosRc4Encryption != nil && *input.KerberosRc4Encryption == domainservices.KerberosRc4EncryptionEnabled {
+		result["kerberos_rc4_encryption_enabled"] = true
+	}
+	if input.NtlmV1 != nil && *input.NtlmV1 == domainservices.NtlmV1Enabled {
+		result["ntlm_v1_enabled"] = true
+	}
+	if input.SyncKerberosPasswords != nil && *input.SyncKerberosPasswords == domainservices.SyncKerberosPasswordsEnabled {
+		result["sync_kerberos_passwords"] = true
+	}
+	if input.SyncNtlmPasswords != nil && *input.SyncNtlmPasswords == domainservices.SyncNtlmPasswordsEnabled {
+		result["sync_ntlm_passwords"] = true
+	}
+	if input.SyncOnPremPasswords != nil && *input.SyncOnPremPasswords == domainservices.SyncOnPremPasswordsEnabled {
+		result["sync_on_prem_passwords"] = true
+	}
+	if input.TlsV1 != nil && *input.TlsV1 == domainservices.TlsV1Enabled {
+		result["tls_v1_enabled"] = true
+	}
+
+	return []interface{}{result}
+}

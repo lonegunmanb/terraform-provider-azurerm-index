@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/consumption/2019-10-01/budgets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandConsumptionBudgetNotifications(input []interface{}) *map[string]budgets.Notification {
+	if len(input) == 0 {
+		return nil
+	}
+
+	notifications := make(map[string]budgets.Notification)
+
+	for _, v := range input {
+		if v != nil {
+			notificationRaw := v.(map[string]interface{})
+			notification := budgets.Notification{}
+
+			notification.Enabled = notificationRaw["enabled"].(bool)
+			notification.Operator = budgets.OperatorType(notificationRaw["operator"].(string))
+
+			notification.Threshold = float64(notificationRaw["threshold"].(int))
+
+			thresholdType := budgets.ThresholdType(notificationRaw["threshold_type"].(string))
+			notification.ThresholdType = &thresholdType
+
+			contactEmails := utils.ExpandStringSlice(notificationRaw["contact_emails"].([]interface{}))
+			notification.ContactEmails = *contactEmails
+
+			// contact_roles cannot be set on consumption budgets for management groups
+			if _, ok := notificationRaw["contact_roles"]; ok {
+				notification.ContactRoles = utils.ExpandStringSlice(notificationRaw["contact_roles"].([]interface{}))
+			}
+
+			// contact_groups cannot be set on consumption budgets for management groups
+			if _, ok := notificationRaw["contact_groups"]; ok {
+				notification.ContactGroups = utils.ExpandStringSlice(notificationRaw["contact_groups"].([]interface{}))
+			}
+
+			notificationKey := fmt.Sprintf("%s_%s_%f_Percent", string(thresholdType), string(notification.Operator), notification.Threshold)
+			notifications[notificationKey] = notification
+		}
+	}
+
+	return &notifications
+}

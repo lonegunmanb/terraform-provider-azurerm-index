@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func dataSourceVPNGatewayRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.VirtualWANs
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	defer cancel()
+
+	id := virtualwans.NewVpnGatewayID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	resp, err := client.VpnGatewaysGet(ctx, id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return fmt.Errorf("%s was not found", id)
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	d.Set("name", id.VpnGatewayName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.NormalizeNilable(model.Location))
+
+		if props := model.Properties; props != nil {
+			if err := d.Set("bgp_settings", dataSourceFlattenVPNGatewayBGPSettings(props.BgpSettings)); err != nil {
+				return fmt.Errorf("Error setting `bgp_settings`: %+v", err)
+			}
+
+			scaleUnit := 0
+			if props.VpnGatewayScaleUnit != nil {
+				scaleUnit = int(*props.VpnGatewayScaleUnit)
+			}
+			d.Set("scale_unit", scaleUnit)
+
+			virtualHubId := ""
+			if props.VirtualHub != nil && props.VirtualHub.Id != nil {
+				virtualHubId = *props.VirtualHub.Id
+			}
+			d.Set("virtual_hub_id", virtualHubId)
+
+			if err := tags.FlattenAndSet(d, model.Tags); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}

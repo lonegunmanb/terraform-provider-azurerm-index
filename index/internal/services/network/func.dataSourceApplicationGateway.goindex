@@ -1,0 +1,1314 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceApplicationGateway() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Read: dataSourceApplicationGatewayRead,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Read: pluginsdk.DefaultTimeout(5 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupNameForDataSource(),
+
+			"backend_address_pool": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"fqdns": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+						"ip_addresses": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"backend_http_settings": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"path": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"port": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"protocol": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"cookie_based_affinity": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"affinity_cookie_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"host_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"pick_host_name_from_backend_address": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+
+						"request_timeout": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"authentication_certificate": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+								},
+							},
+						},
+
+						"trusted_root_certificate_names": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"connection_draining": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"enabled": {
+										Type:     pluginsdk.TypeBool,
+										Computed: true,
+									},
+
+									"drain_timeout_sec": {
+										Type:     pluginsdk.TypeInt,
+										Computed: true,
+									},
+								},
+							},
+						},
+
+						"probe_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"probe_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"frontend_ip_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"subnet_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"private_ip_address": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"public_ip_address_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"private_ip_address_allocation": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"private_link_configuration_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"private_link_configuration_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"frontend_port": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"port": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"gateway_ip_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"subnet_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"global": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"request_buffering_enabled": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+						"response_buffering_enabled": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"http_listener": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"frontend_ip_configuration_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"frontend_port_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"protocol": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"host_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"host_names": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"ssl_certificate_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"require_sni": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+
+						"frontend_ip_configuration_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"frontend_port_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"ssl_certificate_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"ssl_profile_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"custom_error_configuration": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"status_code": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"custom_error_page_url": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+								},
+							},
+						},
+
+						"firewall_policy_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"ssl_profile_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"fips_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"private_endpoint_connection": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"private_link_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"ip_configuration": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"subnet_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"private_ip_address": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"private_ip_address_allocation": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"primary": {
+										Type:     pluginsdk.TypeBool,
+										Computed: true,
+									},
+								},
+							},
+						},
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"request_routing_rule": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"rule_type": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"http_listener_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"backend_address_pool_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"backend_http_settings_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"url_path_map_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"redirect_configuration_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"rewrite_rule_set_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"priority": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"backend_address_pool_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"backend_http_settings_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"http_listener_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"url_path_map_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"redirect_configuration_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"rewrite_rule_set_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"redirect_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"redirect_type": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"target_listener_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"target_url": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"include_path": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+
+						"include_query_string": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"target_listener_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+			"autoscale_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"min_capacity": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"max_capacity": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+					},
+				},
+			},
+			"sku": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"tier": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"capacity": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"authentication_certificate": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"trusted_root_certificate": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"key_vault_secret_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"ssl_policy": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"disabled_protocols": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"policy_type": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"policy_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"cipher_suites": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"min_protocol_version": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"http2_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"force_firewall_policy_association": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"probe": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"protocol": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"path": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"host": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"interval": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"timeout": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"unhealthy_threshold": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"port": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"pick_host_name_from_backend_http_settings": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+
+						"minimum_servers": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"match": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"body": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"status_code": {
+										Type:     pluginsdk.TypeList,
+										Computed: true,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+										},
+									},
+								},
+							},
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"rewrite_rule_set": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"rewrite_rule": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"rule_sequence": {
+										Type:     pluginsdk.TypeInt,
+										Computed: true,
+									},
+
+									"condition": {
+										Type:     pluginsdk.TypeList,
+										Computed: true,
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"variable": {
+													Type:     pluginsdk.TypeString,
+													Computed: true,
+												},
+												"pattern": {
+													Type:     pluginsdk.TypeString,
+													Computed: true,
+												},
+												"ignore_case": {
+													Type:     pluginsdk.TypeBool,
+													Computed: true,
+												},
+												"negate": {
+													Type:     pluginsdk.TypeBool,
+													Computed: true,
+												},
+											},
+										},
+									},
+
+									"request_header_configuration": {
+										Type:     pluginsdk.TypeList,
+										Computed: true,
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"header_name": {
+													Type:     pluginsdk.TypeString,
+													Computed: true,
+												},
+												"header_value": {
+													Type:     pluginsdk.TypeString,
+													Computed: true,
+												},
+											},
+										},
+									},
+
+									"response_header_configuration": {
+										Type:     pluginsdk.TypeList,
+										Computed: true,
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"header_name": {
+													Type:     pluginsdk.TypeString,
+													Computed: true,
+												},
+												"header_value": {
+													Type:     pluginsdk.TypeString,
+													Computed: true,
+												},
+											},
+										},
+									},
+
+									"url": {
+										Type:     pluginsdk.TypeList,
+										Computed: true,
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"path": {
+													Type:     pluginsdk.TypeString,
+													Computed: true,
+												},
+												"query_string": {
+													Type:     pluginsdk.TypeString,
+													Computed: true,
+												},
+
+												"components": {
+													Type:     pluginsdk.TypeString,
+													Computed: true,
+												},
+
+												"reroute": {
+													Type:     pluginsdk.TypeBool,
+													Computed: true,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"ssl_certificate": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"key_vault_secret_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"public_cert_data": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"trusted_client_certificate": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"data": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"ssl_profile": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"trusted_client_certificate_names": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"verify_client_certificate_issuer_dn": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+
+						"verify_client_certificate_revocation": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"ssl_policy": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"disabled_protocols": {
+										Type:     pluginsdk.TypeList,
+										Computed: true,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+										},
+									},
+
+									"policy_type": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"policy_name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"cipher_suites": {
+										Type:     pluginsdk.TypeList,
+										Computed: true,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+										},
+									},
+
+									"min_protocol_version": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+								},
+							},
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"url_path_map": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"default_backend_address_pool_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"default_backend_http_settings_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"default_redirect_configuration_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"default_rewrite_rule_set_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"path_rule": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"paths": {
+										Type:     pluginsdk.TypeList,
+										Computed: true,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+										},
+									},
+
+									"backend_address_pool_name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"backend_http_settings_name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"redirect_configuration_name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"rewrite_rule_set_name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"backend_address_pool_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"backend_http_settings_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"redirect_configuration_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"rewrite_rule_set_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"firewall_policy_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+								},
+							},
+						},
+
+						"default_backend_address_pool_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"default_backend_http_settings_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"default_redirect_configuration_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"default_rewrite_rule_set_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"waf_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"enabled": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+
+						"firewall_mode": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"rule_set_type": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"rule_set_version": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"file_upload_limit_mb": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+						"request_body_check": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+						"max_request_body_size_kb": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+						"disabled_rule_group": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"rule_group_name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"rules": {
+										Type:     pluginsdk.TypeList,
+										Computed: true,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeInt,
+										},
+									},
+								},
+							},
+						},
+						"exclusion": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"match_variable": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"selector_match_operator": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+									"selector": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"firewall_policy_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"custom_error_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"status_code": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"custom_error_page_url": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"location": commonschema.LocationComputed(),
+
+			"identity": commonschema.SystemAssignedUserAssignedIdentityComputed(),
+
+			"zones": commonschema.ZonesMultipleComputed(),
+
+			"tags": commonschema.TagsDataSource(),
+		},
+	}
+}

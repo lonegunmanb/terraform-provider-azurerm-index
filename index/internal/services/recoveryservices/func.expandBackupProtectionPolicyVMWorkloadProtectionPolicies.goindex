@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandBackupProtectionPolicyVMWorkloadProtectionPolicies(input []ProtectionPolicy, workloadType string) (*[]protectionpolicies.SubProtectionPolicy, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	results := make([]protectionpolicies.SubProtectionPolicy, 0)
+
+	for _, item := range input {
+		if workloadType == string(protectionpolicies.WorkloadTypeSQLDataBase) && item.PolicyType == string(protectionpolicies.PolicyTypeIncremental) {
+			return nil, fmt.Errorf("the Incremental backup isn't supported when `workload_type` is `SQLDataBase`")
+		}
+
+		backupBlock := item.Backup[0]
+
+		// getting this ready now because its shared between *everything*, time is... complicated for this resource
+		timeOfDay := backupBlock.Time
+		times := make([]string, 0)
+		if timeOfDay != "" {
+			dateOfDay, err := time.Parse(time.RFC3339, fmt.Sprintf("2018-07-30T%s:00Z", timeOfDay))
+			if err != nil {
+				return nil, fmt.Errorf("generating time from %q for policy): %+v", timeOfDay, err)
+			}
+			times = append(times, date.Time{Time: dateOfDay}.String())
+		}
+
+		switch backupBlock.Frequency {
+		case string(protectionpolicies.ScheduleRunTypeDaily):
+			if len(item.RetentionDaily) == 0 {
+				return nil, fmt.Errorf("`retention_daily` must be set when `backup.0.frequency` is `Daily`")
+			}
+
+			if weekdays := backupBlock.Weekdays; len(weekdays) > 0 {
+				return nil, fmt.Errorf("`backup.0.weekdays` should be not set when `backup.0.frequency` is `Daily`")
+			}
+		case string(protectionpolicies.ScheduleRunTypeWeekly):
+			if len(item.RetentionDaily) > 0 {
+				return nil, fmt.Errorf("`retention_daily` must be not set when `backup.0.frequency` is `Weekly`")
+			}
+
+			if item.PolicyType != string(protectionpolicies.PolicyTypeLog) && len(backupBlock.Weekdays) == 0 {
+				return nil, fmt.Errorf("`backup.weekdays` must be set when `policy_type` is not `Log` and `backup.frequency` is `Weekly`")
+			}
+
+			if item.PolicyType == string(protectionpolicies.PolicyTypeFull) && len(item.RetentionWeekly) == 0 {
+				return nil, fmt.Errorf("`retention_weekly` must be set when `policy_type` is `Full` and `backup.frequency` is `Weekly`")
+			}
+		}
+
+		result := protectionpolicies.SubProtectionPolicy{
+			PolicyType:     pointer.To(protectionpolicies.PolicyType(item.PolicyType)),
+			SchedulePolicy: expandBackupProtectionPolicyVMWorkloadSchedulePolicy(item, times),
+		}
+
+		if v, err := expandBackupProtectionPolicyVMWorkloadRetentionPolicy(item, times); err != nil {
+			return nil, err
+		} else {
+			result.RetentionPolicy = v
+		}
+
+		results = append(results, result)
+	}
+
+	return &results, nil
+}

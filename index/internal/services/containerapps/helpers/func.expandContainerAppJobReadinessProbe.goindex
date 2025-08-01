@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"reflect"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-02-02-preview/jobs"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandContainerAppJobReadinessProbe(input ContainerAppReadinessProbe) jobs.ContainerAppProbe {
+	probeType := jobs.TypeReadiness
+	result := jobs.ContainerAppProbe{
+		Type:             &probeType,
+		PeriodSeconds:    pointer.To(input.Interval),
+		TimeoutSeconds:   pointer.To(input.Timeout),
+		FailureThreshold: pointer.To(input.FailureThreshold),
+		SuccessThreshold: pointer.To(input.SuccessThreshold),
+	}
+
+	switch p := strings.ToUpper(input.Transport); p {
+	case "HTTP", "HTTPS":
+		scheme := jobs.Scheme(p)
+		result.HTTPGet = &jobs.ContainerAppProbeHTTPGet{
+			Host:   pointer.To(input.Host),
+			Path:   pointer.To(input.Path),
+			Port:   input.Port,
+			Scheme: &scheme,
+		}
+		if input.Headers != nil {
+			headers := make([]jobs.ContainerAppProbeHTTPGetHTTPHeadersInlined, 0)
+
+			for _, h := range input.Headers {
+				headers = append(headers, jobs.ContainerAppProbeHTTPGetHTTPHeadersInlined{
+					Name:  h.Name,
+					Value: h.Value,
+				})
+			}
+			result.HTTPGet.HTTPHeaders = &headers
+		}
+
+	default:
+		result.TcpSocket = &jobs.ContainerAppProbeTcpSocket{
+			Host: pointer.To(input.Host),
+			Port: input.Port,
+		}
+	}
+
+	return result
+}

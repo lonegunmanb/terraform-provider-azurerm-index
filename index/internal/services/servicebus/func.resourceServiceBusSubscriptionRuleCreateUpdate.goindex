@@ -1,0 +1,94 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/rules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/subscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceServiceBusSubscriptionRuleCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).ServiceBus.SubscriptionRulesClient
+	subscriptionClient := meta.(*clients.Client).ServiceBus.SubscriptionsClient
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+	log.Printf("[INFO] preparing arguments for Azure Service Bus Subscription Rule creation.")
+
+	filterType := d.Get("filter_type").(string)
+
+	var id subscriptions.RuleId
+	if subscriptionIdLit := d.Get("subscription_id").(string); subscriptionIdLit != "" {
+		subscriptionId, _ := rules.ParseSubscriptions2ID(subscriptionIdLit)
+		id = subscriptions.NewRuleID(subscriptionId.SubscriptionId,
+			subscriptionId.ResourceGroupName,
+			subscriptionId.NamespaceName,
+			subscriptionId.TopicName,
+			subscriptionId.SubscriptionName,
+			d.Get("name").(string),
+		)
+	}
+
+	if d.IsNewResource() {
+		existing, err := subscriptionClient.RulesGet(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_servicebus_subscription_rule", id.ID())
+		}
+	}
+
+	filter := rules.FilterType(filterType)
+	rule := rules.Rule{
+		Properties: &rules.Ruleproperties{
+			FilterType: &filter,
+		},
+	}
+
+	if action := d.Get("action").(string); action != "" {
+		rule.Properties.Action = &rules.Action{
+			SqlExpression: &action,
+		}
+	}
+
+	if *rule.Properties.FilterType == rules.FilterTypeCorrelationFilter {
+		correlationFilter, err := expandAzureRmServiceBusCorrelationFilter(d)
+		if err != nil {
+			return fmt.Errorf("expanding `correlation_filter`: %+v", err)
+		}
+
+		rule.Properties.CorrelationFilter = correlationFilter
+	}
+
+	if *rule.Properties.FilterType == rules.FilterTypeSqlFilter {
+		sqlFilter := d.Get("sql_filter").(string)
+		rule.Properties.SqlFilter = &rules.SqlFilter{
+			SqlExpression: &sqlFilter,
+		}
+	}
+
+	// switch this around so that the rule id from subscription is generated for the get method
+	ruleId, err := rules.ParseRuleID(id.ID())
+	if err != nil {
+		return err
+	}
+	if _, err := client.CreateOrUpdate(ctx, *ruleId, rule); err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceServiceBusSubscriptionRuleRead(d, meta)
+}

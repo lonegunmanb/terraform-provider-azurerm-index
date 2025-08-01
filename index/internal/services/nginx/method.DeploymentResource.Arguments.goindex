@@ -1,0 +1,196 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/nginx
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/nginx/2024-11-01-preview/nginxdeployment"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (m DeploymentResource) Arguments() map[string]*pluginsdk.Schema {
+	resource := map[string]*pluginsdk.Schema{
+		"resource_group_name": commonschema.ResourceGroupName(),
+
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"sku": {
+			// docs: <https://docs.nginx.com/nginxaas/azure/billing/overview/>
+			// we will not be forcing validation of SKU as there are internal SKUs
+			// used for testing and for F5 NGINX private offers
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"identity": commonschema.SystemAssignedUserAssignedIdentityOptional(),
+
+		"location": commonschema.Location(),
+
+		"capacity": {
+			Type:          pluginsdk.TypeInt,
+			Optional:      true,
+			ConflictsWith: []string{"auto_scale_profile"},
+			ValidateFunc:  validation.IntPositive,
+		},
+
+		"auto_scale_profile": {
+			Type:          pluginsdk.TypeList,
+			Optional:      true,
+			ConflictsWith: []string{"capacity"},
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+
+					"min_capacity": {
+						Type:         pluginsdk.TypeInt,
+						Required:     true,
+						ValidateFunc: validation.IntPositive,
+					},
+
+					"max_capacity": {
+						Type:         pluginsdk.TypeInt,
+						Required:     true,
+						ValidateFunc: validation.IntPositive,
+					},
+				},
+			},
+		},
+
+		"diagnose_support_enabled": {
+			Type:         pluginsdk.TypeBool,
+			Optional:     true,
+			ValidateFunc: nil,
+		},
+
+		"email": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"frontend_public": {
+			Type:          pluginsdk.TypeList,
+			Optional:      true,
+			ForceNew:      true,
+			MaxItems:      1,
+			ConflictsWith: []string{"frontend_private"},
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"ip_address": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						ForceNew: true,
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeString,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+					},
+				},
+			},
+		},
+
+		"frontend_private": {
+			Type:          pluginsdk.TypeList,
+			Optional:      true,
+			ForceNew:      true,
+			ConflictsWith: []string{"frontend_public"},
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"ip_address": {
+						Type:     pluginsdk.TypeString,
+						Required: true,
+						ForceNew: true,
+					},
+
+					"allocation_method": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ForceNew:     true,
+						ValidateFunc: validation.StringInSlice(nginxdeployment.PossibleValuesForNginxPrivateIPAllocationMethod(), false),
+					},
+
+					"subnet_id": {
+						Type:     pluginsdk.TypeString,
+						Required: true,
+						ForceNew: true,
+					},
+				},
+			},
+		},
+
+		"network_interface": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			ForceNew: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"subnet_id": {
+						Type:     pluginsdk.TypeString,
+						Required: true,
+						ForceNew: true,
+					},
+				},
+			},
+		},
+
+		"automatic_upgrade_channel": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  "stable",
+			ValidateFunc: validation.StringInSlice(
+				[]string{
+					"stable",
+					"preview",
+				}, false),
+		},
+
+		"tags": commonschema.Tags(),
+	}
+
+	if !features.FivePointOh() {
+		resource["managed_resource_group"] = &pluginsdk.Schema{
+			Deprecated:   "The `managed_resource_group` field isn't supported by the API anymore and has been deprecated and will be removed in v5.0 of the AzureRM Provider.",
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		}
+
+		resource["logging_storage_account"] = &pluginsdk.Schema{
+			Deprecated: "The `logging_storage_account` block has been deprecated and will be removed in v5.0 of the AzureRM Provider. To enable logs, use the `azurerm_monitor_diagnostic_setting` resource instead.",
+			Type:       pluginsdk.TypeList,
+			Optional:   true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"name": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+
+					"container_name": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+				},
+			},
+		}
+	}
+	return resource
+}

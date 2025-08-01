@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/kermit/sdk/web/2022-09-01/web"
+)
+func ExpandAuthV2Settings(input []AuthV2Settings) *webapps.SiteAuthSettingsV2 {
+	result := &webapps.SiteAuthSettingsV2{}
+	if len(input) != 1 {
+		return result
+	}
+
+	settings := input[0]
+
+	props := &webapps.SiteAuthSettingsV2Properties{
+		Platform: &webapps.AuthPlatform{
+			Enabled:        pointer.To(settings.AuthEnabled),
+			RuntimeVersion: pointer.To(settings.RuntimeVersion),
+		},
+		GlobalValidation: &webapps.GlobalValidation{
+			RequireAuthentication:       pointer.To(settings.RequireAuth),
+			UnauthenticatedClientAction: pointer.To(webapps.UnauthenticatedClientActionV2(settings.UnauthenticatedAction)),
+			ExcludedPaths:               pointer.To(settings.ExcludedPaths),
+		},
+		IdentityProviders: &webapps.IdentityProviders{
+			AzureActiveDirectory:         expandAadAuthV2Settings(settings.AzureActiveDirectoryAuth),
+			Facebook:                     expandFacebookAuthV2Settings(settings.FacebookAuth),
+			GitHub:                       expandGitHubAuthV2Settings(settings.GithubAuth),
+			Google:                       expandGoogleAuthV2Settings(settings.GoogleAuth),
+			Twitter:                      expandTwitterAuthV2Settings(settings.TwitterAuth),
+			CustomOpenIdConnectProviders: pointer.To(expandCustomOIDCAuthV2Settings(settings.CustomOIDCAuth)),
+			LegacyMicrosoftAccount:       expandMicrosoftAuthV2Settings(settings.MicrosoftAuth),
+			Apple:                        expandAppleAuthV2Settings(settings.AppleAuth),
+			AzureStaticWebApps:           expandStaticWebAppAuthV2Settings(settings.AzureStaticWebAuth),
+		},
+		Login: expandAuthV2LoginSettings(settings.Login),
+		HTTPSettings: &webapps.HTTPSettings{
+			RequireHTTPS: pointer.To(settings.RequireHTTPS),
+			Routes: &webapps.HTTPSettingsRoutes{
+				ApiPrefix: pointer.To(settings.HttpRoutesAPIPrefix),
+			},
+			ForwardProxy: &webapps.ForwardProxy{
+				Convention: pointer.To(webapps.ForwardProxyConvention(settings.ForwardProxyConvention)),
+			},
+		},
+	}
+
+	// Platform
+	if settings.ConfigFilePath != "" {
+		props.Platform.ConfigFilePath = pointer.To(settings.ConfigFilePath)
+	}
+
+	// Global
+	if settings.DefaultAuthProvider != "" {
+		props.GlobalValidation.RedirectToProvider = pointer.To(settings.DefaultAuthProvider)
+	}
+
+	// HTTP
+	if settings.ForwardProxyCustomHostHeaderName != "" {
+		props.HTTPSettings.ForwardProxy.CustomHostHeaderName = pointer.To(settings.ForwardProxyCustomHostHeaderName)
+	}
+	if settings.ForwardProxyCustomSchemeHeaderName != "" {
+		props.HTTPSettings.ForwardProxy.CustomProtoHeaderName = pointer.To(settings.ForwardProxyCustomSchemeHeaderName)
+	}
+
+	result.Properties = props
+
+	return result
+}

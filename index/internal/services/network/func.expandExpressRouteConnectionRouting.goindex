@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/expressroutegateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/virtualwans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/expressrouteconnections"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandExpressRouteConnectionRouting(input []interface{}) *expressrouteconnections.RoutingConfiguration {
+	if len(input) == 0 || input[0] == nil {
+		return &expressrouteconnections.RoutingConfiguration{}
+	}
+
+	v := input[0].(map[string]interface{})
+	result := expressrouteconnections.RoutingConfiguration{}
+
+	if associatedRouteTableId := v["associated_route_table_id"].(string); associatedRouteTableId != "" {
+		result.AssociatedRouteTable = &expressrouteconnections.SubResource{
+			Id: pointer.To(associatedRouteTableId),
+		}
+	}
+
+	if inboundRouteMapId := v["inbound_route_map_id"].(string); inboundRouteMapId != "" {
+		result.InboundRouteMap = &expressrouteconnections.SubResource{
+			Id: pointer.To(inboundRouteMapId),
+		}
+	}
+
+	if outboundRouteMapId := v["outbound_route_map_id"].(string); outboundRouteMapId != "" {
+		result.OutboundRouteMap = &expressrouteconnections.SubResource{
+			Id: pointer.To(outboundRouteMapId),
+		}
+	}
+
+	if propagatedRouteTable := v["propagated_route_table"].([]interface{}); len(propagatedRouteTable) != 0 {
+		result.PropagatedRouteTables = expandExpressRouteConnectionPropagatedRouteTable(propagatedRouteTable)
+	}
+
+	return &result
+}

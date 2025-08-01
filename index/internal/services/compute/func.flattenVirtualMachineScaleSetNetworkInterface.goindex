@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenVirtualMachineScaleSetNetworkInterface(input *[]virtualmachinescalesets.VirtualMachineScaleSetNetworkConfiguration) []VirtualMachineScaleSetNetworkInterface {
+	if input == nil {
+		return []VirtualMachineScaleSetNetworkInterface{}
+	}
+
+	networkInterfaces := make([]VirtualMachineScaleSetNetworkInterface, 0)
+	for _, v := range *input {
+		var networkSecurityGroupId string
+		var acceleratedNetworkingEnabled, ipForwardingEnabled, primary bool
+		var dnsServers []string
+
+		if props := v.Properties; props != nil {
+			if props.NetworkSecurityGroup != nil && props.NetworkSecurityGroup.Id != nil {
+				networkSecurityGroupId = *props.NetworkSecurityGroup.Id
+			}
+			if props.EnableAcceleratedNetworking != nil {
+				acceleratedNetworkingEnabled = *props.EnableAcceleratedNetworking
+			}
+			if props.EnableIPForwarding != nil {
+				ipForwardingEnabled = *props.EnableIPForwarding
+			}
+			if props.Primary != nil {
+				primary = *props.Primary
+			}
+
+			if settings := props.DnsSettings; settings != nil {
+				dnsServers = *props.DnsSettings.DnsServers
+			}
+
+			networkInterfaces = append(networkInterfaces, VirtualMachineScaleSetNetworkInterface{
+				Name:                         v.Name,
+				NetworkSecurityGroupId:       networkSecurityGroupId,
+				AcceleratedNetworkingEnabled: acceleratedNetworkingEnabled,
+				IPForwardingEnabled:          ipForwardingEnabled,
+				Primary:                      primary,
+				DNSServers:                   dnsServers,
+				IPConfiguration:              flattenOrchestratedVirtualMachineScaleSetNetworkInterfaceIPConfiguration(&props.IPConfigurations),
+			})
+		}
+	}
+
+	return networkInterfaces
+}

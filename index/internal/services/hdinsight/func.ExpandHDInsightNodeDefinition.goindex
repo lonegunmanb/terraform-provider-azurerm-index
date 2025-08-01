@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/extensions"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVault "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandHDInsightNodeDefinition(name string, input []interface{}, definition HDInsightNodeDefinition) (*clusters.Role, error) {
+	v := input[0].(map[string]interface{})
+	vmSize := v["vm_size"].(string)
+	username := v["username"].(string)
+	password := v["password"].(string)
+	virtualNetworkId := v["virtual_network_id"].(string)
+	subnetId := v["subnet_id"].(string)
+	scriptActions := v["script_actions"].([]interface{})
+
+	role := clusters.Role{
+		Name: utils.String(name),
+		HardwareProfile: &clusters.HardwareProfile{
+			VMSize: utils.String(vmSize),
+		},
+		OsProfile: &clusters.OsProfile{
+			LinuxOperatingSystemProfile: &clusters.LinuxOperatingSystemProfile{},
+		},
+		ScriptActions: ExpandHDInsightsRolesScriptActions(scriptActions),
+	}
+
+	if name != "kafkamanagementnode" {
+		role.OsProfile.LinuxOperatingSystemProfile.Username = utils.String(username)
+	} else {
+		// kafkamanagementnode generates a username and discards the value sent, however, the API has `Username` marked
+		// as required non-empty, so we'll send a dummy one avoiding the Portal's default value, which is reserved/invalid.
+		role.OsProfile.LinuxOperatingSystemProfile.Username = utils.String("sshadmin")
+	}
+
+	virtualNetworkSpecified := virtualNetworkId != ""
+	subnetSpecified := subnetId != ""
+	if virtualNetworkSpecified && subnetSpecified {
+		role.VirtualNetworkProfile = &clusters.VirtualNetworkProfile{
+			Id:     utils.String(virtualNetworkId),
+			Subnet: utils.String(subnetId),
+		}
+	} else if (virtualNetworkSpecified && !subnetSpecified) || (subnetSpecified && !virtualNetworkSpecified) {
+		return nil, fmt.Errorf("`virtual_network_id` and `subnet_id` must both either be set or empty")
+	}
+
+	if password != "" {
+		role.OsProfile.LinuxOperatingSystemProfile.Password = utils.String(password)
+	} else {
+		sshKeysRaw := v["ssh_keys"].(*pluginsdk.Set).List()
+		sshKeys := make([]clusters.SshPublicKey, 0)
+		for _, v := range sshKeysRaw {
+			sshKeys = append(sshKeys, clusters.SshPublicKey{
+				CertificateData: utils.String(v.(string)),
+			})
+		}
+
+		if len(sshKeys) == 0 {
+			return nil, fmt.Errorf("either a `password` or `ssh_key` must be specified")
+		}
+
+		role.OsProfile.LinuxOperatingSystemProfile.SshProfile = &clusters.SshProfile{
+			PublicKeys: &sshKeys,
+		}
+	}
+
+	if definition.CanSpecifyInstanceCount {
+		targetInstanceCount := v["target_instance_count"].(int)
+		role.TargetInstanceCount = pointer.To(int64(targetInstanceCount))
+
+		if definition.CanAutoScaleByCapacity || definition.CanAutoScaleOnSchedule {
+			autoscaleRaw := v["autoscale"].([]interface{})
+			autoscale := ExpandHDInsightNodeAutoScaleDefinition(autoscaleRaw)
+			if autoscale != nil {
+				role.Autoscale = autoscale
+			}
+		}
+	} else {
+		role.MinInstanceCount = definition.FixedMinInstanceCount
+		role.TargetInstanceCount = definition.FixedTargetInstanceCount
+	}
+
+	if definition.CanSpecifyDisks {
+		numberOfDisksPerNode := v["number_of_disks_per_node"].(int)
+		if numberOfDisksPerNode > 0 {
+			role.DataDisksGroups = &[]clusters.DataDisksGroups{
+				{
+					DisksPerNode: pointer.To(int64(numberOfDisksPerNode)),
+				},
+			}
+		}
+	}
+
+	return &role, nil
+}

@@ -1,0 +1,87 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/entities"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
+)
+func (k storageTableEntitiesDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model TableEntitiesDataSourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			storageClient := metadata.Client.Storage
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var storageTableId *tables.TableId
+			var err error
+			if model.StorageTableId != "" {
+				storageTableId, err = tables.ParseTableID(model.StorageTableId, storageClient.StorageDomainSuffix)
+				if err != nil {
+					return err
+				}
+			}
+
+			if storageTableId == nil {
+				return fmt.Errorf("determining storage table ID")
+			}
+
+			account, err := storageClient.FindAccount(ctx, subscriptionId, storageTableId.AccountId.AccountName)
+			if err != nil {
+				return fmt.Errorf("retrieving Account %q for Table %q: %v", storageTableId.AccountId.AccountName, storageTableId.TableName, err)
+			}
+			if account == nil {
+				return fmt.Errorf("the parent Storage Account %s was not found", storageTableId.AccountId.AccountName)
+			}
+
+			client, err := storageClient.TableEntityDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingAnyAuthMethod())
+			if err != nil {
+				return fmt.Errorf("building Table Entity Client for %s: %+v", account.StorageAccountId, err)
+			}
+
+			input := entities.QueryEntitiesInput{
+				Filter:        &model.Filter,
+				MetaDataLevel: entities.MinimalMetaData,
+			}
+
+			if model.Select != nil {
+				model.Select = append(model.Select, "RowKey", "PartitionKey")
+				input.PropertyNamesToSelect = &model.Select
+			}
+
+			id := parse.NewStorageTableEntitiesId(storageTableId.AccountId.AccountName, storageClient.StorageDomainSuffix, storageTableId.TableName, model.Filter)
+
+			result, err := client.Query(ctx, storageTableId.TableName, input)
+			if err != nil {
+				return fmt.Errorf("retrieving Entities (Filter %q) (Table %q in %s): %+v", model.Filter, storageTableId.TableName, account.StorageAccountId, err)
+			}
+
+			var flattenedEntities []TableEntityDataSourceModel
+			for _, entity := range result.Entities {
+				flattenedEntity := flattenEntityWithMetadata(entity)
+				if len(flattenedEntity.Properties) == 0 {
+					// if we use selector, we get empty objects back, skip them
+					continue
+				}
+				flattenedEntities = append(flattenedEntities, flattenedEntity)
+			}
+			model.Items = flattenedEntities
+			metadata.SetID(id)
+
+			return metadata.Encode(&model)
+		},
+	}
+}

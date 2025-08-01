@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenOrchestratedVirtualMachineScaleSetPublicIPAddress(input *virtualmachinescalesets.VirtualMachineScaleSetPublicIPAddressConfiguration) []VirtualMachineScaleSetNetworkInterfaceIPConfigurationPublicIPAddress {
+	if input == nil {
+		return []VirtualMachineScaleSetNetworkInterfaceIPConfigurationPublicIPAddress{}
+	}
+
+	ipTags := make([]VirtualMachineScaleSetNetworkInterfaceIPConfigurationPublicIPAddressIPTag, 0)
+	var domainNameLabel, publicIPPrefixId, version string
+	var idleTimeoutInMinutes int64
+	if props := input.Properties; props != nil && props.IPTags != nil {
+		for _, rawTag := range *props.IPTags {
+			var tag, tagType string
+
+			if rawTag.IPTagType != nil {
+				tagType = *rawTag.IPTagType
+			}
+
+			if rawTag.Tag != nil {
+				tag = *rawTag.Tag
+			}
+
+			ipTags = append(ipTags, VirtualMachineScaleSetNetworkInterfaceIPConfigurationPublicIPAddressIPTag{
+				Tag:  tag,
+				Type: tagType,
+			})
+		}
+
+		if props.DnsSettings != nil {
+			domainNameLabel = props.DnsSettings.DomainNameLabel
+		}
+
+		if props.PublicIPPrefix != nil && props.PublicIPPrefix.Id != nil {
+			publicIPPrefixId = *props.PublicIPPrefix.Id
+		}
+
+		if props.PublicIPAddressVersion != nil {
+			version = string(pointer.From(props.PublicIPAddressVersion))
+		}
+
+		if props.IdleTimeoutInMinutes != nil {
+			idleTimeoutInMinutes = *props.IdleTimeoutInMinutes
+		}
+	}
+
+	return []VirtualMachineScaleSetNetworkInterfaceIPConfigurationPublicIPAddress{{
+		Name:                 input.Name,
+		DomainNameLabel:      domainNameLabel,
+		IdleTimeoutInMinutes: idleTimeoutInMinutes,
+		IPTag:                ipTags,
+		PublicIpPrefixId:     publicIPPrefixId,
+		Version:              version,
+	}}
+}

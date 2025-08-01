@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redisenterprise
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2024-06-01-preview/databases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2024-06-01-preview/redisenterprise"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceRedisEnterpriseDatabaseRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).RedisEnterprise.DatabaseClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	clusterId, err := redisenterprise.ParseRedisEnterpriseID(d.Get("cluster_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := databases.NewDatabaseID(subscriptionId, clusterId.ResourceGroupName, clusterId.RedisEnterpriseName, d.Get("name").(string))
+
+	keysResp, err := client.ListKeys(ctx, id)
+	if err != nil {
+		return fmt.Errorf("listing keys for %s: %+v", id, err)
+	}
+
+	resp, err := client.Get(ctx, id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return fmt.Errorf("%s was not found", id)
+		}
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	d.Set("name", id.DatabaseName)
+	d.Set("cluster_id", clusterId.ID())
+
+	if model := resp.Model; model != nil {
+		if props := model.Properties; props != nil && props.GeoReplication != nil {
+			if props.GeoReplication.GroupNickname != nil {
+				d.Set("linked_database_group_nickname", props.GeoReplication.GroupNickname)
+			}
+			if props.GeoReplication.LinkedDatabases != nil {
+				d.Set("linked_database_id", flattenArmGeoLinkedDatabase(props.GeoReplication.LinkedDatabases))
+			}
+		}
+	}
+
+	if model := keysResp.Model; model != nil {
+		d.Set("primary_access_key", model.PrimaryKey)
+		d.Set("secondary_access_key", model.SecondaryKey)
+	}
+
+	return nil
+}

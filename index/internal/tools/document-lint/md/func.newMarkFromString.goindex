@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/md
+import (
+	"fmt"
+	"os"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func newMarkFromString(content string, filepath string) *Mark {
+	lines := strings.Split(content, "\n")
+	result := &Mark{
+		content:  &content,
+		FilePath: filepath,
+		Fields:   map[string]*model.Field{},
+	}
+	for idx, line := range lines {
+		// if line starts with #, * or A Block supports, it is a special item
+		switch {
+		case strings.HasPrefix(line, "###"):
+			result.addItem(NewMarkItem(idx, line, ItemHeader3))
+			continue
+		case strings.HasPrefix(line, "##"):
+			result.addItem(NewMarkItem(idx, line, ItemHeader2))
+			continue
+		case strings.HasPrefix(line, "#"):
+			result.addItem(NewMarkItem(idx, line, ItemHeader1))
+			continue
+		case strings.HasPrefix(line, "*"):
+			result.addItem(NewMarkItem(idx, line, ItemField))
+		case strings.HasPrefix(line, "---"):
+			if idx == 0 {
+				result.addItem(NewMarkItem(idx, line, ItemMeteInfo))
+			} else {
+				last := result.lastItem()
+				if last.Type == ItemMeteInfo {
+					last.addLine(idx, line)
+				} else {
+					result.addItem(NewMarkItem(idx, line, ItemSeparator))
+				}
+			}
+		case strings.HasPrefix(line, "```"):
+			result.addLineOrItem(idx, line, ItemExample)
+		case strings.HasPrefix(line, "->"), strings.HasPrefix(line, "~>"):
+			result.addItemWith(idx, line, ItemNote)
+		case isBlockHead(line):
+			result.addItemWith(idx, line, ItemBlockHead)
+		default:
+			// plain text
+			last := result.lastItem()
+			switch last.Type {
+			case ItemField, ItemMeteInfo, ItemExample, ItemPlainText:
+				last.addLine(idx, line)
+			default:
+				if strings.TrimSpace(line) == "" {
+					// for empty lines, append to last item
+					last.addLine(idx, line)
+				} else {
+					result.addItem(NewMarkItem(idx, line, ItemPlainText))
+				}
+			}
+		}
+	}
+	result.buildField()
+	result.buildStruct()
+	return result
+}

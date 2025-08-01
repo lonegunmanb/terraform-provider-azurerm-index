@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backupinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/databases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/servers"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	azSchema "github.com/hashicorp/terraform-provider-azurerm/internal/tf/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceDataProtectionBackupInstancePostgreSQLRead(d *schema.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).DataProtection.BackupInstanceClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := backupinstances.ParseBackupInstanceID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[INFO] dataprotection %q does not exist - removing from state", d.Id())
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving DataProtection BackupInstance (%q): %+v", id, err)
+	}
+	vaultId := backupinstances.NewBackupVaultID(id.SubscriptionId, id.ResourceGroupName, id.BackupVaultName)
+	d.Set("name", id.BackupInstanceName)
+	d.Set("vault_id", vaultId.ID())
+
+	if model := resp.Model; model != nil {
+		if props := model.Properties; props != nil {
+			d.Set("database_id", props.DataSourceInfo.ResourceID)
+			d.Set("location", props.DataSourceInfo.ResourceLocation)
+			d.Set("backup_policy_id", props.PolicyInfo.PolicyId)
+
+			if props.DatasourceAuthCredentials != nil {
+				credential := props.DatasourceAuthCredentials.(backupinstances.SecretStoreBasedAuthCredentials)
+				if credential.SecretStoreResource != nil {
+					d.Set("database_credential_key_vault_secret_id", credential.SecretStoreResource.Uri)
+				}
+			} else {
+				log.Printf("[DEBUG] Skipping setting database_credential_key_vault_secret_id since this DatasourceAuthCredentials is not supported")
+			}
+		}
+	}
+	return nil
+}

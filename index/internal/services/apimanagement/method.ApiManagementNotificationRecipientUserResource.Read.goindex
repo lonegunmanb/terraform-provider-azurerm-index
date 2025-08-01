@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apimanagementservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/notificationrecipientuser"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ApiManagementNotificationRecipientUserResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ApiManagement.NotificationRecipientUserClient
+			id, err := notificationrecipientuser.ParseRecipientUserID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			// CheckEntityExists can not be used, it returns autorest error
+			notificationId := notificationrecipientuser.NewNotificationID(id.SubscriptionId, id.ResourceGroupName, id.ServiceName, id.NotificationName)
+			users, err := client.ListByNotificationComplete(ctx, notificationId)
+			if err != nil {
+				if !response.WasNotFound(users.LatestHttpResponse) {
+					return fmt.Errorf("retrieving %s: %+v", id, err)
+				}
+			}
+
+			found := false
+			for _, existing := range users.Items {
+				if existing.Name != nil && *existing.Name == id.UserId {
+					found = true
+				}
+			}
+
+			if !found {
+				return metadata.MarkAsGone(id)
+			}
+
+			model := ApiManagementNotificationRecipientUserModel{
+				ApiManagementId:  apimanagementservice.NewServiceID(id.SubscriptionId, id.ResourceGroupName, id.ServiceName).ID(),
+				NotificationName: string(id.NotificationName),
+				UserId:           id.UserId,
+			}
+
+			return metadata.Encode(&model)
+		},
+	}
+}

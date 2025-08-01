@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/elastic
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/elastic/2023-06-01/monitorsresource"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/elastic/2023-06-01/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/elastic/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenTagRule(input *rules.MonitoringTagRules) []interface{} {
+	if input == nil || input.Properties == nil || input.Properties.LogRules == nil {
+		return []interface{}{}
+	}
+
+	rules := input.Properties.LogRules
+
+	filteringTags := make([]interface{}, 0)
+	if rules.FilteringTags != nil {
+		for _, v := range *rules.FilteringTags {
+			action := ""
+			if v.Action != nil {
+				action = string(*v.Action)
+			}
+			name := ""
+			if v.Name != nil {
+				name = *v.Name
+			}
+			value := ""
+			if v.Value != nil {
+				value = *v.Value
+			}
+
+			filteringTags = append(filteringTags, map[string]interface{}{
+				"action": action,
+				"name":   name,
+				"value":  value,
+			})
+		}
+	}
+
+	sendActivityLogs := false
+	if rules.SendActivityLogs != nil {
+		sendActivityLogs = *rules.SendActivityLogs
+	}
+	sendAzureAdLogs := false
+	if rules.SendAadLogs != nil {
+		sendAzureAdLogs = *rules.SendAadLogs
+	}
+	sendSubscriptionLogs := false
+	if rules.SendSubscriptionLogs != nil {
+		sendSubscriptionLogs = *rules.SendSubscriptionLogs
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"filtering_tag":          filteringTags,
+			"send_activity_logs":     sendActivityLogs,
+			"send_azuread_logs":      sendAzureAdLogs,
+			"send_subscription_logs": sendSubscriptionLogs,
+		},
+	}
+}

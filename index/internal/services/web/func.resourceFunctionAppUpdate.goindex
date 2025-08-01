@@ -1,0 +1,212 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/parse"
+	webValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/web/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceFunctionAppUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Web.AppServicesClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	storageDomainSuffix, ok := meta.(*clients.Client).Account.Environment.Storage.DomainSuffix()
+	if !ok {
+		return fmt.Errorf("could not determine Storage domain suffix for environment %q", meta.(*clients.Client).Account.Environment.Name)
+	}
+
+	id, err := parse.FunctionAppID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	location := azure.NormalizeLocation(d.Get("location").(string))
+	kind := "functionapp"
+	if osTypeRaw, ok := d.GetOk("os_type"); ok {
+		osType := osTypeRaw.(string)
+		if osType == "linux" {
+			kind = "functionapp,linux"
+		}
+	}
+	appServicePlanID := d.Get("app_service_plan_id").(string)
+	enabled := d.Get("enabled").(bool)
+	clientCertMode := d.Get("client_cert_mode").(string)
+	clientCertEnabled := clientCertMode != ""
+	httpsOnly := d.Get("https_only").(bool)
+	dailyMemoryTimeQuota := d.Get("daily_memory_time_quota").(int)
+	t := d.Get("tags").(map[string]interface{})
+
+	appServiceTier, err := getFunctionAppServiceTier(ctx, appServicePlanID, meta)
+	if err != nil {
+		return err
+	}
+
+	var currentAppSettings map[string]*string
+	appSettingsList, err := client.ListApplicationSettings(ctx, id.ResourceGroup, id.SiteName)
+	if err != nil {
+		return fmt.Errorf("reading App Settings for %s: %+v", id, err)
+	}
+	if appSettingsList.Properties != nil {
+		currentAppSettings = appSettingsList.Properties
+	}
+
+	basicAppSettings, err := getBasicFunctionAppAppSettings(d, appServiceTier, *storageDomainSuffix, currentAppSettings)
+	if err != nil {
+		return err
+	}
+
+	siteConfig, err := expandFunctionAppSiteConfig(d)
+	if err != nil {
+		return fmt.Errorf("expanding `site_config` for Function App %q (Resource Group %q): %s", id.SiteName, id.ResourceGroup, err)
+	}
+
+	siteConfig.AppSettings = &basicAppSettings
+
+	// WEBSITE_VNET_ROUTE_ALL is superseded by a setting in site_config that defaults to false from 2021-02-01
+	appSettings := expandFunctionAppAppSettings(d, basicAppSettings)
+	if vnetRouteAll, ok := appSettings["WEBSITE_VNET_ROUTE_ALL"]; ok {
+		if !d.HasChange("site_config.0.vnet_route_all_enabled") { // Only update the property if it's not set explicitly
+			vnetRouteAllEnabled, _ := strconv.ParseBool(*vnetRouteAll)
+			siteConfig.VnetRouteAllEnabled = &vnetRouteAllEnabled
+		}
+	}
+
+	siteEnvelope := web.Site{
+		Kind:     &kind,
+		Location: &location,
+		Tags:     tags.Expand(t),
+		SiteProperties: &web.SiteProperties{
+			ServerFarmID:         utils.String(appServicePlanID),
+			Enabled:              utils.Bool(enabled),
+			ClientCertEnabled:    utils.Bool(clientCertEnabled),
+			HTTPSOnly:            utils.Bool(httpsOnly),
+			DailyMemoryTimeQuota: utils.Int32(int32(dailyMemoryTimeQuota)),
+			SiteConfig:           &siteConfig,
+		},
+	}
+
+	if v, ok := d.GetOk("key_vault_reference_identity_id"); ok {
+		siteEnvelope.SiteProperties.KeyVaultReferenceIdentity = utils.String(v.(string))
+	}
+
+	if clientCertMode != "" {
+		siteEnvelope.SiteProperties.ClientCertMode = web.ClientCertMode(clientCertMode)
+	}
+
+	if _, ok := d.GetOk("identity"); ok {
+		appServiceIdentity, err := expandAppServiceIdentity(d.Get("identity").([]interface{}))
+		if err != nil {
+			return fmt.Errorf("expanding `identity`: %+v", err)
+		}
+		siteEnvelope.Identity = appServiceIdentity
+	}
+
+	future, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.SiteName, siteEnvelope)
+	if err != nil {
+		return fmt.Errorf("updating Function App %q (Resource Group %q): %+v", id.SiteName, id.ResourceGroup, err)
+	}
+
+	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("waiting for update of Function App %q (Resource Group %q): %+v", id.SiteName, id.ResourceGroup, err)
+	}
+
+	settings := web.StringDictionary{
+		Properties: appSettings,
+	}
+
+	if _, err = client.UpdateApplicationSettings(ctx, id.ResourceGroup, id.SiteName, settings); err != nil {
+		return fmt.Errorf("updating Application Settings for Function App %q: %+v", id.SiteName, err)
+	}
+
+	// If `source_control` is defined, we need to set site_config.0.scm_type to "None" or we cannot update it
+	// repo_url is required by the API
+	_, hasSourceControl := d.GetOk("source_control.0.repo_url")
+
+	scmType := web.ScmTypeNone
+
+	if d.HasChange("site_config") || hasSourceControl {
+		siteConfig, err := expandFunctionAppSiteConfig(d)
+		if err != nil {
+			return fmt.Errorf("expanding `site_config` for Function App %q (Resource Group %q): %s", id.SiteName, id.ResourceGroup, err)
+		}
+		siteConfigResource := web.SiteConfigResource{
+			SiteConfig: &siteConfig,
+		}
+
+		scmType = siteConfig.ScmType
+		// ScmType being set blocks the update of source_control in _most_ cases, ADO is an exception
+		if hasSourceControl && scmType != web.ScmTypeVSTSRM {
+			siteConfigResource.SiteConfig.ScmType = web.ScmTypeNone
+		}
+
+		if _, err := client.CreateOrUpdateConfiguration(ctx, id.ResourceGroup, id.SiteName, siteConfigResource); err != nil {
+			return fmt.Errorf("updating Configuration for Function App %q: %+v", id.SiteName, err)
+		}
+	}
+
+	// Don't send source_control changes for ADO controlled Apps
+	if hasSourceControl && scmType != web.ScmTypeVSTSRM {
+		sourceControlProperties := expandAppServiceSiteSourceControl(d)
+		sourceControl := &web.SiteSourceControl{}
+		sourceControl.SiteSourceControlProperties = sourceControlProperties
+		scFuture, err := client.CreateOrUpdateSourceControl(ctx, id.ResourceGroup, id.SiteName, *sourceControl)
+		if err != nil {
+			return fmt.Errorf("failed to create App Service Source Control for %q (Resource Group %q): %+v", id.SiteName, id.ResourceGroup, err)
+		}
+
+		err = scFuture.WaitForCompletionRef(ctx, client.Client)
+		if err != nil {
+			return fmt.Errorf("failed waiting for App Service Source Control configuration: %+v", err)
+		}
+
+		sc, err := client.GetSourceControl(ctx, id.ResourceGroup, id.SiteName)
+		if err != nil {
+			return fmt.Errorf("failed reading back App Service Source Control for %q", *sc.Name)
+		}
+	}
+
+	if d.HasChange("auth_settings") {
+		authSettingsRaw := d.Get("auth_settings").([]interface{})
+		authSettingsProperties := expandAppServiceAuthSettings(authSettingsRaw)
+		authSettings := web.SiteAuthSettings{
+			ID:                         utils.String(d.Id()),
+			SiteAuthSettingsProperties: &authSettingsProperties,
+		}
+
+		if _, err := client.UpdateAuthSettings(ctx, id.ResourceGroup, id.SiteName, authSettings); err != nil {
+			return fmt.Errorf("updating Authentication Settings for Function App %q: %+v", id.SiteName, err)
+		}
+	}
+
+	if d.HasChange("connection_string") {
+		// update the ConnectionStrings
+		connectionStrings := expandFunctionAppConnectionStrings(d)
+		properties := web.ConnectionStringDictionary{
+			Properties: connectionStrings,
+		}
+
+		if _, err := client.UpdateConnectionStrings(ctx, id.ResourceGroup, id.SiteName, properties); err != nil {
+			return fmt.Errorf("updating Connection Strings for App Service %q: %+v", id.SiteName, err)
+		}
+	}
+
+	return resourceFunctionAppRead(d, meta)
+}

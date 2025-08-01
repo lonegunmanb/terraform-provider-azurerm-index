@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2022-10-01-preview/accessconnector"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	mlworkspace "github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenWorkspaceEnhancedSecurity(input *workspaces.EnhancedSecurityComplianceDefinition) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	enhancedSecurityCompliance := make(map[string]interface{})
+
+	if v := input.AutomaticClusterUpdate; v != nil {
+		enhancedSecurityCompliance["automatic_cluster_update_enabled"] = pointer.From(v.Value) != workspaces.AutomaticClusterUpdateValueDisabled
+	}
+
+	if v := input.EnhancedSecurityMonitoring; v != nil {
+		enhancedSecurityCompliance["enhanced_security_monitoring_enabled"] = pointer.From(v.Value) != workspaces.EnhancedSecurityMonitoringValueDisabled
+	}
+
+	if v := input.ComplianceSecurityProfile; v != nil {
+		enhancedSecurityCompliance["compliance_security_profile_enabled"] = pointer.From(v.Value) != workspaces.ComplianceSecurityProfileValueDisabled
+
+		standards := pluginsdk.NewSet(pluginsdk.HashString, nil)
+		for _, s := range pointer.From(v.ComplianceStandards) {
+			if s == workspaces.ComplianceStandardNONE {
+				continue
+			}
+			standards.Add(string(s))
+		}
+
+		enhancedSecurityCompliance["compliance_security_profile_standards"] = standards
+	}
+
+	return []interface{}{enhancedSecurityCompliance}
+}

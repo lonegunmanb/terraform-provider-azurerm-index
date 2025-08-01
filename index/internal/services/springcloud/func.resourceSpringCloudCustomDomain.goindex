@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func resourceSpringCloudCustomDomain() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSpringCloudCustomDomainCreateUpdate,
+		Read:   resourceSpringCloudCustomDomainRead,
+		Update: resourceSpringCloudCustomDomainCreateUpdate,
+		Delete: resourceSpringCloudCustomDomainDelete,
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.SpringCloudCustomDomainV0ToV1{},
+		}),
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.SpringCloudCustomDomainID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.SpringCloudCustomDomainName,
+			},
+
+			"spring_cloud_app_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.SpringCloudAppID,
+			},
+
+			"certificate_name": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+				RequiredWith: []string{"thumbprint"},
+			},
+
+			"thumbprint": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+				RequiredWith: []string{"certificate_name"},
+			},
+		},
+	}
+}

@@ -1,0 +1,103 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/images"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryimageversions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSharedImageVersionCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Compute.GalleryImageVersionsClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := galleryimageversions.NewImageVersionID(subscriptionId, d.Get("resource_group_name").(string), d.Get("gallery_name").(string), d.Get("image_name").(string), d.Get("name").(string))
+
+	existing, err := client.Get(ctx, id, galleryimageversions.DefaultGetOperationOptions())
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+		}
+	}
+
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_shared_image_version", id.ID())
+	}
+
+	targetRegions, err := expandSharedImageVersionTargetRegions(d)
+	if err != nil {
+		return err
+	}
+
+	version := galleryimageversions.GalleryImageVersion{
+		Location: location.Normalize(d.Get("location").(string)),
+		Properties: &galleryimageversions.GalleryImageVersionProperties{
+			PublishingProfile: &galleryimageversions.GalleryArtifactPublishingProfileBase{
+				ExcludeFromLatest: pointer.To(d.Get("exclude_from_latest").(bool)),
+				ReplicationMode:   pointer.To(galleryimageversions.ReplicationMode(d.Get("replication_mode").(string))),
+				TargetRegions:     targetRegions,
+			},
+			SafetyProfile: &galleryimageversions.GalleryImageVersionSafetyProfile{
+				AllowDeletionOfReplicatedLocations: utils.Bool(d.Get("deletion_of_replicated_locations_enabled").(bool)),
+			},
+			StorageProfile: galleryimageversions.GalleryImageVersionStorageProfile{},
+		},
+		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	if v, ok := d.GetOk("end_of_life_date"); ok {
+		endOfLifeDate, _ := time.Parse(time.RFC3339, v.(string))
+		version.Properties.PublishingProfile.EndOfLifeDate = pointer.To(date.Time{
+			Time: endOfLifeDate,
+		}.String())
+	}
+
+	if v, ok := d.GetOk("managed_image_id"); ok {
+		version.Properties.StorageProfile.Source = &galleryimageversions.GalleryArtifactVersionFullSource{
+			Id: utils.String(v.(string)),
+		}
+	}
+
+	if v, ok := d.GetOk("os_disk_snapshot_id"); ok {
+		version.Properties.StorageProfile.OsDiskImage = &galleryimageversions.GalleryDiskImage{
+			Source: &galleryimageversions.GalleryDiskImageSource{
+				Id: pointer.To(v.(string)),
+			},
+		}
+	}
+
+	if v, ok := d.GetOk("blob_uri"); ok {
+		version.Properties.StorageProfile.OsDiskImage = &galleryimageversions.GalleryDiskImage{
+			Source: &galleryimageversions.GalleryDiskImageSource{
+				Id:  pointer.To(d.Get("storage_account_id").(string)),
+				Uri: pointer.To(v.(string)),
+			},
+		}
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, version); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceSharedImageVersionRead(d, meta)
+}

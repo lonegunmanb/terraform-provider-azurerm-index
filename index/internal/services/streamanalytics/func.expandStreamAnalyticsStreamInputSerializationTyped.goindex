@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/streamanalytics
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2020-03-01/inputs"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandStreamAnalyticsStreamInputSerializationTyped(serialization []Serialization) (inputs.Serialization, error) {
+	v := serialization[0]
+
+	inputType := v.Type
+	encoding := v.Encoding
+	fieldDelimiter := v.FieldDelimiter
+
+	var props interface{}
+
+	switch inputType {
+	case string(inputs.EventSerializationTypeAvro):
+		return inputs.AvroSerialization{
+			Properties: &props,
+		}, nil
+
+	case string(inputs.EventSerializationTypeCsv):
+		if encoding == "" {
+			return nil, fmt.Errorf("`encoding` must be specified when `type` is set to `Csv`")
+		}
+		if fieldDelimiter == "" {
+			return nil, fmt.Errorf("`field_delimiter` must be set when `type` is set to `Csv`")
+		}
+		return inputs.CsvSerialization{
+			Properties: &inputs.CsvSerializationProperties{
+				Encoding:       pointer.To(inputs.Encoding(encoding)),
+				FieldDelimiter: pointer.To(fieldDelimiter),
+			},
+		}, nil
+
+	case string(inputs.EventSerializationTypeJson):
+		if encoding == "" {
+			return nil, fmt.Errorf("`encoding` must be specified when `type` is set to `Json`")
+		}
+
+		return inputs.JsonSerialization{
+			Properties: &inputs.JsonSerializationProperties{
+				Encoding: pointer.To(inputs.Encoding(encoding)),
+			},
+		}, nil
+	}
+
+	return nil, fmt.Errorf("Unsupported Input Type %q", inputType)
+}

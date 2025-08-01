@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serverdnsaliases"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (m ServerDNSAliasResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MSSQL.ServerDNSAliasClient
+
+			var alias ServerDNSAliasModel
+			if err := metadata.Decode(&alias); err != nil {
+				return err
+			}
+
+			serverID, err := parse.ServerID(alias.MsSQLServerId)
+			if err != nil {
+				return err
+			}
+
+			id := serverdnsaliases.NewDnsAliasID(serverID.SubscriptionId, serverID.ResourceGroup, serverID.Name, alias.Name)
+			existing, err := client.Get(ctx, id)
+			if !response.WasNotFound(existing.HttpResponse) {
+				if err != nil {
+					return fmt.Errorf("retreiving %s: %v", id, err)
+				}
+				return metadata.ResourceRequiresImport(m.ResourceType(), id)
+			}
+
+			err = client.CreateOrUpdateThenPoll(ctx, id)
+			if err != nil {
+				return fmt.Errorf("creating %s: %v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

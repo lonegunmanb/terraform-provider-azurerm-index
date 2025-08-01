@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2019-06-01-preview/tasks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenRegistryTaskSourceTriggers(triggers *[]tasks.SourceTrigger, model ContainerRegistryTaskModel) []SourceTrigger {
+	if triggers == nil {
+		return nil
+	}
+	out := make([]SourceTrigger, 0, len(*triggers))
+	for i, trigger := range *triggers {
+		obj := SourceTrigger{
+			Enabled: *trigger.Status == tasks.TriggerStatusEnabled,
+		}
+		obj.Name = trigger.Name
+
+		if trigger.SourceTriggerEvents != nil {
+			events := make([]string, 0, len(trigger.SourceTriggerEvents))
+			for _, event := range trigger.SourceTriggerEvents {
+				events = append(events, string(event))
+			}
+			obj.Events = events
+		}
+
+		obj.SourceType = string(trigger.SourceRepository.SourceControlType)
+		obj.RepositoryURL = trigger.SourceRepository.RepositoryURL
+		if trigger.SourceRepository.Branch != nil {
+			obj.Branch = *trigger.SourceRepository.Branch
+		}
+
+		// Auth is not returned from API, setting it from config.
+		if len(model.SourceTrigger) > i {
+			obj.Auth = model.SourceTrigger[i].Auth
+		}
+
+		out = append(out, obj)
+	}
+	return out
+}

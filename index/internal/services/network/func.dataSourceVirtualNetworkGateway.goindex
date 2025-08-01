@@ -1,0 +1,243 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func dataSourceVirtualNetworkGateway() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Read: dataSourceVirtualNetworkGatewayRead,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Read: pluginsdk.DefaultTimeout(5 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupNameForDataSource(),
+
+			"location": commonschema.LocationComputed(),
+
+			"type": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"vpn_type": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			// TODO 4.0: change this from enable_* to *_enabled
+			"enable_bgp": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"private_ip_address_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"active_active": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"sku": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"generation": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"ip_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"private_ip_address_allocation": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"subnet_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"private_ip_address": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"public_ip_address_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"vpn_client_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"address_space": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"aad_tenant": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"aad_audience": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"aad_issuer": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"root_certificate": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"public_cert_data": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+								},
+							},
+						},
+
+						"revoked_certificate": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"thumbprint": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+								},
+							},
+						},
+
+						"radius_server_address": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"radius_server_secret": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"vpn_client_protocols": {
+							Type:     pluginsdk.TypeSet,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+					},
+				},
+			},
+
+			"bgp_settings": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"asn": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+
+						"peering_address": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"peer_weight": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"custom_route": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"address_prefixes": {
+							Type:     pluginsdk.TypeSet,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+					},
+				},
+			},
+
+			"default_local_network_gateway_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"tags": commonschema.TagsDataSource(),
+		},
+	}
+}

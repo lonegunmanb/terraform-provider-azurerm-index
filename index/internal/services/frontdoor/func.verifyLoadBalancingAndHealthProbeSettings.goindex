@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func verifyLoadBalancingAndHealthProbeSettings(backendPools []interface{}, loadBalancingSettings []interface{}, healthProbeSettings []interface{}) error {
+	for _, bps := range backendPools {
+		backendPool := bps.(map[string]interface{})
+		backendPoolName := backendPool["name"]
+		backendPoolLoadBalancingName := backendPool["load_balancing_name"]
+		backendPoolHealthProbeName := backendPool["health_probe_name"]
+		found := false
+
+		// Verify backend pool load balancing settings name exists
+		if len(loadBalancingSettings) > 0 {
+			for _, lbs := range loadBalancingSettings {
+				loadBalancing := lbs.(map[string]interface{})
+				loadBalancingName := loadBalancing["name"]
+
+				if loadBalancingName == backendPoolLoadBalancingName {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return fmt.Errorf(`"backend_pool":%q "load_balancing_name":%q was not found in the configuration file. verify you have the "backend_pool_load_balancing":%q defined in the configuration file`, backendPoolName, backendPoolLoadBalancingName, backendPoolLoadBalancingName)
+			}
+		}
+
+		found = false
+
+		// Verify health probe settings name exists
+		if len(healthProbeSettings) > 0 {
+			for _, hps := range healthProbeSettings {
+				healthProbe := hps.(map[string]interface{})
+				healthProbeName := healthProbe["name"]
+
+				if healthProbeName == backendPoolHealthProbeName {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return fmt.Errorf(`"backend_pool":%q "health_probe_name":%q was not found in the configuration file. verify you have the "backend_pool_health_probe":%q defined in the configuration file`, backendPoolName, backendPoolHealthProbeName, backendPoolHealthProbeName)
+			}
+		}
+	}
+
+	return nil
+}

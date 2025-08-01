@@ -1,0 +1,125 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCdnFrontDoorFirewallPolicyCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Cdn.FrontDoorFirewallPoliciesClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	name := d.Get("name").(string)
+	resourceGroup := d.Get("resource_group_name").(string)
+
+	id := waf.NewFrontDoorWebApplicationFirewallPolicyID(subscriptionId, resourceGroup, name)
+
+	result, err := client.PoliciesGet(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(result.HttpResponse) {
+			return fmt.Errorf("checking for existing %s: %+v", id, err)
+		}
+	}
+
+	if !response.WasNotFound(result.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_cdn_frontdoor_firewall_policy", id.ID())
+	}
+
+	enabled := waf.PolicyEnabledStateDisabled
+
+	if d.Get("enabled").(bool) {
+		enabled = waf.PolicyEnabledStateEnabled
+	}
+
+	requestBodyCheck := waf.PolicyRequestBodyCheckDisabled
+
+	if d.Get("request_body_check_enabled").(bool) {
+		requestBodyCheck = waf.PolicyRequestBodyCheckEnabled
+	}
+
+	sku := d.Get("sku_name").(string)
+	mode := waf.PolicyMode(d.Get("mode").(string))
+	redirectUrl := d.Get("redirect_url").(string)
+	customBlockResponseStatusCode := d.Get("custom_block_response_status_code").(int)
+	customBlockResponseBody := d.Get("custom_block_response_body").(string)
+	customRules := d.Get("custom_rule").([]interface{})
+	managedRules, err := expandCdnFrontDoorFirewallManagedRules(d.Get("managed_rule").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding managed_rule: %+v", err)
+	}
+
+	if sku != string(waf.SkuNamePremiumAzureFrontDoor) && managedRules != nil {
+		return fmt.Errorf("the 'managed_rule' field is only supported with the 'Premium_AzureFrontDoor' sku, got %q", sku)
+	}
+
+	payload := waf.WebApplicationFirewallPolicy{
+		Location: pointer.To(location.Normalize("Global")),
+		Sku: &waf.Sku{
+			Name: pointer.To(waf.SkuName(sku)),
+		},
+		Properties: &waf.WebApplicationFirewallPolicyProperties{
+			PolicySettings: &waf.PolicySettings{
+				EnabledState:     pointer.To(enabled),
+				Mode:             pointer.To(mode),
+				RequestBodyCheck: pointer.To(requestBodyCheck),
+			},
+			CustomRules: expandCdnFrontDoorFirewallCustomRules(customRules),
+		},
+		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	// NOTE: JS Challenge Expiration policy is enabled by default on Premium SKU's with a default of
+	// 30 minutes, if it is not in the config set the default and include it in the policy settings
+	// payload block...
+	if sku == string(waf.SkuNamePremiumAzureFrontDoor) {
+		// Set the Default value...
+		jsChallengeExpirationInMinutes := 30
+
+		if v, ok := d.GetOk("js_challenge_cookie_expiration_in_minutes"); ok {
+			jsChallengeExpirationInMinutes = v.(int)
+		}
+
+		payload.Properties.PolicySettings.JavascriptChallengeExpirationInMinutes = pointer.FromInt64(int64(jsChallengeExpirationInMinutes))
+	}
+
+	if managedRules != nil {
+		payload.Properties.ManagedRules = managedRules
+	}
+
+	if redirectUrl != "" {
+		payload.Properties.PolicySettings.RedirectURL = pointer.To(redirectUrl)
+	}
+
+	if customBlockResponseBody != "" {
+		payload.Properties.PolicySettings.CustomBlockResponseBody = pointer.To(customBlockResponseBody)
+	}
+
+	if customBlockResponseStatusCode > 0 {
+		payload.Properties.PolicySettings.CustomBlockResponseStatusCode = pointer.To(int64(customBlockResponseStatusCode))
+	}
+
+	err = client.PoliciesCreateOrUpdateThenPoll(ctx, id, payload)
+	if err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceCdnFrontDoorFirewallPolicyRead(d, meta)
+}

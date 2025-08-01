@@ -1,0 +1,109 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/publicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	compute2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	intStor "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func determineVirtualMachineIPAddress(ctx context.Context, meta interface{}, props *virtualmachines.VirtualMachineProperties) (string, error) {
+	nicClient := meta.(*clients.Client).Network.NetworkInterfaces
+	pipClient := meta.(*clients.Client).Network.PublicIPAddresses
+
+	if props == nil {
+		return "", nil
+	}
+
+	var networkInterface *networkinterfaces.NetworkInterface
+
+	if profile := props.NetworkProfile; profile != nil {
+		if nicReferences := profile.NetworkInterfaces; nicReferences != nil {
+			for _, nicReference := range *nicReferences {
+				// pick out the primary if multiple NIC's are assigned
+				if len(*nicReferences) > 1 {
+					if nicReference.Properties == nil || nicReference.Properties.Primary == nil || !*nicReference.Properties.Primary {
+						continue
+					}
+				}
+
+				id, err := commonids.ParseNetworkInterfaceID(*nicReference.Id)
+				if err != nil {
+					return "", err
+				}
+
+				nic, err := nicClient.Get(ctx, *id, networkinterfaces.DefaultGetOperationOptions())
+				if err != nil {
+					return "", fmt.Errorf("retrieving %s: %+v", id, err)
+				}
+
+				networkInterface = nic.Model
+				break
+			}
+		}
+	}
+
+	if networkInterface == nil {
+		return "", fmt.Errorf("A Network Interface wasn't found on the Virtual Machine")
+	}
+
+	if props := networkInterface.Properties; props != nil {
+		if configs := props.IPConfigurations; configs != nil {
+			for _, config := range *configs {
+				if configProps := config.Properties; configProps != nil {
+					if configProps.PublicIPAddress != nil {
+						id, err := commonids.ParsePublicIPAddressID(*configProps.PublicIPAddress.Id)
+						if err != nil {
+							return "", err
+						}
+
+						pip, err := pipClient.Get(ctx, *id, publicipaddresses.DefaultGetOperationOptions())
+						if err != nil {
+							return "", fmt.Errorf("retrieving %s: %+v", id, err)
+						}
+
+						if model := pip.Model; model != nil {
+							if pipProps := model.Properties; pipProps != nil {
+								if ip := pipProps.IPAddress; ip != nil {
+									return *ip, nil
+								}
+							}
+						}
+					}
+
+					if ip := configProps.PrivateIPAddress; ip != nil {
+						return *ip, nil
+					}
+				}
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no Public or Private IP Address found on the Primary Network Interface")
+}

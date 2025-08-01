@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"fmt"
+	"log"
+	"net/url"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	eventhubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	servicebusValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func flattenIoTHubFallbackRoute(input *devices.RoutingProperties) []interface{} {
+	if input.FallbackRoute == nil {
+		return []interface{}{}
+	}
+
+	output := make(map[string]interface{})
+	route := input.FallbackRoute
+
+	if condition := route.Condition; condition != nil {
+		output["condition"] = *condition
+	}
+	if isEnabled := route.IsEnabled; isEnabled != nil {
+		output["enabled"] = *isEnabled
+	}
+	if source := route.Source; source != nil {
+		output["source"] = *source
+	}
+
+	output["endpoint_names"] = utils.FlattenStringSlice(route.EndpointNames)
+
+	return []interface{}{output}
+}

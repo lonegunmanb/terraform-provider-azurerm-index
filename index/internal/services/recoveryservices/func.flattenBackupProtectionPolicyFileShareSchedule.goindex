@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenBackupProtectionPolicyFileShareSchedule(schedule protectionpolicies.SimpleSchedulePolicy) ([]interface{}, error) {
+	block := map[string]interface{}{}
+
+	block["frequency"] = string(pointer.From(schedule.ScheduleRunFrequency))
+
+	if times := schedule.ScheduleRunTimes; times != nil && len(*times) > 0 {
+		policyTime, _ := time.Parse(time.RFC3339, (*times)[0])
+		block["time"] = policyTime.Format("15:04")
+	}
+
+	if hourly := schedule.HourlySchedule; hourly != nil {
+		hourlyBlock := make(map[string]interface{}, 0)
+		if hourly.ScheduleWindowStartTime != nil {
+			startTime, err := time.Parse(time.RFC3339, *hourly.ScheduleWindowStartTime)
+			if err != nil {
+				return nil, fmt.Errorf("error parsing schedule window start time: %s", err)
+			}
+			hourlyBlock["start_time"] = startTime.Format("15:04")
+		}
+		hourlyBlock["interval"] = pointer.From(hourly.Interval)
+		hourlyBlock["window_duration"] = pointer.From(hourly.ScheduleWindowDuration)
+		block["hourly"] = []interface{}{hourlyBlock}
+	}
+
+	return []interface{}{block}, nil
+}

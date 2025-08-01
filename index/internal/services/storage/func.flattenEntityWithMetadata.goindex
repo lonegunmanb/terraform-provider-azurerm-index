@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/entities"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
+)
+func flattenEntityWithMetadata(entity map[string]interface{}) TableEntityDataSourceModel {
+	delete(entity, "Timestamp")
+
+	result := TableEntityDataSourceModel{}
+
+	properties := map[string]interface{}{}
+	for k, v := range entity {
+		if k == "PartitionKey" {
+			result.PartitionKey = v.(string)
+			continue
+		}
+
+		if k == "RowKey" {
+			result.RowKey = v.(string)
+			continue
+		}
+		// skip ODATA annotation returned with fullmetadata
+		if strings.HasPrefix(k, "odata.") || strings.HasSuffix(k, "@odata.type") {
+			continue
+		}
+		if dtype, ok := entity[k+"@odata.type"]; ok {
+			switch dtype {
+			case "Edm.Boolean":
+				properties[k] = fmt.Sprint(v)
+			case "Edm.Double":
+				properties[k] = fmt.Sprintf("%f", v)
+			case "Edm.Int32", "Edm.Int64":
+				// `v` returned as string for int 64
+				properties[k] = fmt.Sprint(v)
+			case "Edm.String":
+				properties[k] = v
+			default:
+				log.Printf("[WARN] key %q with unexpected @odata.type %q", k, dtype)
+				continue
+			}
+
+			properties[k+"@odata.type"] = dtype
+		} else {
+			// special handling for property types that do not require the annotation to be present
+			// https://docs.microsoft.com/en-us/rest/api/storageservices/payload-format-for-table-service-operations#property-types-in-a-json-feed
+			switch c := v.(type) {
+			case bool:
+				properties[k] = fmt.Sprint(v)
+				properties[k+"@odata.type"] = "Edm.Boolean"
+			case float64:
+				f64 := v.(float64)
+				if v == float64(int64(f64)) {
+					properties[k] = fmt.Sprintf("%d", int64(f64))
+					properties[k+"@odata.type"] = "Edm.Int32"
+				} else {
+					// fmt.Sprintf("%f", v) will return `123.123000` for `123.123`, have to use fmt.Sprint
+					properties[k] = fmt.Sprint(v)
+					properties[k+"@odata.type"] = "Edm.Double"
+				}
+			case string:
+				properties[k] = v
+			default:
+				log.Printf("[WARN] key %q with unexpected type %T", k, c)
+			}
+		}
+	}
+	result.Properties = properties
+
+	return result
+}

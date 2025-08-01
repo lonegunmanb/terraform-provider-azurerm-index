@@ -1,0 +1,91 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/networkwatchers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/connectionmonitors"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenNetworkConnectionMonitorEndpoint(input *[]connectionmonitors.ConnectionMonitorEndpoint) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	for _, item := range *input {
+		var address string
+		if item.Address != nil {
+			address = *item.Address
+		}
+
+		var coverageLevel string
+		if item.CoverageLevel != nil && string(*item.CoverageLevel) != "" {
+			coverageLevel = string(*item.CoverageLevel)
+		}
+
+		var endpointType string
+		if item.Type != nil && string(*item.Type) != "" {
+			endpointType = string(*item.Type)
+		}
+
+		var resourceId string
+		if item.ResourceId != nil {
+			resourceId = *item.ResourceId
+		}
+
+		v := map[string]interface{}{
+			"name":                 item.Name,
+			"address":              address,
+			"coverage_level":       coverageLevel,
+			"target_resource_id":   resourceId,
+			"target_resource_type": endpointType,
+			"filter":               flattenNetworkConnectionMonitorEndpointFilter(item.Filter),
+		}
+
+		if scope := item.Scope; scope != nil {
+			if includeScope := scope.Include; includeScope != nil {
+				includedAddresses := make([]interface{}, 0)
+
+				for _, includedItem := range *includeScope {
+					if includedAddress := includedItem.Address; includedAddress != nil {
+						includedAddresses = append(includedAddresses, includedAddress)
+					}
+				}
+
+				v["included_ip_addresses"] = includedAddresses
+			}
+
+			if excludeScope := scope.Exclude; excludeScope != nil {
+				excludedAddresses := make([]interface{}, 0)
+
+				for _, excludedItem := range *excludeScope {
+					if excludedAddress := excludedItem.Address; excludedAddress != nil {
+						excludedAddresses = append(excludedAddresses, excludedAddress)
+					}
+				}
+
+				v["excluded_ip_addresses"] = excludedAddresses
+			}
+		}
+
+		results = append(results, v)
+	}
+	return results
+}

@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/synapse/mgmt/v2.0/synapse" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSynapseWorkspaceKeysCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Synapse.KeysClient
+	// workspaceClient := meta.(*clients.Client).Synapse.WorkspaceClient
+
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	workspaceId, err := parse.WorkspaceID(d.Get("synapse_workspace_id").(string))
+	if err != nil {
+		return err
+	}
+
+	key := d.Get("customer_managed_key_versionless_id")
+	keyName := d.Get("customer_managed_key_name").(string)
+	isActiveCMK := d.Get("active").(bool)
+
+	log.Printf("[INFO] Is active CMK: %t", isActiveCMK)
+
+	keyProperties := synapse.KeyProperties{
+		IsActiveCMK: &isActiveCMK,
+		KeyVaultURL: utils.String(key.(string)),
+	}
+
+	synapseKey := synapse.Key{
+		KeyProperties: &keyProperties,
+	}
+
+	actualKeyName := ""
+	if keyName != "" {
+		actualKeyName = keyName
+	}
+
+	locks.ByName(workspaceId.Name, "azurerm_synapse_workspace")
+	defer locks.UnlockByName(workspaceId.Name, "azurerm_synapse_workspace")
+	keyresult, err := client.CreateOrUpdate(ctx, workspaceId.ResourceGroup, workspaceId.Name, actualKeyName, synapseKey)
+	if err != nil {
+		return fmt.Errorf("creating Synapse Workspace Key %q (Workspace %q): %+v", workspaceId.Name, workspaceId.Name, err)
+	}
+
+	if keyresult.ID == nil || *keyresult.ID == "" {
+		return fmt.Errorf("empty or nil ID returned for Synapse Key 'cmk'")
+	}
+
+	// If the state of the key in the response (from Azure) is not equal to the desired target state (from plan/config), we'll wait until that change is complete
+	if isActiveCMK != *keyresult.KeyProperties.IsActiveCMK {
+		updateWait := synapseKeysWaitForStateChange(ctx, meta, d.Timeout(pluginsdk.TimeoutUpdate), workspaceId.ResourceGroup, workspaceId.Name, actualKeyName, strconv.FormatBool(*keyresult.KeyProperties.IsActiveCMK), strconv.FormatBool(isActiveCMK))
+
+		if _, err := updateWait.WaitForStateContext(ctx); err != nil {
+			return fmt.Errorf("waiting for Synapse Keys to finish updating '%q' (Workspace Group %q): %v", actualKeyName, workspaceId.Name, err)
+		}
+	}
+
+	id := parse.NewWorkspaceKeysID(workspaceId.SubscriptionId, workspaceId.ResourceGroup, workspaceId.Name, actualKeyName)
+	d.SetId(id.ID())
+
+	return resourceSynapseWorkspaceKeyRead(d, meta)
+}

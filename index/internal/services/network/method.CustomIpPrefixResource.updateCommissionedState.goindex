@@ -1,0 +1,164 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/customipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r CustomIpPrefixResource) updateCommissionedState(ctx context.Context, id customipprefixes.CustomIPPrefixId, desiredState customipprefixes.CommissionedState) (*customipprefixes.CommissionedState, error) {
+	existing, err := r.client.Get(ctx, id, customipprefixes.DefaultGetOperationOptions())
+	if err != nil {
+		return nil, fmt.Errorf("retrieving existing %s: %+v", id, err)
+	}
+	if existing.Model == nil {
+		return nil, fmt.Errorf("retrieving existing %s: `model` was nil", id)
+	}
+	if existing.Model.Properties == nil {
+		return nil, fmt.Errorf("retrieving existing %s: `properties` was nil", id)
+	}
+
+	initialState := existing.Model.Properties.CommissionedState
+
+	log.Printf("[DEBUG] Updating CommissionedState for %s from current value %q to desired value %q..", id, *initialState, desiredState)
+
+	// stateTree is a map of desired state, to a map of current state, to the list of transition states needed to get there
+	stateTree := map[customipprefixes.CommissionedState]map[customipprefixes.CommissionedState][]customipprefixes.CommissionedState{
+		customipprefixes.CommissionedStateDeprovisioned: {
+			customipprefixes.CommissionedStateProvisioned:                     {customipprefixes.CommissionedStateDeprovisioning},
+			customipprefixes.CommissionedStateCommissioned:                    {customipprefixes.CommissionedStateDecommissioning, customipprefixes.CommissionedStateDeprovisioning},
+			customipprefixes.CommissionedStateCommissionedNoInternetAdvertise: {customipprefixes.CommissionedStateDecommissioning, customipprefixes.CommissionedStateDeprovisioning},
+		},
+		customipprefixes.CommissionedStateProvisioned: {
+			customipprefixes.CommissionedStateDeprovisioned:                   {customipprefixes.CommissionedStateProvisioning},
+			customipprefixes.CommissionedStateCommissioned:                    {customipprefixes.CommissionedStateDecommissioning},
+			customipprefixes.CommissionedStateCommissionedNoInternetAdvertise: {customipprefixes.CommissionedStateDecommissioning},
+		},
+		customipprefixes.CommissionedStateCommissioned: {
+			customipprefixes.CommissionedStateDeprovisioned:                   {customipprefixes.CommissionedStateProvisioning, customipprefixes.CommissionedStateCommissioning},
+			customipprefixes.CommissionedStateProvisioned:                     {customipprefixes.CommissionedStateCommissioning},
+			customipprefixes.CommissionedStateCommissionedNoInternetAdvertise: {customipprefixes.CommissionedStateCommissioning},
+		},
+		customipprefixes.CommissionedStateCommissionedNoInternetAdvertise: {
+			customipprefixes.CommissionedStateDeprovisioned: {customipprefixes.CommissionedStateProvisioning, customipprefixes.CommissionedStateCommissioning},
+			customipprefixes.CommissionedStateProvisioned:   {customipprefixes.CommissionedStateCommissioning},
+			customipprefixes.CommissionedStateCommissioned:  {customipprefixes.CommissionedStateDecommissioning, customipprefixes.CommissionedStateCommissioning},
+		},
+	}
+
+	// transitioningStatesFor returns the known transitioning states for the desired goal state
+	transitioningStatesFor := func(finalState customipprefixes.CommissionedState) (out commissionedStates) {
+		switch finalState {
+		case customipprefixes.CommissionedStateProvisioned:
+			out = commissionedStates{customipprefixes.CommissionedStateProvisioning, customipprefixes.CommissionedStateDecommissioning}
+		case customipprefixes.CommissionedStateDeprovisioned:
+			out = commissionedStates{customipprefixes.CommissionedStateDeprovisioning}
+		case customipprefixes.CommissionedStateCommissioned:
+			out = commissionedStates{customipprefixes.CommissionedStateCommissioning}
+		}
+		return
+	}
+
+	// finalStatesFor returns the known final states for the current transitioning state
+	finalStatesFor := func(transitioningState customipprefixes.CommissionedState) (out commissionedStates) {
+		switch transitioningState {
+		case customipprefixes.CommissionedStateProvisioning:
+			out = commissionedStates{customipprefixes.CommissionedStateProvisioned}
+		case customipprefixes.CommissionedStateDeprovisioning:
+			out = commissionedStates{customipprefixes.CommissionedStateDeprovisioned}
+		case customipprefixes.CommissionedStateCommissioning:
+			out = commissionedStates{customipprefixes.CommissionedStateCommissioned, customipprefixes.CommissionedStateCommissionedNoInternetAdvertise}
+		case customipprefixes.CommissionedStateDecommissioning:
+			out = commissionedStates{customipprefixes.CommissionedStateProvisioned}
+		}
+		return
+	}
+
+	// shouldNotAdvertise determines whether to set the noInternetAdvertise flag, which can only be set at the point of transitioning to `Commissioning`
+	shouldNotAdvertise := func(steppingState customipprefixes.CommissionedState) *bool {
+		if steppingState == customipprefixes.CommissionedStateCommissioning {
+			switch desiredState {
+			case customipprefixes.CommissionedStateCommissioned:
+				return pointer.To(false)
+			case customipprefixes.CommissionedStateCommissionedNoInternetAdvertise:
+				return pointer.To(true)
+			}
+		}
+		return nil
+	}
+
+	if plan, ok := stateTree[desiredState]; ok {
+		lastKnownState := initialState
+
+		// If we're already transitioning to the desiredState, wait for this to complete
+		if transitioningStatesFor(desiredState).contains(pointer.From(initialState)) {
+			if lastKnownState, err = r.waitForCommissionedState(ctx, id, transitioningStatesFor(desiredState), commissionedStates{desiredState}); err != nil {
+				return lastKnownState, err
+			}
+		}
+
+		// Return early if the desiredState was already reached
+		if *lastKnownState == desiredState {
+			return lastKnownState, nil
+		}
+
+		for startingState, path := range plan {
+			// Look for a plan that works from our lastKnownState
+			if *lastKnownState == startingState || transitioningStatesFor(startingState).contains(*lastKnownState) {
+				// If we're currently transitioning to the startingState for this plan, wait for this to complete before proceeding
+				if lastKnownState, err = r.waitForCommissionedState(ctx, id, transitioningStatesFor(startingState), commissionedStates{startingState}); err != nil {
+					return lastKnownState, err
+				}
+
+				retries := 0
+				const maxRetries = 2
+
+				// Iterate the plan
+				for i := 0; i < len(path); i++ {
+					steppingState := path[i]
+
+					// Instruct the resource to transition to the next CommissionedState according to the plan
+					if err = r.setCommissionedState(ctx, id, steppingState, shouldNotAdvertise(steppingState)); err != nil {
+						return lastKnownState, err
+					}
+
+					// Wait for the CommissionedState to be reached
+					latestState, err := r.waitForCommissionedState(ctx, id, commissionedStates{steppingState}, finalStatesFor(steppingState))
+					if err != nil {
+						// Known issue where the previous CommissioningState was reported prematurely by the API, so we reattempt up to maxRetries times
+						if lastKnownState != nil && latestState != nil && *latestState == *lastKnownState && retries < maxRetries {
+							retries++
+							i--
+							log.Printf("[DEBUG] Retrying %d of %d times to set CommissionedState field to %q (current state: %q) for %s..", retries, maxRetries, steppingState, *latestState, id)
+							continue
+						}
+
+						return lastKnownState, err
+					}
+
+					// Update the lastKnownState, so we can monitor for retries on the next iteration
+					lastKnownState = latestState
+				}
+
+				return r.waitForCommissionedState(ctx, id, transitioningStatesFor(desiredState), commissionedStates{desiredState})
+			}
+		}
+	} else {
+		return nil, fmt.Errorf("internal-error: unsupported state %q", desiredState)
+	}
+
+	return nil, fmt.Errorf("internal-error: could not transition CommissionedState to %q", desiredState)
+}

@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"regexp"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenSSHKeys(input *virtualmachines.SshConfiguration) (*[]interface{}, error) {
+	if input == nil || input.PublicKeys == nil {
+		return &[]interface{}{}, nil
+	}
+
+	output := make([]interface{}, 0)
+	for _, v := range *input.PublicKeys {
+		if v.KeyData == nil || v.Path == nil {
+			continue
+		}
+
+		username := parseUsernameFromAuthorizedKeysPath(*v.Path)
+		if username == nil {
+			return nil, fmt.Errorf("parsing username from %q", *v.Path)
+		}
+
+		output = append(output, map[string]interface{}{
+			"public_key": *v.KeyData,
+			"username":   *username,
+		})
+	}
+
+	return &output, nil
+}

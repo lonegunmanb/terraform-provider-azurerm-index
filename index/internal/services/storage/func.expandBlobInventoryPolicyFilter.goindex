@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/blobinventorypolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandBlobInventoryPolicyFilter(input []interface{}, objectType string) (*blobinventorypolicies.BlobInventoryPolicyFilter, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+	v := input[0].(map[string]interface{})
+	policyFilter := &blobinventorypolicies.BlobInventoryPolicyFilter{
+		PrefixMatch:         utils.ExpandStringSlice(v["prefix_match"].(*pluginsdk.Set).List()),
+		ExcludePrefix:       utils.ExpandStringSlice(v["exclude_prefixes"].(*pluginsdk.Set).List()),
+		BlobTypes:           utils.ExpandStringSlice(v["blob_types"].(*pluginsdk.Set).List()),
+		IncludeBlobVersions: utils.Bool(v["include_blob_versions"].(bool)),
+		IncludeDeleted:      utils.Bool(v["include_deleted"].(bool)),
+		IncludeSnapshots:    utils.Bool(v["include_snapshots"].(bool)),
+	}
+
+	// If the objectType is Container, the following values must be nil when passed to the API
+	if objectType == string(blobinventorypolicies.ObjectTypeContainer) {
+		if len(*policyFilter.BlobTypes) > 0 || *policyFilter.IncludeBlobVersions || *policyFilter.IncludeSnapshots {
+			return nil, fmt.Errorf("`blobTypes`, `includeBlobVersions`, `includeSnapshots` cannot be used with objectType `Container`")
+		}
+		policyFilter.BlobTypes = nil
+		policyFilter.IncludeBlobVersions = nil
+		policyFilter.IncludeSnapshots = nil
+	}
+
+	return policyFilter, nil
+}

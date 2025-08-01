@@ -1,0 +1,138 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/bot
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/parse"
+	kvValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/botservice/2021-05-01-preview/botservice"
+)
+func (br botBaseResource) readFunc() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Bot.BotClient
+
+			id, err := parse.BotServiceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, id.ResourceGroup, id.Name)
+			if err != nil {
+				if utils.ResponseWasNotFound(resp.Response) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			metadata.ResourceData.Set("name", id.Name)
+			metadata.ResourceData.Set("resource_group_name", id.ResourceGroup)
+			metadata.ResourceData.Set("location", location.NormalizeNilable(resp.Location))
+
+			sku := ""
+			if v := resp.Sku; v != nil {
+				sku = string(v.Name)
+			}
+			metadata.ResourceData.Set("sku", sku)
+
+			metadata.ResourceData.Set("tags", tags.ToTypedObject(resp.Tags))
+
+			// The API doesn't return this property, so we need to set the value from config into state
+			if apiKey, ok := metadata.ResourceData.GetOk("developer_app_insights_api_key"); ok && apiKey.(string) != "" {
+				metadata.ResourceData.Set("developer_app_insights_api_key", apiKey.(string))
+			}
+
+			if props := resp.Properties; props != nil {
+				msAppId := ""
+				if v := props.MsaAppID; v != nil {
+					msAppId = *v
+				}
+				metadata.ResourceData.Set("microsoft_app_id", msAppId)
+
+				displayName := ""
+				if v := props.DisplayName; v != nil {
+					displayName = *v
+				}
+				metadata.ResourceData.Set("display_name", displayName)
+
+				endpoint := ""
+				if v := props.Endpoint; v != nil {
+					endpoint = *v
+				}
+				metadata.ResourceData.Set("endpoint", endpoint)
+
+				key := ""
+				if v := props.DeveloperAppInsightKey; v != nil {
+					key = *v
+				}
+				metadata.ResourceData.Set("developer_app_insights_key", key)
+
+				appInsightsId := ""
+				if v := props.DeveloperAppInsightsApplicationID; v != nil {
+					appInsightsId = *v
+				}
+				metadata.ResourceData.Set("developer_app_insights_application_id", appInsightsId)
+
+				msaAppType := ""
+				if v := props.MsaAppType; v != "" {
+					msaAppType = string(v)
+				}
+				metadata.ResourceData.Set("microsoft_app_type", msaAppType)
+
+				msaAppTenantId := ""
+				if v := props.MsaAppTenantID; v != nil {
+					msaAppTenantId = *v
+				}
+				metadata.ResourceData.Set("microsoft_app_tenant_id", msaAppTenantId)
+
+				msaAppMSIId := ""
+				if v := props.MsaAppMSIResourceID; v != nil {
+					msaAppMSIId = *v
+				}
+				metadata.ResourceData.Set("microsoft_app_msi_id", msaAppMSIId)
+
+				localAuthEnabled := true
+				if v := props.DisableLocalAuth; v != nil {
+					localAuthEnabled = !*v
+				}
+				metadata.ResourceData.Set("local_authentication_enabled", localAuthEnabled)
+
+				publicNetworkAccessEnabled := true
+				if v := props.PublicNetworkAccess; v != botservice.PublicNetworkAccessEnabled {
+					publicNetworkAccessEnabled = false
+				}
+				metadata.ResourceData.Set("public_network_access_enabled", publicNetworkAccessEnabled)
+
+				var luisAppIds []string
+				if v := props.LuisAppIds; v != nil {
+					luisAppIds = *v
+				}
+				metadata.ResourceData.Set("luis_app_ids", utils.FlattenStringSlice(&luisAppIds))
+
+				streamingEndpointEnabled := false
+				if v := props.IsStreamingSupported; v != nil {
+					streamingEndpointEnabled = *v
+				}
+				metadata.ResourceData.Set("streaming_endpoint_enabled", streamingEndpointEnabled)
+
+				metadata.ResourceData.Set("icon_url", pointer.From(props.IconURL))
+
+				metadata.ResourceData.Set("cmk_key_vault_key_url", pointer.From(props.CmekKeyVaultURL))
+			}
+
+			return nil
+		},
+	}
+}

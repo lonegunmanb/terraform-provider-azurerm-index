@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/nginx
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/nginx/2024-11-01-preview/nginxcertificate"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/nginx/2024-11-01-preview/nginxdeployment"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (m CertificateDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Nginx.NginxCertificate
+			var model CertificateDataSourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+			deploymentId, err := nginxdeployment.ParseNginxDeploymentID(model.NginxDeploymentId)
+			if err != nil {
+				return err
+			}
+			id := nginxcertificate.NewCertificateID(
+				deploymentId.SubscriptionId,
+				deploymentId.ResourceGroupName,
+				deploymentId.NginxDeploymentName,
+				model.Name,
+			)
+			result, err := client.CertificatesGet(ctx, id)
+			if err != nil {
+				if response.WasNotFound(result.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			output := CertificateDataSourceModel{
+				Name:              id.CertificateName,
+				NginxDeploymentId: deploymentId.ID(),
+			}
+
+			if model := result.Model; model != nil {
+				prop := result.Model.Properties
+				output.KeyVirtualPath = pointer.From(prop.KeyVirtualPath)
+				output.KeyVaultSecretId = pointer.From(prop.KeyVaultSecretId)
+				output.CertificateVirtualPath = pointer.From(prop.CertificateVirtualPath)
+				output.SHA1Thumbprint = pointer.From(prop.Sha1Thumbprint)
+				output.KeyVaultSecretVersion = pointer.From(prop.KeyVaultSecretVersion)
+				output.KeyVaultSecretCreationDate = pointer.From(prop.KeyVaultSecretCreated)
+				if prop.CertificateError != nil {
+					output.ErrorCode = pointer.From(prop.CertificateError.Code)
+					output.ErrorMessage = pointer.From(prop.CertificateError.Message)
+				}
+			}
+
+			metadata.SetID(id)
+			return metadata.Encode(&output)
+		},
+	}
+}

@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservices/2024-01-01/vaults"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationnetworkmappings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationnetworks"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func fetchReplicationNetworkIdByFriendlyName(ctx context.Context, networksClient *replicationnetworks.ReplicationNetworksClient, fabricId, friendlyName string) (string, error) {
+	parsedFabricId, err := replicationnetworks.ParseReplicationFabricID(fabricId)
+	if err != nil {
+		return "", fmt.Errorf("parsing fabric id: %+v", err)
+	}
+
+	networks, err := networksClient.ListByReplicationFabricsComplete(ctx, *parsedFabricId)
+	if err != nil {
+		return "", fmt.Errorf("listing networks: %+v", err)
+	}
+
+	for _, network := range networks.Items {
+		if network.Properties != nil && network.Properties.FriendlyName != nil && *network.Properties.FriendlyName == friendlyName {
+			return handleAzureSdkForGoBug2824(*network.Id), nil
+		}
+	}
+
+	return "", fmt.Errorf("replication network not found")
+}

@@ -1,0 +1,245 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func FlattenDefaultNodePool(input *[]managedclusters.ManagedClusterAgentPoolProfile, d *pluginsdk.ResourceData) (*[]interface{}, error) {
+	if input == nil {
+		return &[]interface{}{}, nil
+	}
+
+	agentPool, err := findDefaultNodePool(input, d)
+	if err != nil {
+		return nil, err
+	}
+
+	count := 0
+	if agentPool.Count != nil {
+		count = int(*agentPool.Count)
+	}
+
+	enableUltraSSD := false
+	if agentPool.EnableUltraSSD != nil {
+		enableUltraSSD = *agentPool.EnableUltraSSD
+	}
+
+	enableAutoScaling := false
+	if agentPool.EnableAutoScaling != nil {
+		enableAutoScaling = *agentPool.EnableAutoScaling
+	}
+
+	enableFIPS := false
+	if agentPool.EnableFIPS != nil {
+		enableFIPS = *agentPool.EnableFIPS
+	}
+
+	enableNodePublicIP := false
+	if agentPool.EnableNodePublicIP != nil {
+		enableNodePublicIP = *agentPool.EnableNodePublicIP
+	}
+
+	enableHostEncryption := false
+	if agentPool.EnableEncryptionAtHost != nil {
+		enableHostEncryption = *agentPool.EnableEncryptionAtHost
+	}
+
+	gpuInstanceProfile := ""
+	if agentPool.GpuInstanceProfile != nil {
+		gpuInstanceProfile = string(*agentPool.GpuInstanceProfile)
+	}
+
+	maxCount := 0
+	if agentPool.MaxCount != nil {
+		maxCount = int(*agentPool.MaxCount)
+	}
+
+	maxPods := 0
+	if agentPool.MaxPods != nil {
+		maxPods = int(*agentPool.MaxPods)
+	}
+
+	minCount := 0
+	if agentPool.MinCount != nil {
+		minCount = int(*agentPool.MinCount)
+	}
+
+	name := agentPool.Name
+
+	// we pull this from the config, since the temporary node pool for cycling the system node pool won't exist if the operation is successful
+	temporaryName := d.Get("default_node_pool.0.temporary_name_for_rotation").(string)
+
+	var nodeLabels map[string]string
+	if agentPool.NodeLabels != nil {
+		nodeLabels = make(map[string]string)
+		for k, v := range *agentPool.NodeLabels {
+			nodeLabels[k] = v
+		}
+	}
+
+	nodePublicIPPrefixID := ""
+	if agentPool.NodePublicIPPrefixID != nil {
+		nodePublicIPPrefixID = *agentPool.NodePublicIPPrefixID
+	}
+
+	criticalAddonsEnabled := false
+	if agentPool.NodeTaints != nil {
+		for _, taint := range *agentPool.NodeTaints {
+			if strings.EqualFold(taint, "CriticalAddonsOnly=true:NoSchedule") {
+				criticalAddonsEnabled = true
+			}
+		}
+	}
+
+	osDiskSizeGB := 0
+	if agentPool.OsDiskSizeGB != nil {
+		osDiskSizeGB = int(*agentPool.OsDiskSizeGB)
+	}
+
+	osDiskType := managedclusters.OSDiskTypeManaged
+	if agentPool.OsDiskType != nil {
+		osDiskType = *agentPool.OsDiskType
+	}
+
+	podSubnetId := ""
+	if agentPool.PodSubnetID != nil {
+		podSubnetId = *agentPool.PodSubnetID
+	}
+
+	vnetSubnetId := ""
+	if agentPool.VnetSubnetID != nil {
+		vnetSubnetId = *agentPool.VnetSubnetID
+	}
+
+	hostGroupID := ""
+	if agentPool.HostGroupID != nil {
+		hostGroupID = *agentPool.HostGroupID
+	}
+
+	orchestratorVersion := ""
+	// NOTE: workaround for migration from 2022-01-02-preview (<3.12.0) to 2022-03-02-preview (>=3.12.0). Before terraform apply is run against the new API, Azure will respond only with currentOrchestratorVersion, orchestratorVersion will be absent. More details: https://github.com/hashicorp/terraform-provider-azurerm/issues/17833#issuecomment-1227583353
+	if agentPool.OrchestratorVersion != nil {
+		orchestratorVersion = *agentPool.OrchestratorVersion
+	} else if agentPool.CurrentOrchestratorVersion != nil {
+		orchestratorVersion = *agentPool.CurrentOrchestratorVersion
+	}
+
+	proximityPlacementGroupId := ""
+	if agentPool.ProximityPlacementGroupID != nil {
+		proximityPlacementGroupId = *agentPool.ProximityPlacementGroupID
+	}
+
+	scaleDownMode := managedclusters.ScaleDownModeDelete
+	if agentPool.ScaleDownMode != nil {
+		scaleDownMode = *agentPool.ScaleDownMode
+	}
+
+	snapshotId := ""
+	if agentPool.CreationData != nil && agentPool.CreationData.SourceResourceId != nil {
+		id, err := snapshots.ParseSnapshotIDInsensitively(*agentPool.CreationData.SourceResourceId)
+		if err != nil {
+			return nil, err
+		}
+		snapshotId = id.ID()
+	}
+
+	vmSize := ""
+	if agentPool.VMSize != nil {
+		vmSize = *agentPool.VMSize
+	}
+	capacityReservationGroupId := ""
+	if agentPool.CapacityReservationGroupID != nil {
+		capacityReservationGroupId = *agentPool.CapacityReservationGroupID
+	}
+
+	workloadRunTime := ""
+	if agentPool.WorkloadRuntime != nil {
+		workloadRunTime = string(*agentPool.WorkloadRuntime)
+	}
+
+	kubeletDiskType := ""
+	if agentPool.KubeletDiskType != nil {
+		kubeletDiskType = string(*agentPool.KubeletDiskType)
+	}
+
+	osSKU := ""
+	if agentPool.OsSKU != nil {
+		osSKU = string(*agentPool.OsSKU)
+	}
+
+	agentPoolType := ""
+	if agentPool.Type != nil {
+		agentPoolType = string(*agentPool.Type)
+	}
+
+	upgradeSettings := flattenClusterNodePoolUpgradeSettings(agentPool.UpgradeSettings)
+	linuxOSConfig, err := flattenClusterNodePoolLinuxOSConfig(agentPool.LinuxOSConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	networkProfile := flattenClusterPoolNetworkProfile(agentPool.NetworkProfile)
+
+	out := map[string]interface{}{
+		"auto_scaling_enabled":          enableAutoScaling,
+		"fips_enabled":                  enableFIPS,
+		"gpu_instance":                  gpuInstanceProfile,
+		"host_encryption_enabled":       enableHostEncryption,
+		"host_group_id":                 hostGroupID,
+		"kubelet_disk_type":             kubeletDiskType,
+		"max_count":                     maxCount,
+		"max_pods":                      maxPods,
+		"min_count":                     minCount,
+		"name":                          name,
+		"node_count":                    count,
+		"node_labels":                   nodeLabels,
+		"node_network_profile":          networkProfile,
+		"node_public_ip_enabled":        enableNodePublicIP,
+		"node_public_ip_prefix_id":      nodePublicIPPrefixID,
+		"os_disk_size_gb":               osDiskSizeGB,
+		"os_disk_type":                  string(osDiskType),
+		"os_sku":                        osSKU,
+		"scale_down_mode":               string(scaleDownMode),
+		"snapshot_id":                   snapshotId,
+		"tags":                          tags.Flatten(agentPool.Tags),
+		"temporary_name_for_rotation":   temporaryName,
+		"type":                          agentPoolType,
+		"ultra_ssd_enabled":             enableUltraSSD,
+		"vm_size":                       vmSize,
+		"workload_runtime":              workloadRunTime,
+		"pod_subnet_id":                 podSubnetId,
+		"orchestrator_version":          orchestratorVersion,
+		"proximity_placement_group_id":  proximityPlacementGroupId,
+		"upgrade_settings":              upgradeSettings,
+		"vnet_subnet_id":                vnetSubnetId,
+		"only_critical_addons_enabled":  criticalAddonsEnabled,
+		"kubelet_config":                flattenClusterNodePoolKubeletConfig(agentPool.KubeletConfig),
+		"linux_os_config":               linuxOSConfig,
+		"zones":                         zones.FlattenUntyped(agentPool.AvailabilityZones),
+		"capacity_reservation_group_id": capacityReservationGroupId,
+	}
+
+	return &[]interface{}{
+		out,
+	}, nil
+}

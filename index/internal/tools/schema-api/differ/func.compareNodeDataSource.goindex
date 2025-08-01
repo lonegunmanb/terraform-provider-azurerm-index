@@ -1,0 +1,24 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/schema-api/differ
+import (
+	"fmt"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/schema-api/providerjson"
+	schema_rules "github.com/hashicorp/terraform-provider-azurerm/internal/tools/schema-api/schema-rules"
+)
+func compareNodeDataSource(base providerjson.SchemaJSON, current providerjson.SchemaJSON, nodeName string) (errs []string) {
+	if nodeIsBlock(base) {
+		newBaseRaw := base.Elem.(providerjson.ResourceJSON).Schema
+		newCurrent := current.Elem.(*providerjson.ResourceJSON).Schema
+		for k, newBase := range newBaseRaw {
+			errs = append(errs, compareNodeDataSource(newBase, newCurrent[k], k)...)
+		}
+	}
+
+	for _, v := range schema_rules.BreakingChangeRulesDataSource {
+		if err := v.Check(base, current, nodeName); err != nil {
+			errs = append(errs, *err)
+		}
+	}
+
+	return
+}

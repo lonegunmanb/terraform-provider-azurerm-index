@@ -1,0 +1,165 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"fmt"
+	"log"
+	"net/url"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	eventhubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	servicebusValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func expandIoTHubEndpoints(d *pluginsdk.ResourceData, subscriptionId string) (*devices.RoutingEndpoints, error) {
+	routeEndpointList := d.Get("endpoint").([]interface{})
+
+	serviceBusQueueEndpointProperties := make([]devices.RoutingServiceBusQueueEndpointProperties, 0)
+	serviceBusTopicEndpointProperties := make([]devices.RoutingServiceBusTopicEndpointProperties, 0)
+	eventHubProperties := make([]devices.RoutingEventHubProperties, 0)
+	storageContainerProperties := make([]devices.RoutingStorageContainerProperties, 0)
+
+	for _, endpointRaw := range routeEndpointList {
+		endpoint := endpointRaw.(map[string]interface{})
+
+		t := endpoint["type"]
+		name := endpoint["name"].(string)
+		resourceGroup := endpoint["resource_group_name"].(string)
+		authenticationType := devices.AuthenticationType(endpoint["authentication_type"].(string))
+		subscriptionID := subscriptionId
+
+		var identity *devices.ManagedIdentity
+		var endpointUri *string
+		var entityPath *string
+		var connectionStr *string
+		if v := endpoint["identity_id"].(string); v != "" {
+			identity = &devices.ManagedIdentity{
+				UserAssignedIdentity: utils.String(v),
+			}
+		}
+		if v := endpoint["endpoint_uri"].(string); v != "" {
+			endpointUri = utils.String(v)
+		}
+		if v := endpoint["entity_path"].(string); v != "" {
+			entityPath = utils.String(v)
+		}
+		if v := endpoint["connection_string"].(string); v != "" {
+			connectionStr = utils.String(v)
+		}
+
+		if authenticationType == devices.AuthenticationTypeKeyBased {
+			if connectionStr == nil {
+				return nil, fmt.Errorf("`connection_string` must be specified when `authentication_type` is `keyBased`")
+			}
+			if identity != nil || endpointUri != nil || entityPath != nil {
+				return nil, fmt.Errorf("`identity_id`, `endpoint_uri` or `entity_path` cannot be specified when `authentication_type` is `keyBased`")
+			}
+		} else {
+			if endpointUri == nil {
+				return nil, fmt.Errorf("`endpoint_uri` must be specified when `authentication_type` is `identityBased`")
+			}
+
+			if entityPath == nil && t != "AzureIotHub.StorageContainer" {
+				return nil, fmt.Errorf("`entity_path` must be specified when `authentication_type` is `identityBased` and `type` is `%s`", t)
+			}
+
+			if connectionStr != nil {
+				return nil, fmt.Errorf("`connection_string` cannot be specified when `authentication_type` is `identityBased`")
+			}
+		}
+
+		switch t {
+		case "AzureIotHub.StorageContainer":
+			containerName := endpoint["container_name"].(string)
+			if containerName == "" {
+				return nil, fmt.Errorf("`container_name` must be specified when `type` is `AzureIotHub.StorageContainer`")
+			}
+
+			fileNameFormat := endpoint["file_name_format"].(string)
+			batchFrequencyInSeconds := int32(endpoint["batch_frequency_in_seconds"].(int))
+			maxChunkSizeInBytes := int32(endpoint["max_chunk_size_in_bytes"].(int))
+			encoding := endpoint["encoding"].(string)
+
+			storageContainer := devices.RoutingStorageContainerProperties{
+				AuthenticationType:      authenticationType,
+				Identity:                identity,
+				EndpointURI:             endpointUri,
+				ConnectionString:        connectionStr,
+				Name:                    &name,
+				SubscriptionID:          &subscriptionID,
+				ResourceGroup:           &resourceGroup,
+				ContainerName:           &containerName,
+				FileNameFormat:          &fileNameFormat,
+				BatchFrequencyInSeconds: &batchFrequencyInSeconds,
+				MaxChunkSizeInBytes:     &maxChunkSizeInBytes,
+				Encoding:                devices.Encoding(encoding),
+			}
+			storageContainerProperties = append(storageContainerProperties, storageContainer)
+
+		case "AzureIotHub.ServiceBusQueue":
+			sbQueue := devices.RoutingServiceBusQueueEndpointProperties{
+				AuthenticationType: authenticationType,
+				Identity:           identity,
+				EndpointURI:        endpointUri,
+				EntityPath:         entityPath,
+				ConnectionString:   connectionStr,
+				Name:               &name,
+				SubscriptionID:     &subscriptionID,
+				ResourceGroup:      &resourceGroup,
+			}
+			serviceBusQueueEndpointProperties = append(serviceBusQueueEndpointProperties, sbQueue)
+
+		case "AzureIotHub.ServiceBusTopic":
+			sbTopic := devices.RoutingServiceBusTopicEndpointProperties{
+				AuthenticationType: authenticationType,
+				Identity:           identity,
+				EndpointURI:        endpointUri,
+				EntityPath:         entityPath,
+				ConnectionString:   connectionStr,
+				Name:               &name,
+				SubscriptionID:     &subscriptionID,
+				ResourceGroup:      &resourceGroup,
+			}
+			serviceBusTopicEndpointProperties = append(serviceBusTopicEndpointProperties, sbTopic)
+
+		case "AzureIotHub.EventHub":
+			eventHub := devices.RoutingEventHubProperties{
+				AuthenticationType: authenticationType,
+				Identity:           identity,
+				EndpointURI:        endpointUri,
+				EntityPath:         entityPath,
+				ConnectionString:   connectionStr,
+				Name:               &name,
+				SubscriptionID:     &subscriptionID,
+				ResourceGroup:      &resourceGroup,
+			}
+			eventHubProperties = append(eventHubProperties, eventHub)
+		}
+	}
+
+	return &devices.RoutingEndpoints{
+		ServiceBusQueues:  &serviceBusQueueEndpointProperties,
+		ServiceBusTopics:  &serviceBusTopicEndpointProperties,
+		EventHubs:         &eventHubProperties,
+		StorageContainers: &storageContainerProperties,
+	}, nil
+}

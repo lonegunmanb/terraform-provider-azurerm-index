@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachinescalesetrollingupgrades"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachinescalesetvms"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/client"
+)
+func (metadata virtualMachineScaleSetUpdateMetaData) upgradeInstancesForManualUpgradePolicy(ctx context.Context) error {
+	client := metadata.Client.VirtualMachineScaleSetsClient
+	id := metadata.ID
+
+	log.Printf("[DEBUG] Rolling the VM Instances for %s %s", metadata.OSType, id)
+	instancesClient := metadata.Client.VirtualMachineScaleSetVMsClient
+	virtualMachineScaleSetId := virtualmachinescalesetvms.NewVirtualMachineScaleSetID(id.SubscriptionId, id.ResourceGroupName, id.VirtualMachineScaleSetName)
+	instances, err := instancesClient.ListComplete(ctx, virtualMachineScaleSetId, virtualmachinescalesetvms.DefaultListOperationOptions())
+	if err != nil {
+		return fmt.Errorf("listing VM Instances for %s %s: %+v", metadata.OSType, id, err)
+	}
+
+	log.Printf("[DEBUG] Determining instances to roll..")
+	instanceIdsToRoll := make([]string, 0)
+	for _, item := range instances.Items {
+		props := item.Properties
+		if props != nil && item.InstanceId != nil {
+			latestModel := props.LatestModelApplied
+			if !*latestModel {
+				instanceIdsToRoll = append(instanceIdsToRoll, *item.InstanceId)
+			}
+		}
+	}
+
+	// TODO: there's a performance enhancement to do batches here, but this is fine for a first pass
+	for _, instanceId := range instanceIdsToRoll {
+		instanceIds := []string{instanceId}
+
+		log.Printf("[DEBUG] Updating Instance %q to the Latest Configuration..", instanceId)
+		ids := virtualmachinescalesets.VirtualMachineScaleSetVMInstanceRequiredIDs{
+			InstanceIds: instanceIds,
+		}
+		if err := client.UpdateInstancesThenPoll(ctx, *id, ids); err != nil {
+			return fmt.Errorf("updating Instance %q (%s %s) to the Latest Configuration: %+v", instanceId, metadata.OSType, id, err)
+		}
+		log.Printf("[DEBUG] Updated Instance %q to the Latest Configuration.", instanceId)
+
+		if metadata.CanReimageOnManualUpgrade {
+			log.Printf("[DEBUG] Reimaging Instance %q..", instanceId)
+			reImageInput := virtualmachinescalesets.VirtualMachineScaleSetReimageParameters{
+				InstanceIds: &instanceIds,
+			}
+			if err := client.ReimageThenPoll(ctx, *id, reImageInput); err != nil {
+				return fmt.Errorf("reimaging Instance %q (%s %s): %+v", instanceId, metadata.OSType, id, err)
+			}
+			log.Printf("[DEBUG] Reimaged Instance %q..", instanceId)
+		}
+	}
+
+	log.Printf("[DEBUG] Rolled the VM Instances for %s %s.", metadata.OSType, id)
+	return nil
+}

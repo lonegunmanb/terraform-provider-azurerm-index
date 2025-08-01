@@ -1,0 +1,90 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/connections
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2016-06-01/connections"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2016-06-01/managedapis"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceConnection() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		Create: resourceConnectionCreate,
+		Read:   resourceConnectionRead,
+		Update: resourceConnectionUpdate,
+		Delete: resourceConnectionDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := connections.ParseConnectionID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"managed_api_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: managedapis.ValidateManagedApiID,
+			},
+
+			"display_name": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  "Service Bus",
+				// @tombuildsstuff: this can't be patched in API version 2016-06-01 and there isn't Swagger for
+				// API version 2018-07-01-preview, so I guess this is ForceNew for now
+				//
+				// > Status=400 Code="PatchApiConnectionPropertiesNotSupported"
+				// > Message="The request to patch API connection 'acctestconn-220307135205093274' is not supported.
+				// > None of the fields inside the properties object can be patched."
+				ForceNew: true,
+			},
+
+			"parameter_values": {
+				Type:     pluginsdk.TypeMap,
+				Optional: true,
+				// @tombuildsstuff: this can't be patched in API version 2016-06-01 and there isn't Swagger for
+				// API version 2018-07-01-preview, so I guess this is ForceNew for now
+				//
+				// > Status=400 Code="PatchApiConnectionPropertiesNotSupported"
+				// > Message="The request to patch API connection 'acctestconn-220307135205093274' is not supported.
+				// > None of the fields inside the properties object can be patched."
+				ForceNew: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"tags": commonschema.Tags(),
+		},
+	}
+
+	return resource
+}

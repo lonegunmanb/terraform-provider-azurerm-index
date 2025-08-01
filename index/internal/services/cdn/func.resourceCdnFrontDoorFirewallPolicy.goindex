@@ -1,0 +1,514 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCdnFrontDoorFirewallPolicy() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceCdnFrontDoorFirewallPolicyCreate,
+		Read:   resourceCdnFrontDoorFirewallPolicyRead,
+		Update: resourceCdnFrontDoorFirewallPolicyUpdate,
+		Delete: resourceCdnFrontDoorFirewallPolicyDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := waf.ParseFrontDoorWebApplicationFirewallPolicyID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.FrontDoorFirewallPolicyName,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"sku_name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(waf.SkuNameStandardAzureFrontDoor),
+					string(waf.SkuNamePremiumAzureFrontDoor),
+				}, false),
+			},
+
+			"mode": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(waf.PolicyModeDetection),
+					string(waf.PolicyModePrevention),
+				}, false),
+			},
+
+			"enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			// NOTE: Through local testing, the new API js challenge expiration is always
+			// enabled no matter what and cannot be disabled for Premium_AzureFrontDoor
+			// and is not supported in Standard_AzureFrontDoor...
+			"js_challenge_cookie_expiration_in_minutes": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.IntBetween(5, 1440),
+			},
+
+			"redirect_url": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.IsURLWithScheme([]string{"http", "https"}),
+			},
+
+			"request_body_check_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"custom_block_response_status_code": {
+				Type:     pluginsdk.TypeInt,
+				Optional: true,
+				ValidateFunc: validation.IntInSlice([]int{
+					200,
+					403,
+					405,
+					406,
+					429,
+				}),
+			},
+
+			"custom_block_response_body": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsBase64,
+			},
+
+			"custom_rule": {
+				Type:     pluginsdk.TypeList,
+				MaxItems: 100,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+
+						"enabled": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  true,
+						},
+
+						"priority": {
+							Type:     pluginsdk.TypeInt,
+							Optional: true,
+							Default:  1,
+						},
+
+						"type": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(waf.RuleTypeMatchRule),
+								string(waf.RuleTypeRateLimitRule),
+							}, false),
+						},
+
+						"rate_limit_duration_in_minutes": {
+							Type:     pluginsdk.TypeInt,
+							Optional: true,
+							Default:  1,
+						},
+
+						"rate_limit_threshold": {
+							Type:     pluginsdk.TypeInt,
+							Optional: true,
+							Default:  10,
+						},
+
+						"action": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(waf.ActionTypeAllow),
+								string(waf.ActionTypeBlock),
+								string(waf.ActionTypeLog),
+								string(waf.ActionTypeRedirect),
+								string(waf.ActionTypeJSChallenge),
+							}, false),
+						},
+
+						"match_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MaxItems: 10,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"match_variable": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(waf.MatchVariableCookies),
+											string(waf.MatchVariablePostArgs),
+											string(waf.MatchVariableQueryString),
+											string(waf.MatchVariableRemoteAddr),
+											string(waf.MatchVariableRequestBody),
+											string(waf.MatchVariableRequestHeader),
+											string(waf.MatchVariableRequestMethod),
+											string(waf.MatchVariableRequestUri),
+											string(waf.MatchVariableSocketAddr),
+										}, false),
+									},
+
+									"match_values": {
+										Type:     pluginsdk.TypeList,
+										Required: true,
+										MaxItems: 600,
+										Elem: &pluginsdk.Schema{
+											Type:         pluginsdk.TypeString,
+											ValidateFunc: validation.StringLenBetween(1, 256),
+										},
+									},
+
+									"operator": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(waf.OperatorAny),
+											string(waf.OperatorBeginsWith),
+											string(waf.OperatorContains),
+											string(waf.OperatorEndsWith),
+											string(waf.OperatorEqual),
+											string(waf.OperatorGeoMatch),
+											string(waf.OperatorGreaterThan),
+											string(waf.OperatorGreaterThanOrEqual),
+											string(waf.OperatorIPMatch),
+											string(waf.OperatorLessThan),
+											string(waf.OperatorLessThanOrEqual),
+											string(waf.OperatorRegEx),
+										}, false),
+									},
+
+									"selector": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+
+									"negation_condition": {
+										Type:     pluginsdk.TypeBool,
+										Optional: true,
+										Default:  false,
+									},
+
+									"transforms": {
+										Type:     pluginsdk.TypeList,
+										Optional: true,
+										MaxItems: 5,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+											ValidateFunc: validation.StringInSlice([]string{
+												string(waf.TransformTypeLowercase),
+												string(waf.TransformTypeRemoveNulls),
+												string(waf.TransformTypeTrim),
+												string(waf.TransformTypeUppercase),
+												string(waf.TransformTypeURLDecode),
+												string(waf.TransformTypeURLEncode),
+											}, false),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"managed_rule": {
+				Type:     pluginsdk.TypeList,
+				MaxItems: 100,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"type": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+
+						"version": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+
+						"action": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(waf.ActionTypeAllow),
+								string(waf.ActionTypeLog),
+								string(waf.ActionTypeBlock),
+								string(waf.ActionTypeRedirect),
+							}, false),
+						},
+
+						"exclusion": {
+							Type:     pluginsdk.TypeList,
+							MaxItems: 100,
+							Optional: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"match_variable": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(waf.ManagedRuleExclusionMatchVariableQueryStringArgNames),
+											string(waf.ManagedRuleExclusionMatchVariableRequestBodyPostArgNames),
+											string(waf.ManagedRuleExclusionMatchVariableRequestCookieNames),
+											string(waf.ManagedRuleExclusionMatchVariableRequestHeaderNames),
+											string(waf.ManagedRuleExclusionMatchVariableRequestBodyJsonArgNames),
+										}, false),
+									},
+									"operator": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(waf.ManagedRuleExclusionSelectorMatchOperatorContains),
+											string(waf.ManagedRuleExclusionSelectorMatchOperatorEndsWith),
+											string(waf.ManagedRuleExclusionSelectorMatchOperatorEquals),
+											string(waf.ManagedRuleExclusionSelectorMatchOperatorEqualsAny),
+											string(waf.ManagedRuleExclusionSelectorMatchOperatorStartsWith),
+										}, false),
+									},
+									"selector": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+								},
+							},
+						},
+
+						"override": {
+							Type:     pluginsdk.TypeList,
+							MaxItems: 100,
+							Optional: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"rule_group_name": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+
+									"exclusion": {
+										Type:     pluginsdk.TypeList,
+										MaxItems: 100,
+										Optional: true,
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"match_variable": {
+													Type:     pluginsdk.TypeString,
+													Required: true,
+													ValidateFunc: validation.StringInSlice([]string{
+														string(waf.ManagedRuleExclusionMatchVariableQueryStringArgNames),
+														string(waf.ManagedRuleExclusionMatchVariableRequestBodyPostArgNames),
+														string(waf.ManagedRuleExclusionMatchVariableRequestCookieNames),
+														string(waf.ManagedRuleExclusionMatchVariableRequestHeaderNames),
+														string(waf.ManagedRuleExclusionMatchVariableRequestBodyJsonArgNames),
+													}, false),
+												},
+												"operator": {
+													Type:     pluginsdk.TypeString,
+													Required: true,
+													ValidateFunc: validation.StringInSlice([]string{
+														string(waf.ManagedRuleExclusionSelectorMatchOperatorContains),
+														string(waf.ManagedRuleExclusionSelectorMatchOperatorEndsWith),
+														string(waf.ManagedRuleExclusionSelectorMatchOperatorEquals),
+														string(waf.ManagedRuleExclusionSelectorMatchOperatorEqualsAny),
+														string(waf.ManagedRuleExclusionSelectorMatchOperatorStartsWith),
+													}, false),
+												},
+												"selector": {
+													Type:         pluginsdk.TypeString,
+													Required:     true,
+													ValidateFunc: validation.StringIsNotEmpty,
+												},
+											},
+										},
+									},
+
+									"rule": {
+										Type:     pluginsdk.TypeList,
+										MaxItems: 1000,
+										Optional: true,
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"rule_id": {
+													Type:         pluginsdk.TypeString,
+													Required:     true,
+													ValidateFunc: validation.StringIsNotEmpty,
+												},
+
+												"enabled": {
+													Type:     pluginsdk.TypeBool,
+													Optional: true,
+													Default:  false,
+												},
+
+												"exclusion": {
+													Type:     pluginsdk.TypeList,
+													MaxItems: 100,
+													Optional: true,
+													Elem: &pluginsdk.Resource{
+														Schema: map[string]*pluginsdk.Schema{
+															"match_variable": {
+																Type:     pluginsdk.TypeString,
+																Required: true,
+																ValidateFunc: validation.StringInSlice([]string{
+																	string(waf.ManagedRuleExclusionMatchVariableQueryStringArgNames),
+																	string(waf.ManagedRuleExclusionMatchVariableRequestBodyPostArgNames),
+																	string(waf.ManagedRuleExclusionMatchVariableRequestCookieNames),
+																	string(waf.ManagedRuleExclusionMatchVariableRequestHeaderNames),
+																	string(waf.ManagedRuleExclusionMatchVariableRequestBodyJsonArgNames),
+																}, false),
+															},
+															"operator": {
+																Type:     pluginsdk.TypeString,
+																Required: true,
+																ValidateFunc: validation.StringInSlice([]string{
+																	string(waf.ManagedRuleExclusionSelectorMatchOperatorContains),
+																	string(waf.ManagedRuleExclusionSelectorMatchOperatorEndsWith),
+																	string(waf.ManagedRuleExclusionSelectorMatchOperatorEquals),
+																	string(waf.ManagedRuleExclusionSelectorMatchOperatorEqualsAny),
+																	string(waf.ManagedRuleExclusionSelectorMatchOperatorStartsWith),
+																}, false),
+															},
+															"selector": {
+																Type:         pluginsdk.TypeString,
+																Required:     true,
+																ValidateFunc: validation.StringIsNotEmpty,
+															},
+														},
+													},
+												},
+
+												// NOTE: 'ActionTypeAnomalyScoring' is only valid with 2.0 and above
+												//       'ActionTypeJSChallenge' is only valid with BotManagerRuleSets
+												"action": {
+													Type:     pluginsdk.TypeString,
+													Required: true,
+													ValidateFunc: validation.StringInSlice(waf.PossibleValuesForActionType(),
+														false),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"frontend_endpoint_ids": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"tags": commonschema.Tags(),
+		},
+
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			// Verify that they are not downgrading the service from Premium SKU -> Standard SKU...
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+				oSku, nSku := diff.GetChange("sku_name")
+
+				if oSku != "" {
+					if oSku.(string) == string(waf.SkuNamePremiumAzureFrontDoor) && nSku.(string) == string(waf.SkuNameStandardAzureFrontDoor) {
+						return fmt.Errorf("downgrading from the %q sku to the %q sku is not supported, got %q", waf.SkuNamePremiumAzureFrontDoor, waf.SkuNameStandardAzureFrontDoor, nSku.(string))
+					}
+				}
+
+				return nil
+			}),
+
+			// Verify that the Standard SKU is not setting the JSChallenge policy...
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+				sku := diff.Get("sku_name").(string)
+				policyInMinutes := diff.Get("js_challenge_cookie_expiration_in_minutes").(int)
+
+				if sku == string(waf.SkuNameStandardAzureFrontDoor) && policyInMinutes > 0 {
+					return fmt.Errorf("the 'js_challenge_cookie_expiration_in_minutes' field is only supported with the %q sku, got %q", waf.SkuNamePremiumAzureFrontDoor, sku)
+				}
+
+				return nil
+			}),
+
+			// Verify that the Standard SKU is not using managed rules...
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+				sku := diff.Get("sku_name").(string)
+				managedRules := diff.Get("managed_rule").([]interface{})
+
+				if sku == string(waf.SkuNameStandardAzureFrontDoor) && len(managedRules) > 0 {
+					return fmt.Errorf("the 'managed_rule' code block is only supported with the %q sku, got %q", waf.SkuNamePremiumAzureFrontDoor, sku)
+				}
+
+				return nil
+			}),
+
+			// Verify that the Standard SKU is not using the JSChallenge Action type for custom rules...
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+				sku := diff.Get("sku_name").(string)
+				customRules := expandCdnFrontDoorFirewallCustomRules(diff.Get("custom_rule").([]interface{}))
+
+				if sku == string(waf.SkuNameStandardAzureFrontDoor) && customRules != nil {
+					for _, v := range *customRules.Rules {
+						if v.Action == waf.ActionTypeJSChallenge {
+							return fmt.Errorf("'custom_rule' blocks with the 'action' type of 'JSChallenge' are only supported for the %q sku, got action: %q (custom_rule.name: %q, sku_name: %q)", waf.SkuNamePremiumAzureFrontDoor, waf.ActionTypeJSChallenge, *v.Name, sku)
+						}
+					}
+				}
+
+				return nil
+			}),
+		),
+	}
+}

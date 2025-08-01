@@ -1,0 +1,140 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2024-10-01/cognitiveservicesaccounts"
+	search "github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/services"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCognitiveAccountRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Cognitive.AccountsClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := cognitiveservicesaccounts.ParseAccountID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.AccountsGet(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found", *id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.AccountName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("kind", model.Kind)
+
+		d.Set("location", location.NormalizeNilable(model.Location))
+		if sku := model.Sku; sku != nil {
+			d.Set("sku_name", sku.Name)
+		}
+
+		identity, err := identity.FlattenSystemAndUserAssignedMap(model.Identity)
+		if err != nil {
+			return err
+		}
+		d.Set("identity", identity)
+
+		if props := model.Properties; props != nil {
+			if apiProps := props.ApiProperties; apiProps != nil {
+				d.Set("qna_runtime_endpoint", apiProps.QnaRuntimeEndpoint)
+				d.Set("custom_question_answering_search_service_id", apiProps.QnaAzureSearchEndpointId)
+				d.Set("metrics_advisor_aad_client_id", apiProps.AadClientId)
+				d.Set("metrics_advisor_aad_tenant_id", apiProps.AadTenantId)
+				d.Set("metrics_advisor_super_user_name", apiProps.SuperUser)
+				d.Set("metrics_advisor_website_name", apiProps.WebsiteName)
+			}
+			d.Set("endpoint", props.Endpoint)
+			d.Set("custom_subdomain_name", props.CustomSubDomainName)
+			if err := d.Set("network_acls", flattenCognitiveAccountNetworkAcls(props.NetworkAcls)); err != nil {
+				return fmt.Errorf("setting `network_acls` for Cognitive Account %q: %+v", id, err)
+			}
+
+			dynamicThrottlingEnabled := false
+			if props.DynamicThrottlingEnabled != nil {
+				dynamicThrottlingEnabled = *props.DynamicThrottlingEnabled
+			}
+			d.Set("dynamic_throttling_enabled", dynamicThrottlingEnabled)
+
+			d.Set("fqdns", utils.FlattenStringSlice(props.AllowedFqdnList))
+
+			publicNetworkAccess := true
+			if props.PublicNetworkAccess != nil {
+				publicNetworkAccess = *props.PublicNetworkAccess == cognitiveservicesaccounts.PublicNetworkAccessEnabled
+			}
+			d.Set("public_network_access_enabled", publicNetworkAccess)
+
+			if err := d.Set("storage", flattenCognitiveAccountStorage(props.UserOwnedStorage)); err != nil {
+				return fmt.Errorf("setting `storages` for Cognitive Account %q: %+v", id, err)
+			}
+			outboundNetworkAccessRestricted := false
+			if props.RestrictOutboundNetworkAccess != nil {
+				outboundNetworkAccessRestricted = *props.RestrictOutboundNetworkAccess
+			}
+			// lintignore:R001
+			d.Set("outbound_network_access_restricted", outboundNetworkAccessRestricted)
+
+			localAuthEnabled := true
+			if props.DisableLocalAuth != nil {
+				localAuthEnabled = !*props.DisableLocalAuth
+			}
+			d.Set("local_auth_enabled", localAuthEnabled)
+
+			if localAuthEnabled {
+				keys, err := client.AccountsListKeys(ctx, *id)
+				if err != nil {
+					// note for the resource we shouldn't gracefully fail since we have permission to CRUD it
+					return fmt.Errorf("listing the Keys for %s: %+v", *id, err)
+				}
+
+				if model := keys.Model; model != nil {
+					d.Set("primary_access_key", model.Key1)
+					d.Set("secondary_access_key", model.Key2)
+				}
+			}
+
+			customerManagedKey, err := flattenCognitiveAccountCustomerManagedKey(props.Encryption)
+			if err != nil {
+				return err
+			}
+
+			if err := d.Set("customer_managed_key", customerManagedKey); err != nil {
+				return fmt.Errorf("setting `customer_managed_key`: %+v", err)
+			}
+		}
+
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+	return nil
+}

@@ -1,0 +1,94 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFrontDoorForwardingConfiguration(input []interface{}, frontDoorId frontdoors.FrontDoorId) frontdoors.ForwardingConfiguration {
+	if len(input) == 0 {
+		return frontdoors.ForwardingConfiguration{}
+	}
+
+	v := input[0].(map[string]interface{})
+	customForwardingPath := v["custom_forwarding_path"].(string)
+	forwardingProtocol := frontdoors.FrontDoorForwardingProtocol(v["forwarding_protocol"].(string))
+	backendPoolName := v["backend_pool_name"].(string)
+	cacheUseDynamicCompression := v["cache_use_dynamic_compression"].(bool)
+	cacheQueryParameterStripDirective := frontdoors.FrontDoorQuery(v["cache_query_parameter_strip_directive"].(string))
+	cacheQueryParameters := v["cache_query_parameters"].([]interface{})
+	cacheDuration := v["cache_duration"].(string)
+	cacheEnabled := v["cache_enabled"].(bool)
+
+	// convert list of cache_query_parameters into an array into a comma-separated list
+	queryParametersArray := make([]string, 0)
+	for _, p := range cacheQueryParameters {
+		queryParametersArray = append(queryParametersArray, p.(string))
+	}
+	queryParametersString := strings.Join(queryParametersArray, ",")
+
+	backendPoolId := parse.NewBackendPoolID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, backendPoolName).ID()
+	backend := &frontdoors.SubResource{
+		Id: utils.String(backendPoolId),
+	}
+
+	forwardingConfiguration := frontdoors.ForwardingConfiguration{
+		ForwardingProtocol: &forwardingProtocol,
+		BackendPool:        backend,
+	}
+	// Per the portal, if you enable the cache the cache_query_parameter_strip_directive
+	// is then a required attribute else the CacheConfiguration type is null
+	if cacheEnabled {
+		// Set the default value for dynamic compression or use the value defined in the config
+		dynamicCompression := frontdoors.DynamicCompressionEnabledEnabled
+		if !cacheUseDynamicCompression {
+			dynamicCompression = frontdoors.DynamicCompressionEnabledDisabled
+		}
+		if cacheQueryParameterStripDirective == "" {
+			// Set Default Value for strip directive is not in the key slice and cache is enabled
+			cacheQueryParameterStripDirective = frontdoors.FrontDoorQueryStripAll
+		}
+		// set cacheQueryParameters to "" when StripDirective is "StripAll" or "StripNone"
+		if cacheQueryParameterStripDirective == "StripAll" || cacheQueryParameterStripDirective == "StripNone" {
+			queryParametersString = ""
+		}
+
+		// Making sure that duration is empty when cacheDuration is empty
+		var duration *string
+		if cacheDuration == "" {
+			duration = nil
+		} else {
+			duration = utils.String(cacheDuration)
+		}
+
+		forwardingConfiguration.CacheConfiguration = &frontdoors.CacheConfiguration{
+			DynamicCompression:           &dynamicCompression,
+			QueryParameterStripDirective: &cacheQueryParameterStripDirective,
+			QueryParameters:              utils.String(queryParametersString),
+			CacheDuration:                duration,
+		}
+	}
+
+	if customForwardingPath != "" {
+		forwardingConfiguration.CustomForwardingPath = utils.String(customForwardingPath)
+	}
+
+	return forwardingConfiguration
+}

@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/azurefirewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/parse"
+	firewallValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFirewallApplicationRules(inputs []interface{}) (*[]azurefirewalls.AzureFirewallApplicationRule, error) {
+	outputs := make([]azurefirewalls.AzureFirewallApplicationRule, 0)
+
+	for _, input := range inputs {
+		rule := input.(map[string]interface{})
+
+		ruleName := rule["name"].(string)
+		ruleDescription := rule["description"].(string)
+		ruleSourceAddresses := rule["source_addresses"].([]interface{})
+		ruleSourceIpGroups := rule["source_ip_groups"].([]interface{})
+		ruleFqdnTags := rule["fqdn_tags"].([]interface{})
+		ruleTargetFqdns := rule["target_fqdns"].([]interface{})
+
+		output := azurefirewalls.AzureFirewallApplicationRule{
+			Name:            utils.String(ruleName),
+			Description:     utils.String(ruleDescription),
+			SourceAddresses: utils.ExpandStringSlice(ruleSourceAddresses),
+			SourceIPGroups:  utils.ExpandStringSlice(ruleSourceIpGroups),
+			FqdnTags:        utils.ExpandStringSlice(ruleFqdnTags),
+			TargetFqdns:     utils.ExpandStringSlice(ruleTargetFqdns),
+		}
+
+		ruleProtocols := make([]azurefirewalls.AzureFirewallApplicationRuleProtocol, 0)
+		for _, v := range rule["protocol"].([]interface{}) {
+			protocol := v.(map[string]interface{})
+			port := protocol["port"].(int)
+			ruleProtocol := azurefirewalls.AzureFirewallApplicationRuleProtocol{
+				Port:         utils.Int64(int64(port)),
+				ProtocolType: pointer.To(azurefirewalls.AzureFirewallApplicationRuleProtocolType(protocol["type"].(string))),
+			}
+			ruleProtocols = append(ruleProtocols, ruleProtocol)
+		}
+		output.Protocols = &ruleProtocols
+		if len(*output.FqdnTags) > 0 {
+			if len(*output.TargetFqdns) > 0 || len(*output.Protocols) > 0 {
+				return nil, fmt.Errorf("`fqdn_tags` cannot be used with `target_fqdns` or `protocol`")
+			}
+		}
+
+		if len(*output.SourceAddresses) == 0 && len(*output.SourceIPGroups) == 0 {
+			return nil, fmt.Errorf("at least one of %q and %q must be specified for each rule", "source_addresses", "source_ip_groups")
+		}
+		outputs = append(outputs, output)
+	}
+
+	return &outputs, nil
+}

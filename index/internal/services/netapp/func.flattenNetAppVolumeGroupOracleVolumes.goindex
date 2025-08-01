@@ -1,0 +1,98 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumesreplication"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenNetAppVolumeGroupOracleVolumes(ctx context.Context, input *[]volumegroups.VolumeGroupVolumeProperties, metadata sdk.ResourceMetaData) ([]netAppModels.NetAppVolumeGroupOracleVolume, error) {
+	results := make([]netAppModels.NetAppVolumeGroupOracleVolume, 0)
+
+	if input == nil || len(pointer.From(input)) == 0 {
+		return results, fmt.Errorf("received empty volumegroups.VolumeGroupVolumeProperties slice")
+	}
+
+	for _, item := range *input {
+		volumeGroupVolume := netAppModels.NetAppVolumeGroupOracleVolume{}
+
+		props := item.Properties
+		volumeGroupVolume.Name = getUserDefinedVolumeName(item.Name)
+		volumeGroupVolume.VolumePath = props.CreationToken
+		volumeGroupVolume.ServiceLevel = string(pointer.From(props.ServiceLevel))
+		volumeGroupVolume.SubnetId = props.SubnetId
+		volumeGroupVolume.CapacityPoolId = pointer.From(props.CapacityPoolResourceId)
+		volumeGroupVolume.Protocols = pointer.From(props.ProtocolTypes)
+		volumeGroupVolume.SecurityStyle = string(pointer.From(props.SecurityStyle))
+		volumeGroupVolume.SnapshotDirectoryVisible = pointer.From(props.SnapshotDirectoryVisible)
+		volumeGroupVolume.ThroughputInMibps = pointer.From(props.ThroughputMibps)
+		volumeGroupVolume.Tags = pointer.From(item.Tags)
+		volumeGroupVolume.NetworkFeatures = string(pointer.From(props.NetworkFeatures))
+
+		if props.ProximityPlacementGroup != nil {
+			volumeGroupVolume.ProximityPlacementGroupId = pointer.From(props.ProximityPlacementGroup)
+		}
+
+		if item.Zones != nil && len(pointer.From(item.Zones)) > 0 {
+			volumeGroupVolume.Zone = (pointer.From(item.Zones))[0]
+		}
+
+		if props.EncryptionKeySource != nil {
+			volumeGroupVolume.EncryptionKeySource = pointer.From((*string)(props.EncryptionKeySource))
+		}
+
+		if props.KeyVaultPrivateEndpointResourceId != nil {
+			volumeGroupVolume.KeyVaultPrivateEndpointId = pointer.From(props.KeyVaultPrivateEndpointResourceId)
+		}
+
+		volumeGroupVolume.VolumeSpecName = pointer.From(props.VolumeSpecName)
+
+		if props.UsageThreshold > 0 {
+			usageThreshold := props.UsageThreshold / 1073741824
+			volumeGroupVolume.StorageQuotaInGB = usageThreshold
+		}
+
+		if props.ExportPolicy != nil && props.ExportPolicy.Rules != nil && len(pointer.From(props.ExportPolicy.Rules)) > 0 {
+			volumeGroupVolume.ExportPolicy = flattenNetAppVolumeGroupVolumesExportPolicies(props.ExportPolicy.Rules)
+		}
+
+		if props.MountTargets != nil && len(pointer.From(props.MountTargets)) > 0 {
+			volumeGroupVolume.MountIpAddresses = flattenNetAppVolumeGroupVolumesMountIpAddresses(props.MountTargets)
+		}
+
+		// Getting volume resource directly from standalone volume
+		// since VolumeGroup Volumes don't return DataProtection information
+		volumeClient := metadata.Client.NetApp.VolumeClient
+		id, err := volumes.ParseVolumeID(pointer.From(item.Id))
+		if err != nil {
+			return []netAppModels.NetAppVolumeGroupOracleVolume{}, err
+		}
+
+		standaloneVol, err := volumeClient.Get(ctx, pointer.From(id))
+		if err != nil {
+			return []netAppModels.NetAppVolumeGroupOracleVolume{}, fmt.Errorf("retrieving %s: %v", id, err)
+		}
+
+		if standaloneVol.Model.Properties.DataProtection != nil && standaloneVol.Model.Properties.DataProtection.Snapshot != nil {
+			volumeGroupVolume.DataProtectionSnapshotPolicy = flattenNetAppVolumeGroupVolumesDPSnapshotPolicy(standaloneVol.Model.Properties.DataProtection.Snapshot)
+		}
+
+		volumeGroupVolume.Id = pointer.From(standaloneVol.Model.Id)
+
+		results = append(results, volumeGroupVolume)
+	}
+
+	return results, nil
+}

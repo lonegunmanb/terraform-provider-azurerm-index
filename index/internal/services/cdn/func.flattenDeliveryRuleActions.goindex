@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/deliveryruleactions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/deliveryruleconditions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenDeliveryRuleActions(actions *[]cdn.BasicDeliveryRuleAction) (*map[string][]interface{}, error) {
+	type flattenFunc = func(input cdn.BasicDeliveryRuleAction) (*map[string]interface{}, error)
+	type validateFunc = func(input cdn.BasicDeliveryRuleAction) bool
+
+	actionTypes := map[string]struct {
+		flattenFunc  flattenFunc
+		validateFunc validateFunc
+	}{
+		"cache_expiration_action": {
+			flattenFunc: deliveryruleactions.FlattenArmCdnEndpointActionCacheExpiration,
+			validateFunc: func(action cdn.BasicDeliveryRuleAction) bool {
+				_, ok := action.AsDeliveryRuleCacheExpirationAction()
+				return ok
+			},
+		},
+		"cache_key_query_string_action": {
+			flattenFunc: deliveryruleactions.FlattenArmCdnEndpointActionCacheKeyQueryString,
+			validateFunc: func(action cdn.BasicDeliveryRuleAction) bool {
+				_, ok := action.AsDeliveryRuleCacheKeyQueryStringAction()
+				return ok
+			},
+		},
+		"modify_request_header_action": {
+			flattenFunc: deliveryruleactions.FlattenArmCdnEndpointActionModifyRequestHeader,
+			validateFunc: func(action cdn.BasicDeliveryRuleAction) bool {
+				_, ok := action.AsDeliveryRuleRequestHeaderAction()
+				return ok
+			},
+		},
+		"modify_response_header_action": {
+			flattenFunc: deliveryruleactions.FlattenArmCdnEndpointActionModifyResponseHeader,
+			validateFunc: func(action cdn.BasicDeliveryRuleAction) bool {
+				_, ok := action.AsDeliveryRuleResponseHeaderAction()
+				return ok
+			},
+		},
+		"url_redirect_action": {
+			flattenFunc: deliveryruleactions.FlattenArmCdnEndpointActionUrlRedirect,
+			validateFunc: func(action cdn.BasicDeliveryRuleAction) bool {
+				_, ok := action.AsURLRedirectAction()
+				return ok
+			},
+		},
+		"url_rewrite_action": {
+			flattenFunc: deliveryruleactions.FlattenArmCdnEndpointActionURLRewrite,
+			validateFunc: func(action cdn.BasicDeliveryRuleAction) bool {
+				_, ok := action.AsURLRewriteAction()
+				return ok
+			},
+		},
+	}
+
+	// first ensure there's a map for all of the keys
+	output := make(map[string][]interface{})
+	for schemaKey := range actionTypes {
+		output[schemaKey] = make([]interface{}, 0)
+	}
+
+	// intentionally bail here now we have defaults populated
+	if actions == nil {
+		return &output, nil
+	}
+
+	// then iterate over all the actions and map them as necessary
+	for _, action := range *actions {
+		for schemaKey, actionType := range actionTypes {
+			suitable := actionType.validateFunc(action)
+			if !suitable {
+				continue
+			}
+
+			mapped, err := actionType.flattenFunc(action)
+			if err != nil {
+				return nil, err
+			}
+
+			output[schemaKey] = append(output[schemaKey], mapped)
+			break
+		}
+	}
+
+	return &output, nil
+}

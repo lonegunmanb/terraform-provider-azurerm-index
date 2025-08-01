@@ -1,0 +1,172 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/queue/queues"
+)
+func (s AccountQueuePropertiesResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"storage_account_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: commonids.ValidateStorageAccountID,
+		},
+
+		"cors_rule": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 5,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"allowed_origins": {
+						Type:     pluginsdk.TypeList,
+						Required: true,
+						MaxItems: 64,
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeString,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+					},
+					"exposed_headers": {
+						Type:     pluginsdk.TypeList,
+						Required: true,
+						MaxItems: 64,
+						MinItems: 1,
+						Elem: &pluginsdk.Schema{
+							Type: pluginsdk.TypeString,
+						},
+					},
+					"allowed_headers": {
+						Type:     pluginsdk.TypeList,
+						Required: true,
+						MaxItems: 64,
+						MinItems: 1,
+						Elem: &pluginsdk.Schema{
+							Type: pluginsdk.TypeString,
+						},
+					},
+					"allowed_methods": {
+						Type:     pluginsdk.TypeList,
+						Required: true,
+						MaxItems: 64,
+						Elem: &pluginsdk.Schema{
+							Type: pluginsdk.TypeString,
+							ValidateFunc: validation.StringInSlice([]string{
+								"DELETE",
+								"GET",
+								"HEAD",
+								"MERGE",
+								"POST",
+								"OPTIONS",
+								"PUT",
+							}, false),
+						},
+					},
+					"max_age_in_seconds": {
+						Type:         pluginsdk.TypeInt,
+						Required:     true,
+						ValidateFunc: validation.IntBetween(0, 2000000000),
+					},
+				},
+			},
+			AtLeastOneOf: []string{"minute_metrics", "hour_metrics", "logging", "cors_rule"},
+		},
+
+		"hour_metrics": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Computed: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"version": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"include_apis": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						Default:  false,
+					},
+					"retention_policy_days": {
+						Type:         pluginsdk.TypeInt,
+						Optional:     true,
+						ValidateFunc: validation.IntBetween(1, 365),
+					},
+				},
+			},
+			AtLeastOneOf: []string{"minute_metrics", "hour_metrics", "logging", "cors_rule"},
+		},
+		"logging": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Computed: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"version": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"delete": {
+						Type:     pluginsdk.TypeBool,
+						Required: true,
+					},
+					"read": {
+						Type:     pluginsdk.TypeBool,
+						Required: true,
+					},
+					"write": {
+						Type:     pluginsdk.TypeBool,
+						Required: true,
+					},
+					"retention_policy_days": {
+						Type:         pluginsdk.TypeInt,
+						Optional:     true,
+						ValidateFunc: validation.IntBetween(1, 365),
+					},
+				},
+			},
+			AtLeastOneOf: []string{"minute_metrics", "hour_metrics", "logging", "cors_rule"},
+		},
+		"minute_metrics": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Computed: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"version": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"include_apis": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						Default:  false,
+					},
+					"retention_policy_days": {
+						Type:         pluginsdk.TypeInt,
+						Optional:     true,
+						ValidateFunc: validation.IntBetween(1, 365),
+					},
+				},
+			},
+			AtLeastOneOf: []string{"minute_metrics", "hour_metrics", "logging", "cors_rule"},
+		},
+	}
+}

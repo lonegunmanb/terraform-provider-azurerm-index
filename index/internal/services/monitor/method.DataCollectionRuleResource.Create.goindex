@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/eventhubs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2022-06-01/datacollectionendpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2022-06-01/datacollectionrules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r DataCollectionRuleResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			metadata.Logger.Info("Decoding state..")
+			var state DataCollectionRule
+			if err := metadata.Decode(&state); err != nil {
+				return err
+			}
+
+			client := metadata.Client.Monitor.DataCollectionRulesClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			id := datacollectionrules.NewDataCollectionRuleID(subscriptionId, state.ResourceGroupName, state.Name)
+			metadata.Logger.Infof("creating %s", id)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for the presence of an existing %s: %+v", id, err)
+			}
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			dataSources, err := expandDataCollectionRuleDataSources(state.DataSources)
+			if err != nil {
+				return err
+			}
+
+			identityValue, err := identity.ExpandLegacySystemAndUserAssignedMap(metadata.ResourceData.Get("identity").([]interface{}))
+			if err != nil {
+				return fmt.Errorf("expanding `identity`: %+v", err)
+			}
+
+			input := datacollectionrules.DataCollectionRuleResource{
+				Identity: identityValue,
+				Kind:     expandDataCollectionRuleKind(state.Kind),
+				Location: azure.NormalizeLocation(state.Location),
+				Name:     utils.String(state.Name),
+				Properties: &datacollectionrules.DataCollectionRule{
+					DataFlows:          expandDataCollectionRuleDataFlows(state.DataFlows),
+					DataSources:        dataSources,
+					Description:        utils.String(state.Description),
+					Destinations:       expandDataCollectionRuleDestinations(state.Destinations),
+					StreamDeclarations: expandDataCollectionRuleStreamDeclarations(state.StreamDeclaration),
+				},
+				Tags: tags.Expand(state.Tags),
+			}
+
+			if state.DataCollectionEndpointId != "" {
+				input.Properties.DataCollectionEndpointId = utils.String(state.DataCollectionEndpointId)
+			}
+
+			if _, err := client.Create(ctx, id, input); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+		Timeout: 30 * time.Minute,
+	}
+}

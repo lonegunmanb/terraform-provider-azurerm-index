@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-02/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r VirtualMachineImplicitDataDiskFromSourceResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Compute.VirtualMachinesClient
+
+			id, err := parse.DataDiskID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			virtualMachineId := virtualmachines.NewVirtualMachineID(id.SubscriptionId, id.ResourceGroup, id.VirtualMachineName)
+			resp, err := client.Get(ctx, virtualMachineId, virtualmachines.DefaultGetOperationOptions())
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", virtualMachineId, err)
+			}
+
+			schema := VirtualMachineImplicitDataDiskFromSourceResourceModel{
+				Name:             id.Name,
+				VirtualMachineId: virtualMachineId.ID(),
+			}
+
+			var disk *virtualmachines.DataDisk
+			if model := resp.Model; model != nil {
+				if props := model.Properties; props != nil {
+					if profile := props.StorageProfile; profile != nil {
+						if dataDisks := profile.DataDisks; dataDisks != nil {
+							for _, dataDisk := range *dataDisks {
+								if pointer.From(dataDisk.Name) == id.Name {
+									disk = &dataDisk
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if disk == nil {
+				return metadata.MarkAsGone(*id)
+			}
+
+			schema.Lun = disk.Lun
+			if v := pointer.From(disk.Caching); v != virtualmachines.CachingTypesNone {
+				schema.Caching = string(v)
+			}
+
+			schema.CreateOption = string(disk.CreateOption)
+			schema.DiskSizeGb = pointer.From(disk.DiskSizeGB)
+			if disk.SourceResource != nil {
+				schema.SourceResourceId = pointer.From(disk.SourceResource.Id)
+			}
+
+			schema.WriteAcceleratorEnabled = pointer.From(disk.WriteAcceleratorEnabled)
+
+			return metadata.Encode(&schema)
+		},
+	}
+}

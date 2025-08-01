@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/certificates"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r ContainerAppEnvironmentCertificateDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ContainerApps.CertificatesClient
+
+			var cert ContainerAppEnvironmentCertificateDataSourceModel
+			if err := metadata.Decode(&cert); err != nil {
+				return err
+			}
+
+			envId, err := certificates.ParseManagedEnvironmentID(cert.ManagedEnvironmentId)
+			if err != nil {
+				return err
+			}
+
+			id := certificates.NewCertificateID(envId.SubscriptionId, envId.ResourceGroupName, envId.ManagedEnvironmentName, cert.Name)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("reading %s: %+v", id, err)
+			}
+
+			cert.Name = id.CertificateName
+			cert.ManagedEnvironmentId = envId.ID()
+
+			if model := existing.Model; model != nil {
+				cert.Tags = tags.Flatten(model.Tags)
+
+				if props := model.Properties; props != nil {
+					cert.Issuer = pointer.From(props.Issuer)
+					cert.IssueDate = pointer.From(props.IssueDate)
+					cert.ExpirationDate = pointer.From(props.ExpirationDate)
+					cert.Thumbprint = pointer.From(props.Thumbprint)
+					cert.SubjectName = pointer.From(props.SubjectName)
+				}
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&cert)
+		},
+	}
+}

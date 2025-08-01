@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewaySslPolicy(vs []interface{}) *applicationgateways.ApplicationGatewaySslPolicy {
+	policy := applicationgateways.ApplicationGatewaySslPolicy{}
+	disabledSSLProtocols := make([]applicationgateways.ApplicationGatewaySslProtocol, 0)
+
+	if len(vs) > 0 && vs[0] != nil {
+		v := vs[0].(map[string]interface{})
+		policyType := applicationgateways.ApplicationGatewaySslPolicyType(v["policy_type"].(string))
+
+		for _, policy := range v["disabled_protocols"].([]interface{}) {
+			disabledSSLProtocols = append(disabledSSLProtocols, applicationgateways.ApplicationGatewaySslProtocol(policy.(string)))
+		}
+
+		if policyType == applicationgateways.ApplicationGatewaySslPolicyTypePredefined {
+			policyName := applicationgateways.ApplicationGatewaySslPolicyName(v["policy_name"].(string))
+			policy = applicationgateways.ApplicationGatewaySslPolicy{
+				PolicyType: pointer.To(policyType),
+				PolicyName: pointer.To(policyName),
+			}
+		} else if policyType == applicationgateways.ApplicationGatewaySslPolicyTypeCustom || policyType == applicationgateways.ApplicationGatewaySslPolicyTypeCustomVTwo {
+			minProtocolVersion := applicationgateways.ApplicationGatewaySslProtocol(v["min_protocol_version"].(string))
+			cipherSuites := make([]applicationgateways.ApplicationGatewaySslCipherSuite, 0)
+
+			for _, cipherSuite := range v["cipher_suites"].([]interface{}) {
+				cipherSuites = append(cipherSuites, applicationgateways.ApplicationGatewaySslCipherSuite(cipherSuite.(string)))
+			}
+
+			policy = applicationgateways.ApplicationGatewaySslPolicy{
+				PolicyType:         pointer.To(policyType),
+				MinProtocolVersion: pointer.To(minProtocolVersion),
+				CipherSuites:       &cipherSuites,
+			}
+		}
+	}
+
+	if len(disabledSSLProtocols) > 0 {
+		policy = applicationgateways.ApplicationGatewaySslPolicy{
+			DisabledSslProtocols: &disabledSSLProtocols,
+		}
+	}
+
+	return &policy
+}

@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationrecoveryplans"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func replicationRecoveryPlanActionSchema() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Schema: map[string]*schema.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"AutomationRunbookActionDetails",
+					"ManualActionDetails",
+					"ScriptActionDetails",
+				}, false),
+			},
+
+			"fail_over_directions": {
+				Type:     pluginsdk.TypeSet,
+				Required: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(replicationrecoveryplans.PossibleOperationsDirectionsPrimaryToRecovery),
+						string(replicationrecoveryplans.PossibleOperationsDirectionsRecoveryToPrimary),
+					}, false),
+				},
+			},
+
+			"fail_over_types": {
+				Type:     pluginsdk.TypeSet,
+				Required: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(replicationrecoveryplans.ReplicationProtectedItemOperationPlannedFailover),
+						string(replicationrecoveryplans.ReplicationProtectedItemOperationTestFailover),
+						string(replicationrecoveryplans.ReplicationProtectedItemOperationUnplannedFailover),
+					}, false),
+				},
+			},
+
+			"runbook_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: azure.ValidateResourceID,
+			},
+
+			"fabric_location": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(replicationrecoveryplans.RecoveryPlanActionLocationPrimary),
+					string(replicationrecoveryplans.RecoveryPlanActionLocationRecovery),
+				}, false),
+			},
+
+			"manual_action_instruction": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"script_path": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+		},
+	}
+}

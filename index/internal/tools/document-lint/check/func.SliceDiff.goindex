@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"log"
+	"path"
+	"strings"
+
+	"github.com/fatih/color"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func SliceDiff(want, got []string, caseInSensitive bool) (missed, spare []string) {
+	// if `want` is nil then it may only write in doc, skip this
+	if len(want) == 0 {
+		return
+	}
+	// cross-check
+	wantCpy, gotCpy := want, got
+	if caseInSensitive {
+		wantCpy = make([]string, len(want))
+		gotCpy = make([]string, len(got))
+		for idx := range want {
+			wantCpy[idx] = strings.ToLower(want[idx])
+		}
+		for idx := range got {
+			gotCpy[idx] = strings.ToLower(got[idx])
+		}
+	}
+	wantMap := util.Slice2Map(wantCpy)
+	gotMap := util.Slice2Map(gotCpy)
+
+	for idx, k := range wantCpy {
+		if _, ok := gotMap[k]; !ok {
+			missed = append(missed, want[idx])
+		}
+	}
+
+	for idx, k := range gotCpy {
+		if _, ok := wantMap[k]; !ok {
+			spare = append(spare, got[idx])
+		}
+	}
+
+	return
+}

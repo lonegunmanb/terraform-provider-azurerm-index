@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/bot
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/botservice/2021-05-01-preview/botservice"
+)
+func resourceBotChannelWebChatCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Bot.ChannelClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := parse.NewBotChannelID(subscriptionId, d.Get("resource_group_name").(string), d.Get("bot_name").(string), string(botservice.ChannelNameWebChatChannel))
+
+	existing, err := client.Get(ctx, id.ResourceGroup, id.BotServiceName, id.ChannelName)
+	if err != nil {
+		if !utils.ResponseWasNotFound(existing.Response) {
+			return fmt.Errorf("checking for presence of %s: %+v", id, err)
+		}
+	}
+	if !utils.ResponseWasNotFound(existing.Response) {
+		// The Bot WebChat Channel would be created by default while creating Bot Registrations Channel.
+		// So if the channel includes `Default Site`, it means it's default channel and delete it.
+		// So if the channel includes other site, it means it's user custom channel and throws conflict error.
+		if props := existing.Properties; props != nil {
+			defaultChannel, ok := props.AsWebChatChannel()
+			if ok && defaultChannel.Properties != nil {
+				if includeDefaultWebChatSite(defaultChannel.Properties.Sites) {
+					if _, err := client.Delete(ctx, id.ResourceGroup, id.BotServiceName, string(botservice.ChannelNameBasicChannelChannelNameWebChatChannel)); err != nil {
+						return fmt.Errorf("deleting the default Web Chat Channel %s: %+v", id, err)
+					}
+				} else {
+					return tf.ImportAsExistsError("azurerm_bot_channel_web_chat", id.ID())
+				}
+			}
+		}
+	}
+
+	channel := botservice.BotChannel{
+		Properties: botservice.WebChatChannel{
+			Properties:  &botservice.WebChatChannelProperties{},
+			ChannelName: botservice.ChannelNameBasicChannelChannelNameWebChatChannel,
+		},
+		Location: utils.String(azure.NormalizeLocation(d.Get("location").(string))),
+		Kind:     botservice.KindBot,
+	}
+
+	if v, ok := d.GetOk("site"); ok {
+		channel, _ := channel.Properties.AsWebChatChannel()
+		channel.Properties.Sites = expandSites(v.(*pluginsdk.Set).List())
+	}
+
+	if _, err := client.Create(ctx, id.ResourceGroup, id.BotServiceName, botservice.ChannelNameWebChatChannel, channel); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	// Unable to add a new site with user_upload_enabled, endpoint_parameters_enabled, storage_enabled in the same operation, so we need to make two calls
+	if _, err := client.Update(ctx, id.ResourceGroup, id.BotServiceName, botservice.ChannelNameWebChatChannel, channel); err != nil {
+		return fmt.Errorf("updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceBotChannelWebChatRead(d, meta)
+}

@@ -1,0 +1,87 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backupinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	azSchema "github.com/hashicorp/terraform-provider-azurerm/internal/tf/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceDataProtectionBackupInstanceBlobStorage() *schema.Resource {
+	return &schema.Resource{
+		Create: resourceDataProtectionBackupInstanceBlobStorageCreateUpdate,
+		Read:   resourceDataProtectionBackupInstanceBlobStorageRead,
+		Update: resourceDataProtectionBackupInstanceBlobStorageCreateUpdate,
+		Delete: resourceDataProtectionBackupInstanceBlobStorageDelete,
+
+		Timeouts: &schema.ResourceTimeout{
+			Create: schema.DefaultTimeout(30 * time.Minute),
+			Read:   schema.DefaultTimeout(5 * time.Minute),
+			Update: schema.DefaultTimeout(30 * time.Minute),
+			Delete: schema.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: azSchema.ValidateResourceIDPriorToImport(func(id string) error {
+			_, err := backupinstances.ParseBackupInstanceID(id)
+			return err
+		}),
+
+		Schema: map[string]*schema.Schema{
+			"name": {
+				Type:     schema.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"location": commonschema.Location(),
+
+			"vault_id": {
+				Type:         schema.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: backupinstances.ValidateBackupVaultID,
+			},
+
+			"storage_account_id": {
+				Type:         schema.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: commonids.ValidateStorageAccountID,
+			},
+
+			"backup_policy_id": {
+				Type:         schema.TypeString,
+				Required:     true,
+				ValidateFunc: backuppolicies.ValidateBackupPolicyID,
+			},
+
+			"storage_account_container_names": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+		},
+
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			// The `storage_account_container_names` can not be removed once specified.
+			pluginsdk.ForceNewIfChange("storage_account_container_names", func(ctx context.Context, old, new, _ interface{}) bool {
+				return len(old.([]interface{})) > 0 && len(new.([]interface{})) == 0
+			}),
+		),
+	}
+}

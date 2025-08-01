@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func (sbu BlobUpload) blobPageUploadWorker(ctx context.Context, uploadCtx blobPageUploadContext) {
+	for page := range uploadCtx.pages {
+		start := page.offset
+		end := page.offset + page.section.Size() - 1
+		if end > uploadCtx.blobSize-1 {
+			end = uploadCtx.blobSize - 1
+		}
+		size := end - start + 1
+
+		chunk := make([]byte, size)
+		if _, err := page.section.Read(chunk); err != nil && err != io.EOF {
+			uploadCtx.errors <- fmt.Errorf("reading source file %q at offset %d: %s", sbu.Source, page.offset, err)
+			uploadCtx.wg.Done()
+			continue
+		}
+
+		input := blobs.PutPageUpdateInput{
+			StartByte: start,
+			EndByte:   end,
+			Content:   chunk,
+		}
+
+		if _, err := sbu.Client.PutPageUpdate(ctx, sbu.ContainerName, sbu.BlobName, input); err != nil {
+			uploadCtx.errors <- fmt.Errorf("writing page at offset %d for file %q: %s", page.offset, sbu.Source, err)
+			uploadCtx.wg.Done()
+			continue
+		}
+
+		uploadCtx.wg.Done()
+	}
+}

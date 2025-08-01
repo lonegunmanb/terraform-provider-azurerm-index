@@ -1,0 +1,117 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/md
+import (
+	"os"
+	"regexp"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+)
+func FixFileNormalize(file string) {
+	contentBs, _ := os.ReadFile(file)
+	content := string(contentBs)
+
+	lines := strings.Split(content, "\n")
+	var curScope model.PosType
+	var skipThisLine int
+	var inHCL bool
+
+	newContent := make([]string, 0, len(lines))
+	for idx, line := range lines {
+		if inHCL {
+			newContent = append(newContent, line)
+			if strings.HasPrefix(line, "```") {
+				inHCL = false
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "```") {
+			inHCL = true
+			newContent = append(newContent, line)
+			continue
+		}
+		if skipThisLine > 0 {
+			skipThisLine--
+			continue
+		}
+		line = replaceNBSP(line)
+		if pos := headPos(line); pos > 0 {
+			curScope = pos
+		}
+		if line == "--" {
+			line = "---"
+			lines[idx] = line
+		}
+		// some doc use `-` as list mark
+		if strings.HasPrefix(line, "- `") {
+			line = "*" + line[1:]
+		}
+		if !curScope.IsArgOrAttr() {
+			newContent = append(newContent, line)
+			continue
+		}
+
+		if strings.HasPrefix(line, "*") && !strings.HasSuffix(line, ".") {
+			idx2 := idx + 1
+			for idx2 < len(lines) {
+				l2 := lines[idx2]
+				if l2 == "" {
+					break
+				}
+				ch := l2[0]
+				if ch == ' ' || (ch >= 'a' && ch < 'z') || (ch >= 'A' && ch <= 'Z') {
+					if !strings.HasSuffix(line, " ") && !strings.HasPrefix(l2, " ") {
+						line += " "
+					}
+					line += l2
+					skipThisLine++
+					idx2++
+				} else {
+					break
+				}
+			}
+		}
+
+		if tryBlockHeadDetect(line) {
+			line = tryFixBlockHead(line)
+		}
+
+		if strings.Contains(line, "(Optional)") || strings.Contains(line, "(Required)") {
+			if strings.HasPrefix(line, "`") {
+				line = "* " + line
+			}
+		}
+
+		isSep := func(line string) bool {
+			return line == "---" || strings.HasPrefix(line, "#")
+		}
+		if blockHeadReg.MatchString(line) {
+			if !isSep(lines[idx-1]) && !isSep(lines[idx-2]) {
+				newContent = append(newContent, "---", "")
+			}
+		} else if strings.HasPrefix(line, "*") {
+			// need a dash(-) after property name
+			line2 := tryFixProp(line)
+			line = line2
+			for k, v := range orderFixMap {
+				if strings.Contains(line, k) && !strings.Contains(line, v) {
+					line = strings.Replace(line, k, v, 1)
+				}
+			}
+			for k, v := range requiredCaseFix {
+				if strings.Contains(line, k) && !strings.Contains(line, v) {
+					line = strings.Replace(line, k, v, 1)
+				}
+			}
+		}
+
+		line = removeRedundantSpace(line)
+		newContent = append(newContent, line)
+	}
+	newBs := strings.Join(newContent, "\n")
+	if newBs != content {
+		f, _ := os.OpenFile(file, os.O_TRUNC|os.O_WRONLY, 0o666)
+		_, _ = f.WriteString(newBs)
+		_ = f.Sync()
+	}
+}

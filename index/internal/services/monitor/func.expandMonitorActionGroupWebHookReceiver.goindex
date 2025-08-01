@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2022-08-08/automationaccount"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2023-01-01/actiongroupsapis"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandMonitorActionGroupWebHookReceiver(tenantId string, v []interface{}) *[]actiongroupsapis.WebhookReceiver {
+	receivers := make([]actiongroupsapis.WebhookReceiver, 0)
+	for _, receiverValue := range v {
+		val := receiverValue.(map[string]interface{})
+		receiver := actiongroupsapis.WebhookReceiver{
+			Name:                 val["name"].(string),
+			ServiceUri:           val["service_uri"].(string),
+			UseCommonAlertSchema: utils.Bool(val["use_common_alert_schema"].(bool)),
+		}
+		if v, ok := val["aad_auth"].([]interface{}); ok && len(v) > 0 {
+			secureWebhook := v[0].(map[string]interface{})
+			receiver.UseAadAuth = utils.Bool(true)
+			receiver.ObjectId = utils.String(secureWebhook["object_id"].(string))
+			receiver.IdentifierUri = utils.String(secureWebhook["identifier_uri"].(string))
+			if v := secureWebhook["tenant_id"].(string); v != "" {
+				receiver.TenantId = utils.String(v)
+			} else {
+				receiver.TenantId = utils.String(tenantId)
+			}
+		}
+		receivers = append(receivers, receiver)
+	}
+	return &receivers
+}

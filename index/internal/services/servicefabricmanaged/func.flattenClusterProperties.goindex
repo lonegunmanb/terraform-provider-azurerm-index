@@ -1,0 +1,131 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicefabricmanaged
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicefabricmanagedcluster/2021-05-01/managedcluster"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicefabricmanagedcluster/2021-05-01/nodetype"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenClusterProperties(cluster *managedcluster.ManagedCluster) *ClusterResourceModel {
+	model := &ClusterResourceModel{}
+	if cluster == nil {
+		return model
+	}
+
+	model.Name = pointer.From(cluster.Name)
+	model.Location = cluster.Location
+	if sku := cluster.Sku; sku != nil {
+		model.Sku = sku.Name
+	}
+
+	properties := cluster.Properties
+	if properties == nil {
+		return model
+	}
+
+	model.DNSName = properties.DnsName
+
+	if features := properties.AddonFeatures; features != nil {
+		for _, feature := range *features {
+			if feature == managedcluster.AddonFeaturesDnsService {
+				model.DNSService = true
+			} else if feature == managedcluster.AddonFeaturesBackupRestoreService {
+				model.BackupRestoreService = true
+			}
+		}
+	}
+	model.Username = properties.AdminUserName
+
+	if aad := properties.AzureActiveDirectory; aad != nil {
+		model.Authentication = append(model.Authentication, Authentication{})
+		adModels := make([]ADAuthentication, 0)
+
+		adModel := ADAuthentication{}
+		adModel.ClientApp = pointer.From(aad.ClientApplication)
+		adModel.ClusterApp = pointer.From(aad.ClusterApplication)
+		adModel.TenantId = pointer.From(aad.TenantId)
+
+		adModels = append(adModels, adModel)
+		model.Authentication[0].ADAuth = adModels
+	}
+
+	if clients := properties.Clients; clients != nil {
+		certs := make([]ThumbprintAuth, len(*clients))
+		for idx, client := range *clients {
+			t := CertTypeReadOnly
+			if client.IsAdmin {
+				t = CertTypeAdmin
+			}
+			certs[idx] = ThumbprintAuth{
+				CertificateType: t,
+				CommonName:      pointer.From(client.CommonName),
+				Thumbprint:      pointer.From(client.Thumbprint),
+			}
+		}
+		if len(model.Authentication) == 0 {
+			model.Authentication = append(model.Authentication, Authentication{})
+		}
+		model.Authentication[0].CertAuthentication = certs
+	}
+
+	if fss := properties.FabricSettings; fss != nil {
+		cfs := make([]CustomFabricSetting, 0)
+		for _, fs := range *fss {
+			for _, param := range fs.Parameters {
+				cfs = append(cfs, CustomFabricSetting{
+					Section:   fs.Name,
+					Parameter: param.Name,
+					Value:     param.Value,
+				})
+			}
+		}
+		model.CustomFabricSettings = cfs
+	}
+
+	model.ClientConnectionPort = pointer.From(properties.ClientConnectionPort)
+	model.HTTPGatewayPort = pointer.From(properties.HTTPGatewayConnectionPort)
+
+	if lbrules := properties.LoadBalancingRules; lbrules != nil {
+		model.LBRules = make([]LBRule, len(*lbrules))
+		for idx, rule := range *lbrules {
+			model.LBRules[idx] = LBRule{
+				BackendPort:      rule.BackendPort,
+				FrontendPort:     rule.FrontendPort,
+				ProbeProtocol:    rule.ProbeProtocol,
+				ProbeRequestPath: pointer.From(rule.ProbeRequestPath),
+				Protocol:         rule.Protocol,
+			}
+		}
+	}
+
+	if upgradeWave := properties.ClusterUpgradeCadence; upgradeWave != nil {
+		model.UpgradeWave = *upgradeWave
+	}
+
+	if t := cluster.Tags; t != nil {
+		modelTags := make(map[string]interface{})
+		for tag, value := range *t {
+			// This tag is temporary and will be removed at a later date.
+			// More info can be found here https://azure.microsoft.com/en-us/updates/default-outbound-access-for-vms-in-azure-will-be-retired-transition-to-a-new-method-of-internet-access/
+			// In the meantime, we'll ignore it when setting tags into state
+			if !strings.Contains(tag, "SFRP.DisableDefaultOutboundAccess") {
+				modelTags[tag] = value
+			}
+		}
+		model.Tags = modelTags
+	}
+	return model
+}

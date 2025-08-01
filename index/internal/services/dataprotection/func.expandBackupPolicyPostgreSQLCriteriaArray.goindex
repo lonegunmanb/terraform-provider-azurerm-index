@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandBackupPolicyPostgreSQLCriteriaArray(input []interface{}) (*[]backuppolicies.BackupCriteria, error) {
+	if len(input) == 0 || input[0] == nil {
+		return nil, fmt.Errorf("criteria is a required field, cannot leave blank")
+	}
+	results := make([]backuppolicies.BackupCriteria, 0)
+
+	for _, item := range input {
+		v := item.(map[string]interface{})
+		var absoluteCriteria []backuppolicies.AbsoluteMarker
+		if absoluteCriteriaRaw := v["absolute_criteria"].(string); len(absoluteCriteriaRaw) > 0 {
+			absoluteCriteria = []backuppolicies.AbsoluteMarker{backuppolicies.AbsoluteMarker(absoluteCriteriaRaw)}
+		}
+
+		var daysOfWeek []backuppolicies.DayOfWeek
+		if v["days_of_week"].(*pluginsdk.Set).Len() > 0 {
+			daysOfWeek = make([]backuppolicies.DayOfWeek, 0)
+			for _, value := range v["days_of_week"].(*pluginsdk.Set).List() {
+				daysOfWeek = append(daysOfWeek, backuppolicies.DayOfWeek(value.(string)))
+			}
+		}
+
+		var monthsOfYear []backuppolicies.Month
+		if v["months_of_year"].(*pluginsdk.Set).Len() > 0 {
+			monthsOfYear = make([]backuppolicies.Month, 0)
+			for _, value := range v["months_of_year"].(*pluginsdk.Set).List() {
+				monthsOfYear = append(monthsOfYear, backuppolicies.Month(value.(string)))
+			}
+		}
+
+		var weeksOfMonth []backuppolicies.WeekNumber
+		if v["weeks_of_month"].(*pluginsdk.Set).Len() > 0 {
+			weeksOfMonth = make([]backuppolicies.WeekNumber, 0)
+			for _, value := range v["weeks_of_month"].(*pluginsdk.Set).List() {
+				weeksOfMonth = append(weeksOfMonth, backuppolicies.WeekNumber(value.(string)))
+			}
+		}
+
+		var scheduleTimes *[]string
+		if v["scheduled_backup_times"].(*pluginsdk.Set).Len() > 0 {
+			scheduleTimes = utils.ExpandStringSlice(v["scheduled_backup_times"].(*pluginsdk.Set).List())
+		}
+		results = append(results, backuppolicies.ScheduleBasedBackupCriteria{
+			AbsoluteCriteria: &absoluteCriteria,
+			DaysOfMonth:      nil,
+			DaysOfTheWeek:    &daysOfWeek,
+			MonthsOfYear:     &monthsOfYear,
+			ScheduleTimes:    scheduleTimes,
+			WeeksOfTheMonth:  &weeksOfMonth,
+		})
+	}
+	return &results, nil
+}

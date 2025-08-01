@@ -1,0 +1,121 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func resourceIothubEndpointStorageContainerSchema() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: iothubValidate.IoTHubEndpointName,
+		},
+
+		"resource_group_name": commonschema.ResourceGroupName(),
+
+		// lintignore: S013
+		"iothub_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: iothubValidate.IotHubID,
+		},
+
+		"container_name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: validate.StorageContainerName,
+		},
+
+		"file_name_format": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      "{iothub}/{partition}/{YYYY}/{MM}/{DD}/{HH}/{mm}",
+			ValidateFunc: iothubValidate.FileNameFormat,
+		},
+
+		"batch_frequency_in_seconds": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Default:      300,
+			ValidateFunc: validation.IntBetween(60, 720),
+		},
+
+		"max_chunk_size_in_bytes": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Default:      314572800,
+			ValidateFunc: validation.IntBetween(10485760, 524288000),
+		},
+
+		"authentication_type": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  string(devices.AuthenticationTypeKeyBased),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(devices.AuthenticationTypeKeyBased),
+				string(devices.AuthenticationTypeIdentityBased),
+			}, false),
+		},
+
+		"identity_id": {
+			Type:          pluginsdk.TypeString,
+			Optional:      true,
+			ValidateFunc:  commonids.ValidateUserAssignedIdentityID,
+			ConflictsWith: []string{"connection_string"},
+		},
+
+		"endpoint_uri": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			ExactlyOneOf: []string{"endpoint_uri", "connection_string"},
+		},
+
+		"connection_string": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			DiffSuppressFunc: func(k, old, new string, d *pluginsdk.ResourceData) bool {
+				accountKeyRegex := regexp.MustCompile("AccountKey=[^;]+")
+
+				maskedNew := accountKeyRegex.ReplaceAllString(new, "AccountKey=****")
+				return (new == d.Get(k).(string)) && (maskedNew == old)
+			},
+			Sensitive:     true,
+			ConflictsWith: []string{"identity_id"},
+			ExactlyOneOf:  []string{"endpoint_uri", "connection_string"},
+		},
+
+		"encoding": {
+			Type:             pluginsdk.TypeString,
+			Optional:         true,
+			ForceNew:         true,
+			Default:          string(devices.EncodingAvro),
+			DiffSuppressFunc: suppress.CaseDifference,
+			ValidateFunc: validation.StringInSlice([]string{
+				string(devices.EncodingAvro),
+				string(devices.EncodingAvroDeflate),
+				string(devices.EncodingJSON),
+			}, true),
+		},
+	}
+}

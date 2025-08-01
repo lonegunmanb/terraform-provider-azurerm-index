@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/privateendpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/signalr/2023-02-01/signalr"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSignalRServicePrivateEndpoint(input *[]signalr.PrivateEndpointACL, privateEndpointConnections *[]signalr.PrivateEndpointConnection) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	for _, item := range *input {
+		if privateEndpointConnections != nil {
+			for _, privateEndpointConnection := range *privateEndpointConnections {
+				if privateEndpointConnection.Name == nil || privateEndpointConnection.Properties == nil {
+					continue
+				}
+				if *privateEndpointConnection.Name != item.Name {
+					continue
+				}
+				props := privateEndpointConnection.Properties
+				if props.PrivateEndpoint == nil || props.PrivateEndpoint.Id == nil {
+					continue
+				}
+
+				allowedRequestTypes := make([]string, 0)
+				if item.Allow != nil {
+					for _, item := range *item.Allow {
+						allowedRequestTypes = append(allowedRequestTypes, (string)(item))
+					}
+				}
+				allow := utils.FlattenStringSlice(&allowedRequestTypes)
+
+				deniedRequestTypes := make([]string, 0)
+				if item.Deny != nil {
+					for _, item := range *item.Deny {
+						deniedRequestTypes = append(deniedRequestTypes, (string)(item))
+					}
+				}
+				deny := utils.FlattenStringSlice(&deniedRequestTypes)
+
+				results = append(results, map[string]interface{}{
+					"id":                    *props.PrivateEndpoint.Id,
+					"allowed_request_types": allow,
+					"denied_request_types":  deny,
+				})
+
+				break
+			}
+		}
+	}
+
+	return results
+}

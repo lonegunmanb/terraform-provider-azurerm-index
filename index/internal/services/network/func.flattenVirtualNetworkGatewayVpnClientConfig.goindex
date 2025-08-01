@@ -1,0 +1,109 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/localnetworkgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenVirtualNetworkGatewayVpnClientConfig(cfg *virtualnetworkgateways.VpnClientConfiguration) ([]interface{}, error) {
+	if cfg == nil {
+		return []interface{}{}, nil
+	}
+	flat := map[string]interface{}{
+		"ipsec_policy":  flattenVirtualNetworkGatewayIPSecPolicies(cfg.VpnClientIPsecPolicies),
+		"radius_server": flattenVirtualNetworkGatewayRadiusServers(cfg.RadiusServers),
+	}
+
+	connection, err := flattenVirtualNetworkGatewayClientConnections(cfg.VngClientConnectionConfigurations)
+	if err != nil {
+		return nil, err
+	}
+	flat["virtual_network_gateway_client_connection"] = connection
+
+	if pool := cfg.VpnClientAddressPool; pool != nil {
+		flat["address_space"] = utils.FlattenStringSlice(pool.AddressPrefixes)
+	} else {
+		flat["address_space"] = []interface{}{}
+	}
+
+	if v := cfg.AadTenant; v != nil {
+		flat["aad_tenant"] = *v
+	}
+
+	if v := cfg.AadAudience; v != nil {
+		flat["aad_audience"] = *v
+	}
+
+	if v := cfg.AadIssuer; v != nil {
+		flat["aad_issuer"] = *v
+	}
+
+	rootCerts := make([]interface{}, 0)
+	if certs := cfg.VpnClientRootCertificates; certs != nil {
+		for _, cert := range *certs {
+			v := map[string]interface{}{
+				"name":             *cert.Name,
+				"public_cert_data": cert.Properties.PublicCertData,
+			}
+			rootCerts = append(rootCerts, v)
+		}
+	}
+	flat["root_certificate"] = pluginsdk.NewSet(hashVirtualNetworkGatewayRootCert, rootCerts)
+
+	revokedCerts := make([]interface{}, 0)
+	if certs := cfg.VpnClientRevokedCertificates; certs != nil {
+		for _, cert := range *certs {
+			v := map[string]interface{}{
+				"name":       *cert.Name,
+				"thumbprint": *cert.Properties.Thumbprint,
+			}
+			revokedCerts = append(revokedCerts, v)
+		}
+	}
+	flat["revoked_certificate"] = pluginsdk.NewSet(hashVirtualNetworkGatewayRevokedCert, revokedCerts)
+
+	vpnClientProtocols := &pluginsdk.Set{F: pluginsdk.HashString}
+	if vpnProtocols := cfg.VpnClientProtocols; vpnProtocols != nil {
+		for _, protocol := range *vpnProtocols {
+			vpnClientProtocols.Add(string(protocol))
+		}
+	}
+	flat["vpn_client_protocols"] = vpnClientProtocols
+
+	vpnAuthTypes := &pluginsdk.Set{F: pluginsdk.HashString}
+	if authTypes := cfg.VpnAuthenticationTypes; authTypes != nil {
+		for _, authType := range *authTypes {
+			vpnAuthTypes.Add(string(authType))
+		}
+	}
+	flat["vpn_auth_types"] = vpnAuthTypes
+
+	if v := cfg.RadiusServerAddress; v != nil {
+		flat["radius_server_address"] = *v
+	}
+
+	if v := cfg.RadiusServerSecret; v != nil {
+		flat["radius_server_secret"] = *v
+	}
+
+	return []interface{}{flat}, nil
+}

@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/inventoryitems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/systemcentervirtualmachinemanager/2023-10-07/vmmservers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/systemcentervirtualmachinemanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r SystemCenterVirtualMachineManagerServerResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.SystemCenterVirtualMachineManager.VMmServers
+
+			id, err := vmmservers.ParseVMmServerID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(*id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			state := SystemCenterVirtualMachineManagerServerModel{}
+			if model := resp.Model; model != nil {
+				state.Name = id.VmmServerName
+				state.ResourceGroupName = id.ResourceGroupName
+				state.Location = location.Normalize(model.Location)
+				state.CustomLocationId = pointer.From(model.ExtendedLocation.Name)
+				state.Fqdn = model.Properties.Fqdn
+				state.Password = metadata.ResourceData.Get("password").(string)
+				state.Port = pointer.From(model.Properties.Port)
+				state.Tags = pointer.From(model.Tags)
+
+				if v := model.Properties.Credentials; v != nil {
+					state.Username = pointer.From(v.Username)
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

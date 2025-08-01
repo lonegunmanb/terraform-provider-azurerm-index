@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	validate2 "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func expandKeyRotationPolicy(policy MHSMKeyRotationPolicyResourceSchema) keyvault.KeyRotationPolicy {
+	var expiryTime *string // = nil // needs to be set to nil if not set
+	if policy.ExpireAfter != "" {
+		expiryTime = pointer.To(policy.ExpireAfter)
+	}
+
+	lifetimeActions := make([]keyvault.LifetimeActions, 0)
+
+	lifetimeActionRotate := keyvault.LifetimeActions{
+		Action: &keyvault.LifetimeActionsType{
+			Type: keyvault.ActionTypeRotate,
+		},
+		Trigger: &keyvault.LifetimeActionsTrigger{},
+	}
+
+	if policy.TimeAfterCreation != "" {
+		lifetimeActionRotate.Trigger.TimeAfterCreate = pointer.To(policy.TimeAfterCreation)
+		lifetimeActions = append(lifetimeActions, lifetimeActionRotate)
+	} else if policy.TimeBeforeExpiry != "" {
+		lifetimeActionRotate.Trigger.TimeBeforeExpiry = pointer.To(policy.TimeBeforeExpiry)
+		lifetimeActions = append(lifetimeActions, lifetimeActionRotate)
+	}
+
+	return keyvault.KeyRotationPolicy{
+		LifetimeActions: &lifetimeActions,
+		Attributes: &keyvault.KeyRotationPolicyAttributes{
+			ExpiryTime: expiryTime,
+		},
+	}
+}

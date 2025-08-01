@@ -1,0 +1,128 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/storagetargets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceHPCCacheNFSTarget() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceHPCCacheNFSTargetCreateOrUpdate,
+		Update: resourceHPCCacheNFSTargetCreateOrUpdate,
+		Read:   resourceHPCCacheNFSTargetRead,
+		Delete: resourceHPCCacheNFSTargetDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := storagetargets.ParseStorageTargetID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.StorageTargetName,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"cache_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"namespace_junction": {
+				Type:     pluginsdk.TypeSet,
+				Required: true,
+				MinItems: 1,
+				// Confirmed with service team that they have a mac of 10 that is enforced by the backend.
+				MaxItems: 10,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"namespace_path": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validate.CacheNamespacePath,
+						},
+						"nfs_export": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validate.CacheNFSExport,
+						},
+						"target_path": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							Default:      "",
+							ValidateFunc: validate.CacheNFSTargetPath,
+						},
+
+						"access_policy_name": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							Default:      "default",
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+					},
+				},
+			},
+
+			"target_host_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			// TODO: use SDK enums once following issue is addressed
+			// https://github.com/Azure/azure-rest-api-specs/issues/13839
+			"usage_model": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"READ_HEAVY_INFREQ",
+					"READ_HEAVY_CHECK_180",
+					"READ_ONLY",
+					"READ_WRITE",
+					"WRITE_WORKLOAD_15",
+					"WRITE_AROUND",
+					"WRITE_WORKLOAD_CHECK_30",
+					"WRITE_WORKLOAD_CHECK_60",
+					"WRITE_WORKLOAD_CLOUDWS",
+				}, false),
+			},
+
+			"verification_timer_in_seconds": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntBetween(1, 31536000),
+			},
+
+			"write_back_timer_in_seconds": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntBetween(1, 31536000),
+			},
+		},
+	}
+}

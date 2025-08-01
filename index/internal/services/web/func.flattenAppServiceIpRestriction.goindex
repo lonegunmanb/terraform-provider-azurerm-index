@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"fmt"
+	"log"
+	"math"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAppServiceIpRestriction(input *[]web.IPSecurityRestriction) []interface{} {
+	restrictions := make([]interface{}, 0)
+
+	if input == nil {
+		return restrictions
+	}
+
+	for _, v := range *input {
+		restriction := make(map[string]interface{})
+		if ip := v.IPAddress; ip != nil {
+			if *ip == "Any" {
+				continue
+			} else {
+				switch v.Tag {
+				case web.IPFilterTagServiceTag:
+					restriction["service_tag"] = *ip
+				default:
+					restriction["ip_address"] = *ip
+				}
+			}
+		}
+
+		subnetId := ""
+		if subnetIdRaw := v.VnetSubnetResourceID; subnetIdRaw != nil {
+			subnetId = *subnetIdRaw
+		}
+		restriction["virtual_network_subnet_id"] = subnetId
+
+		name := ""
+		if nameRaw := v.Name; nameRaw != nil {
+			name = *nameRaw
+		}
+		restriction["name"] = name
+
+		priority := 0
+		if priorityRaw := v.Priority; priorityRaw != nil {
+			priority = int(*priorityRaw)
+		}
+		restriction["priority"] = priority
+
+		action := ""
+		if actionRaw := v.Action; actionRaw != nil {
+			action = *actionRaw
+		}
+		restriction["action"] = action
+
+		if headers := v.Headers; headers != nil {
+			restriction["headers"] = flattenHeaders(headers)
+		}
+
+		restrictions = append(restrictions, restriction)
+	}
+
+	return restrictions
+}

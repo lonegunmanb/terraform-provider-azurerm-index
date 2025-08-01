@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/resource
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2021-07-01/features"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-09-01/providers"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ResourceProviderRegistrationResource) applyFeatures(ctx context.Context, metadata sdk.ResourceMetaData, id providers.SubscriptionProviderId, oldFeatures []interface{}, newFeatures []interface{}) error {
+	for _, v := range newFeatures {
+		value := v.(map[string]interface{})
+		name := value["name"].(string)
+		featureId := features.NewFeatureID(id.SubscriptionId, id.ProviderName, name)
+		if value["registered"].(bool) {
+			if err := r.registerFeature(ctx, metadata, featureId); err != nil {
+				return err
+			}
+		} else {
+			if err := r.unregisterFeature(ctx, metadata, featureId); err != nil {
+				return err
+			}
+		}
+	}
+
+	// unregister the features which block is removed now
+	unmanagedRegisteredFeatures := make(map[string]bool)
+	for _, v := range oldFeatures {
+		value := v.(map[string]interface{})
+		name := value["name"].(string)
+		unmanagedRegisteredFeatures[name] = value["registered"].(bool)
+	}
+	for _, v := range newFeatures {
+		value := v.(map[string]interface{})
+		name := value["name"].(string)
+		unmanagedRegisteredFeatures[name] = false
+	}
+
+	for featureName, registered := range unmanagedRegisteredFeatures {
+		if registered {
+			featureId := features.NewFeatureID(id.SubscriptionId, id.ProviderName, featureName)
+			if err := r.unregisterFeature(ctx, metadata, featureId); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

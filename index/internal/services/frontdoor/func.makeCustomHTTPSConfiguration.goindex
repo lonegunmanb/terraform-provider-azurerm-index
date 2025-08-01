@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func makeCustomHTTPSConfiguration(customHttpsConfiguration map[string]interface{}, minTLSVersion frontdoors.MinimumTLSVersion) frontdoors.CustomHTTPSConfiguration {
+	// https://github.com/Azure/azure-sdk-for-go/issues/6882
+
+	customHTTPSConfigurationUpdate := frontdoors.CustomHTTPSConfiguration{
+		ProtocolType:      frontdoors.FrontDoorTlsProtocolType("ServerNameIndication"),
+		MinimumTlsVersion: minTLSVersion,
+	}
+
+	if customHttpsConfiguration["certificate_source"].(string) == "AzureKeyVault" {
+		vaultSecret := customHttpsConfiguration["azure_key_vault_certificate_secret_name"].(string)
+		vaultVersion := customHttpsConfiguration["azure_key_vault_certificate_secret_version"].(string)
+		vaultId := customHttpsConfiguration["azure_key_vault_certificate_vault_id"].(string)
+
+		customHTTPSConfigurationUpdate.CertificateSource = frontdoors.FrontDoorCertificateSourceAzureKeyVault
+		customHTTPSConfigurationUpdate.KeyVaultCertificateSourceParameters = &frontdoors.KeyVaultCertificateSourceParameters{
+			Vault: &frontdoors.KeyVaultCertificateSourceParametersVault{
+				Id: utils.String(vaultId),
+			},
+			SecretName:    utils.String(vaultSecret),
+			SecretVersion: utils.String(vaultVersion),
+		}
+	} else {
+		customHTTPSConfigurationUpdate.CertificateSource = frontdoors.FrontDoorCertificateSourceFrontDoor
+		certificateType := frontdoors.FrontDoorCertificateTypeDedicated
+		customHTTPSConfigurationUpdate.FrontDoorCertificateSourceParameters = &frontdoors.FrontDoorCertificateSourceParameters{
+			CertificateType: &certificateType,
+		}
+	}
+
+	return customHTTPSConfigurationUpdate
+}

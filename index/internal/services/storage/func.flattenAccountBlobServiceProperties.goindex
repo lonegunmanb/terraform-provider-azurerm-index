@@ -1,0 +1,106 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/blobservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/fileservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultsClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/queue/queues"
+)
+func flattenAccountBlobServiceProperties(input *blobservice.BlobServiceProperties) []interface{} {
+	if input == nil || input.Properties == nil {
+		return []interface{}{}
+	}
+
+	flattenedCorsRules := make([]interface{}, 0)
+	if corsRules := input.Properties.Cors; corsRules != nil {
+		flattenedCorsRules = flattenAccountBlobPropertiesCorsRule(corsRules)
+	}
+
+	flattenedDeletePolicy := make([]interface{}, 0)
+	if deletePolicy := input.Properties.DeleteRetentionPolicy; deletePolicy != nil {
+		flattenedDeletePolicy = flattenAccountBlobDeleteRetentionPolicy(deletePolicy)
+	}
+
+	flattenedRestorePolicy := make([]interface{}, 0)
+	if restorePolicy := input.Properties.RestorePolicy; restorePolicy != nil {
+		flattenedRestorePolicy = flattenAccountBlobPropertiesRestorePolicy(restorePolicy)
+	}
+
+	flattenedContainerDeletePolicy := make([]interface{}, 0)
+	if containerDeletePolicy := input.Properties.ContainerDeleteRetentionPolicy; containerDeletePolicy != nil {
+		flattenedContainerDeletePolicy = flattenAccountBlobContainerDeleteRetentionPolicy(containerDeletePolicy)
+	}
+
+	versioning, changeFeedEnabled, changeFeedRetentionInDays := false, false, 0
+	if input.Properties.IsVersioningEnabled != nil {
+		versioning = *input.Properties.IsVersioningEnabled
+	}
+
+	if v := input.Properties.ChangeFeed; v != nil {
+		if v.Enabled != nil {
+			changeFeedEnabled = *v.Enabled
+		}
+		if v.RetentionInDays != nil {
+			changeFeedRetentionInDays = int(*v.RetentionInDays)
+		}
+	}
+
+	var defaultServiceVersion string
+	if input.Properties.DefaultServiceVersion != nil {
+		defaultServiceVersion = *input.Properties.DefaultServiceVersion
+	}
+
+	var LastAccessTimeTrackingPolicy bool
+	if v := input.Properties.LastAccessTimeTrackingPolicy; v != nil {
+		LastAccessTimeTrackingPolicy = v.Enable
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"change_feed_enabled":               changeFeedEnabled,
+			"change_feed_retention_in_days":     changeFeedRetentionInDays,
+			"container_delete_retention_policy": flattenedContainerDeletePolicy,
+			"cors_rule":                         flattenedCorsRules,
+			"default_service_version":           defaultServiceVersion,
+			"delete_retention_policy":           flattenedDeletePolicy,
+			"last_access_time_enabled":          LastAccessTimeTrackingPolicy,
+			"restore_policy":                    flattenedRestorePolicy,
+			"versioning_enabled":                versioning,
+		},
+	}
+}

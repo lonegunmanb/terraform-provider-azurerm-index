@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backupinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	resourceParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r DataProtectionBackupInstanceKubernatesClusterResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DataProtection.BackupInstanceClient
+
+			id, err := backupinstances.ParseBackupInstanceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(*id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			vaultId := backupinstances.NewBackupVaultID(id.SubscriptionId, id.ResourceGroupName, id.BackupVaultName)
+
+			state := BackupInstanceKubernatesClusterModel{
+				Name:    id.BackupInstanceName,
+				VaultId: vaultId.ID(),
+			}
+
+			if model := resp.Model; model != nil {
+				if properties := model.Properties; properties != nil {
+					state.Location = location.NormalizeNilable(properties.DataSourceInfo.ResourceLocation)
+					state.BackupPolicyId = properties.PolicyInfo.PolicyId
+					state.KubernetesClusterId = properties.DataSourceInfo.ResourceID
+
+					if policyParameters := properties.PolicyInfo.PolicyParameters; policyParameters != nil {
+						if dataStorePara := policyParameters.DataStoreParametersList; dataStorePara != nil {
+							if dsp := pointer.From(dataStorePara); len(dsp) > 0 {
+								if parameter, ok := dsp[0].(backupinstances.AzureOperationalStoreParameters); ok && parameter.ResourceGroupId != nil {
+									resourceGroupId, err := resourceParse.ResourceGroupID(*parameter.ResourceGroupId)
+									if err != nil {
+										return err
+									}
+									state.SnapshotResourceGroupName = resourceGroupId.ResourceGroup
+								}
+							}
+						}
+						if backupDsp := policyParameters.BackupDatasourceParametersList; backupDsp != nil {
+							if v := flattenBackupDatasourceParameters(*backupDsp); v != nil {
+								state.BackupDatasourceParameters = pointer.From(v)
+							}
+						}
+					}
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

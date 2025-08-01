@@ -1,0 +1,124 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	appServiceValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenAutoHealSettingsLinux(autoHealRules *webapps.AutoHealRules) []AutoHealSettingLinux {
+	if autoHealRules == nil {
+		return []AutoHealSettingLinux{}
+	}
+
+	result := AutoHealSettingLinux{}
+
+	// Triggers
+	if autoHealRules.Triggers != nil {
+		resultTrigger := AutoHealTriggerLinux{}
+		triggers := *autoHealRules.Triggers
+		if triggers.Requests != nil {
+			count := int64(0)
+			if triggers.Requests.Count != nil {
+				count = pointer.From(triggers.Requests.Count)
+			}
+			resultTrigger.Requests = []AutoHealRequestTrigger{{
+				Count:    count,
+				Interval: pointer.From(triggers.Requests.TimeInterval),
+			}}
+		}
+
+		statusCodeTriggers := make([]AutoHealStatusCodeTrigger, 0)
+		if triggers.StatusCodes != nil {
+			for _, s := range *triggers.StatusCodes {
+				t := AutoHealStatusCodeTrigger{
+					Interval: pointer.From(s.TimeInterval),
+					Path:     pointer.From(s.Path),
+				}
+
+				if s.Status != nil {
+					t.StatusCodeRange = strconv.FormatInt(*s.Status, 10)
+				}
+
+				if s.Count != nil {
+					t.Count = pointer.From(s.Count)
+				}
+
+				if s.SubStatus != nil {
+					t.SubStatus = pointer.From(s.SubStatus)
+				}
+
+				if s.Win32Status != nil {
+					t.Win32Status = pointer.From(s.Win32Status)
+				}
+				statusCodeTriggers = append(statusCodeTriggers, t)
+			}
+		}
+		if triggers.StatusCodesRange != nil {
+			for _, s := range *triggers.StatusCodesRange {
+				t := AutoHealStatusCodeTrigger{
+					Interval: pointer.From(s.TimeInterval),
+					Path:     pointer.From(s.Path),
+				}
+				if s.Count != nil {
+					t.Count = pointer.From(s.Count)
+				}
+
+				if s.StatusCodes != nil {
+					t.StatusCodeRange = *s.StatusCodes
+				}
+				statusCodeTriggers = append(statusCodeTriggers, t)
+			}
+		}
+		resultTrigger.StatusCodes = statusCodeTriggers
+
+		slowRequestTriggers := make([]AutoHealSlowRequest, 0)
+		if triggers.SlowRequests != nil {
+			slowRequestTriggers = append(slowRequestTriggers, AutoHealSlowRequest{
+				TimeTaken: pointer.From(triggers.SlowRequests.TimeTaken),
+				Interval:  pointer.From(triggers.SlowRequests.TimeInterval),
+				Count:     pointer.From(triggers.SlowRequests.Count),
+				Path:      pointer.From(triggers.SlowRequests.Path),
+			})
+		}
+
+		slowRequestTriggersWithPaths := make([]AutoHealSlowRequestWithPath, 0)
+		if triggers.SlowRequestsWithPath != nil {
+			for _, v := range *triggers.SlowRequestsWithPath {
+				sr := AutoHealSlowRequestWithPath{
+					TimeTaken: pointer.From(v.TimeTaken),
+					Interval:  pointer.From(v.TimeInterval),
+					Count:     pointer.From(v.Count),
+					Path:      pointer.From(v.Path),
+				}
+				slowRequestTriggersWithPaths = append(slowRequestTriggersWithPaths, sr)
+			}
+		}
+		resultTrigger.SlowRequests = slowRequestTriggers
+		resultTrigger.SlowRequestsWithPath = slowRequestTriggersWithPaths
+		result.Triggers = []AutoHealTriggerLinux{resultTrigger}
+	}
+
+	// Actions
+	if autoHealRules.Actions != nil {
+		actions := *autoHealRules.Actions
+
+		result.Actions = []AutoHealActionLinux{{
+			ActionType:         string(pointer.From(actions.ActionType)),
+			MinimumProcessTime: pointer.From(actions.MinProcessExecutionTime),
+		}}
+	}
+
+	if result.Triggers != nil || result.Actions != nil {
+		return []AutoHealSettingLinux{result}
+	}
+
+	return nil
+}

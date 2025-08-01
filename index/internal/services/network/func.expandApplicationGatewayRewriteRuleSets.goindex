@@ -1,0 +1,127 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewayRewriteRuleSets(d *pluginsdk.ResourceData) (*[]applicationgateways.ApplicationGatewayRewriteRuleSet, error) {
+	vs := d.Get("rewrite_rule_set").([]interface{})
+	ruleSets := make([]applicationgateways.ApplicationGatewayRewriteRuleSet, 0)
+
+	for _, raw := range vs {
+		v := raw.(map[string]interface{})
+		rules := make([]applicationgateways.ApplicationGatewayRewriteRule, 0)
+
+		name := v["name"].(string)
+
+		for _, ruleConfig := range v["rewrite_rule"].([]interface{}) {
+			r := ruleConfig.(map[string]interface{})
+			conditions := make([]applicationgateways.ApplicationGatewayRewriteRuleCondition, 0)
+			requestConfigurations := make([]applicationgateways.ApplicationGatewayHeaderConfiguration, 0)
+			responseConfigurations := make([]applicationgateways.ApplicationGatewayHeaderConfiguration, 0)
+			urlConfiguration := applicationgateways.ApplicationGatewayURLConfiguration{}
+
+			rule := applicationgateways.ApplicationGatewayRewriteRule{
+				Name:         pointer.To(r["name"].(string)),
+				RuleSequence: pointer.To(int64(r["rule_sequence"].(int))),
+			}
+
+			for _, rawCondition := range r["condition"].([]interface{}) {
+				c := rawCondition.(map[string]interface{})
+				condition := applicationgateways.ApplicationGatewayRewriteRuleCondition{
+					Variable:   pointer.To(c["variable"].(string)),
+					Pattern:    pointer.To(c["pattern"].(string)),
+					IgnoreCase: pointer.To(c["ignore_case"].(bool)),
+					Negate:     pointer.To(c["negate"].(bool)),
+				}
+				conditions = append(conditions, condition)
+			}
+			rule.Conditions = &conditions
+
+			for _, rawConfig := range r["request_header_configuration"].([]interface{}) {
+				c := rawConfig.(map[string]interface{})
+				config := applicationgateways.ApplicationGatewayHeaderConfiguration{
+					HeaderName:  pointer.To(c["header_name"].(string)),
+					HeaderValue: pointer.To(c["header_value"].(string)),
+				}
+				requestConfigurations = append(requestConfigurations, config)
+			}
+
+			for _, rawConfig := range r["response_header_configuration"].([]interface{}) {
+				c := rawConfig.(map[string]interface{})
+				config := applicationgateways.ApplicationGatewayHeaderConfiguration{
+					HeaderName:  pointer.To(c["header_name"].(string)),
+					HeaderValue: pointer.To(c["header_value"].(string)),
+				}
+				responseConfigurations = append(responseConfigurations, config)
+			}
+
+			for _, rawConfig := range r["url"].([]interface{}) {
+				c := rawConfig.(map[string]interface{})
+				if c["path"] == nil && c["query_string"] == nil {
+					return nil, fmt.Errorf("At least one of `path` or `query_string` must be set")
+				}
+				components := ""
+				if c["components"] != nil {
+					components = c["components"].(string)
+				}
+				if c["path"] != nil && components != "query_string_only" {
+					urlConfiguration.ModifiedPath = pointer.To(c["path"].(string))
+				}
+				if c["query_string"] != nil && components != "path_only" {
+					urlConfiguration.ModifiedQueryString = pointer.To(c["query_string"].(string))
+				}
+				if c["reroute"] != nil {
+					urlConfiguration.Reroute = pointer.To(c["reroute"].(bool))
+				}
+			}
+
+			rule.ActionSet = &applicationgateways.ApplicationGatewayRewriteRuleActionSet{
+				RequestHeaderConfigurations:  &requestConfigurations,
+				ResponseHeaderConfigurations: &responseConfigurations,
+			}
+
+			if len(r["url"].([]interface{})) > 0 {
+				rule.ActionSet.UrlConfiguration = &urlConfiguration
+			}
+
+			rules = append(rules, rule)
+		}
+
+		ruleSet := applicationgateways.ApplicationGatewayRewriteRuleSet{
+			Name: pointer.To(name),
+			Properties: &applicationgateways.ApplicationGatewayRewriteRuleSetPropertiesFormat{
+				RewriteRules: &rules,
+			},
+		}
+
+		ruleSets = append(ruleSets, ruleSet)
+	}
+
+	return &ruleSets, nil
+}

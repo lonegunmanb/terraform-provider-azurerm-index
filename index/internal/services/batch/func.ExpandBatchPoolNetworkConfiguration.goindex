@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandBatchPoolNetworkConfiguration(list []interface{}) (*pool.NetworkConfiguration, error) {
+	if len(list) == 0 || list[0] == nil {
+		return nil, nil
+	}
+
+	networkConfigValue := list[0].(map[string]interface{})
+	networkConfiguration := &pool.NetworkConfiguration{}
+
+	if v, ok := networkConfigValue["dynamic_vnet_assignment_scope"]; ok {
+		networkConfiguration.DynamicVnetAssignmentScope = pointer.To(pool.DynamicVNetAssignmentScope(v.(string)))
+	}
+
+	if v, ok := networkConfigValue["accelerated_networking_enabled"]; ok {
+		networkConfiguration.EnableAcceleratedNetworking = pointer.FromBool(v.(bool))
+	}
+
+	if v, ok := networkConfigValue["subnet_id"]; ok {
+		if value := v.(string); value != "" {
+			networkConfiguration.SubnetId = &value
+		}
+	}
+
+	if v, ok := networkConfigValue["public_ips"]; ok {
+		if networkConfiguration.PublicIPAddressConfiguration == nil {
+			networkConfiguration.PublicIPAddressConfiguration = &pool.PublicIPAddressConfiguration{}
+		}
+
+		publicIPsRaw := v.(*pluginsdk.Set).List()
+		networkConfiguration.PublicIPAddressConfiguration.IPAddressIds = utils.ExpandStringSlice(publicIPsRaw)
+	}
+
+	if v, ok := networkConfigValue["endpoint_configuration"]; ok {
+		endpoint, err := expandPoolEndpointConfiguration(v.([]interface{}))
+		if err != nil {
+			return nil, err
+		}
+		networkConfiguration.EndpointConfiguration = endpoint
+	}
+
+	if v, ok := networkConfigValue["public_address_provisioning_type"]; ok {
+		if networkConfiguration.PublicIPAddressConfiguration == nil {
+			networkConfiguration.PublicIPAddressConfiguration = &pool.PublicIPAddressConfiguration{}
+		}
+
+		if value := v.(string); value != "" {
+			networkConfiguration.PublicIPAddressConfiguration.Provision = pointer.To(pool.IPAddressProvisioningType(value))
+		}
+	}
+
+	return networkConfiguration, nil
+}

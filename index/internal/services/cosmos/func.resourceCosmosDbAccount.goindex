@@ -1,0 +1,691 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cosmos-db/mgmt/2021-10-15/documentdb" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cosmosdb/2024-08-15/cosmosdb"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/customermanagedkeys"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
+	keyVaultSuppress "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/suppress"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCosmosDbAccount() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		Create: resourceCosmosDbAccountCreate,
+		Read:   resourceCosmosDbAccountRead,
+		Update: resourceCosmosDbAccountUpdate,
+		Delete: resourceCosmosDbAccountDelete,
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			pluginsdk.ForceNewIfChange("backup.0.type", func(ctx context.Context, old, new, _ interface{}) bool {
+				// backup type can only change from Periodic to Continuous
+				return old.(string) == string(cosmosdb.BackupPolicyTypeContinuous) && new.(string) == string(cosmosdb.BackupPolicyTypePeriodic)
+			}),
+
+			pluginsdk.ForceNewIfChange("analytical_storage_enabled", func(ctx context.Context, old, new, _ interface{}) bool {
+				// analytical_storage_enabled can not be changed after being set to true
+				return old.(bool) && !new.(bool)
+			}),
+
+			pluginsdk.ForceNewIf("capabilities", func(ctx context.Context, d *schema.ResourceDiff, meta interface{}) bool {
+				kind := d.Get("kind").(string)
+				old, new := d.GetChange("capabilities")
+
+				return !checkCapabilitiesCanBeUpdated(kind, prepareCapabilities(old), prepareCapabilities(new))
+			}),
+
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+				caps := diff.Get("capabilities")
+				mongo34found := false
+				enableMongo := false
+				isMongo := strings.EqualFold(diff.Get("kind").(string), string(cosmosdb.DatabaseAccountKindMongoDB))
+
+				for _, cap := range caps.(*pluginsdk.Set).List() {
+					m := cap.(map[string]interface{})
+					if v, ok := m["name"].(string); ok {
+						if v == "MongoDBv3.4" {
+							mongo34found = true
+						} else if v == "EnableMongo" {
+							enableMongo = true
+						}
+					}
+				}
+
+				if isMongo && (mongo34found && !enableMongo) {
+					return fmt.Errorf("capability EnableMongo must be enabled if MongoDBv3.4 is also enabled")
+				}
+				return nil
+			}),
+		),
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.DatabaseAccountID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(180 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(180 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(180 * time.Minute),
+		},
+
+		SchemaVersion: 1,
+
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.CosmosDBAccountV0toV1{},
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringMatch(
+					regexp.MustCompile("^[-a-z0-9]{3,50}$"),
+					"Cosmos DB Account name must be 3 - 50 characters long, contain only lowercase letters, numbers and hyphens.",
+				),
+			},
+
+			"location": commonschema.Location(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			// resource fields
+			"offer_type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(cosmosdb.DatabaseAccountOfferTypeStandard),
+				}, false),
+			},
+
+			"analytical_storage": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Computed: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"schema_type": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(cosmosdb.AnalyticalStorageSchemaTypeWellDefined),
+								string(cosmosdb.AnalyticalStorageSchemaTypeFullFidelity),
+							}, false),
+						},
+					},
+				},
+			},
+
+			"capacity": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Computed: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"total_throughput_limit": {
+							Type:         pluginsdk.TypeInt,
+							Required:     true,
+							ValidateFunc: validation.IntAtLeast(-1),
+						},
+					},
+				},
+			},
+
+			// per Microsoft's documentation, as of April 1 2023 the default minimal TLS version for all new accounts is 1.2
+			"minimal_tls_version": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(cosmosdb.MinimalTlsVersionTlsOneTwo),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(cosmosdb.MinimalTlsVersionTlsOneTwo),
+				}, false),
+			},
+
+			"create_mode": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(cosmosdb.CreateModeDefault),
+					string(cosmosdb.CreateModeRestore),
+				}, false),
+			},
+
+			// Per Documentation: "The default identity needs to be explicitly set by the users." This should not be optional without a default anymore.
+			// DOC: https://learn.microsoft.com/en-us/java/api/com.azure.resourcemanager.cosmos.models.databaseaccountupdateparameters?view=azure-java-stable#method-details
+			"default_identity_type": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  "FirstPartyIdentity",
+				ValidateFunc: validation.Any(
+					validation.StringMatch(regexp.MustCompile(`^UserAssignedIdentity(.)+$`), "user assigned identity must be in the format of: 'UserAssignedIdentity=/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{userAssignedIdentityName}'"),
+					validation.StringInSlice([]string{
+						"FirstPartyIdentity",
+						"SystemAssignedIdentity",
+					}, false),
+				),
+			},
+
+			"kind": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+				Default:  string(cosmosdb.DatabaseAccountKindGlobalDocumentDB),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(cosmosdb.DatabaseAccountKindGlobalDocumentDB),
+					string(cosmosdb.DatabaseAccountKindMongoDB),
+					string(cosmosdb.DatabaseAccountKindParse),
+				}, false),
+			},
+
+			"ip_range_filter": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.Any(validation.IsCIDR, validation.IsIPv4Address),
+				},
+			},
+
+			"free_tier_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+				ForceNew: true,
+			},
+
+			"analytical_storage_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"public_network_access_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"automatic_failover_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"key_vault_key_id": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				ForceNew:         true,
+				DiffSuppressFunc: keyVaultSuppress.DiffSuppressIgnoreKeyVaultKeyVersion,
+				ValidateFunc:     keyVaultValidate.VersionlessNestedItemId,
+				ConflictsWith:    []string{"managed_hsm_key_id"},
+			},
+
+			"managed_hsm_key_id": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ForceNew:      true,
+				ValidateFunc:  managedHsmValidate.ManagedHSMDataPlaneVersionlessKeyID,
+				ConflictsWith: []string{"key_vault_key_id"},
+			},
+
+			"consistency_policy": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"consistency_level": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(cosmosdb.DefaultConsistencyLevelBoundedStaleness),
+								string(cosmosdb.DefaultConsistencyLevelConsistentPrefix),
+								string(cosmosdb.DefaultConsistencyLevelEventual),
+								string(cosmosdb.DefaultConsistencyLevelSession),
+								string(cosmosdb.DefaultConsistencyLevelStrong),
+							}, false),
+						},
+
+						// This value can only change if the 'consistency_level' is set to 'BoundedStaleness'
+						"max_interval_in_seconds": {
+							Type:             pluginsdk.TypeInt,
+							Optional:         true,
+							Default:          5,
+							DiffSuppressFunc: suppressConsistencyPolicyStalenessConfiguration,
+							ValidateFunc:     validation.IntBetween(5, 86400), // single region values
+						},
+
+						// This value can only change if the 'consistency_level' is set to 'BoundedStaleness'
+						"max_staleness_prefix": {
+							Type:             pluginsdk.TypeInt,
+							Optional:         true,
+							Default:          100,
+							DiffSuppressFunc: suppressConsistencyPolicyStalenessConfiguration,
+							ValidateFunc:     validation.IntBetween(10, math.MaxInt32), // single region values
+						},
+					},
+				},
+			},
+
+			"geo_location": {
+				Type:     pluginsdk.TypeSet,
+				Required: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"location": commonschema.LocationWithoutForceNew(),
+
+						"failover_priority": {
+							Type:         pluginsdk.TypeInt,
+							Required:     true,
+							ValidateFunc: validation.IntAtLeast(0),
+						},
+
+						"zone_redundant": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+					},
+				},
+				Set: resourceAzureRMCosmosDBAccountGeoLocationHash,
+			},
+
+			"capabilities": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(databaseAccountCapabilitiesEnableAggregationPipeline),
+								string(databaseAccountCapabilitiesEnableCassandra),
+								string(databaseAccountCapabilitiesEnableGremlin),
+								string(databaseAccountCapabilitiesEnableTable),
+								string(databaseAccountCapabilitiesEnableServerless),
+								string(databaseAccountCapabilitiesEnableMongo),
+								string(databaseAccountCapabilitiesEnableMongo16MBDocumentSupport),
+								string(databaseAccountCapabilitiesMongoDBv34),
+								string(databaseAccountCapabilitiesMongoEnableDocLevelTTL),
+								string(databaseAccountCapabilitiesDisableRateLimitingResponses),
+								string(databaseAccountCapabilitiesAllowSelfServeUpgradeToMongo36),
+								string(databaseAccountCapabilitiesEnableMongoRetryableWrites),
+								string(databaseAccountCapabilitiesEnableMongoRoleBasedAccessControl),
+								string(databaseAccountCapabilitiesEnableUniqueCompoundNestedDocs),
+								string(databaseAccountCapabilitiesEnableNoSqlVectorSearch),
+								string(databaseAccountCapabilitiesEnableNoSqlFullTextSearch),
+								string(databaseAccountCapabilitiesEnableTtlOnCustomPath),
+								string(databaseAccountCapabilitiesEnablePartialUniqueIndex),
+							}, false),
+						},
+					},
+				},
+				Set: resourceAzureRMCosmosDBAccountCapabilitiesHash,
+			},
+
+			"is_virtual_network_filter_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"virtual_network_rule": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: azure.ValidateResourceID,
+						},
+						"ignore_missing_vnet_service_endpoint": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+					},
+				},
+				Set: resourceAzureRMCosmosDBAccountVirtualNetworkRuleHash,
+			},
+
+			"access_key_metadata_writes_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"local_authentication_disabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"mongo_server_version": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.StringInSlice(cosmosdb.PossibleValuesForServerVersion(), false),
+			},
+
+			"multiple_write_locations_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"network_acl_bypass_for_azure_services": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"network_acl_bypass_ids": {
+				Type:     pluginsdk.TypeList,
+				Optional: true, Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: azure.ValidateResourceID,
+				},
+			},
+
+			"partition_merge_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"burst_capacity_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"backup": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Computed: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"type": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(cosmosdb.BackupPolicyTypeContinuous),
+								string(cosmosdb.BackupPolicyTypePeriodic),
+							}, false),
+						},
+
+						// Though `tier` has the default value `Continuous30Days` but `tier` is only for the backup type `Continuous`. So the default value isn't added in the property schema.
+						"tier": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							Computed:     true,
+							ValidateFunc: validation.StringInSlice(cosmosdb.PossibleValuesForContinuousTier(), false),
+						},
+
+						"interval_in_minutes": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Computed:     true,
+							ValidateFunc: validation.IntBetween(60, 1440),
+						},
+
+						"retention_in_hours": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Computed:     true,
+							ValidateFunc: validation.IntBetween(8, 720),
+						},
+
+						"storage_redundancy": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+							Computed: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(cosmosdb.BackupStorageRedundancyGeo),
+								string(cosmosdb.BackupStorageRedundancyLocal),
+								string(cosmosdb.BackupStorageRedundancyZone),
+							}, false),
+						},
+					},
+				},
+			},
+
+			"identity": commonschema.SystemAssignedUserAssignedIdentityOptional(),
+
+			"cors_rule": common.SchemaCorsRule(),
+
+			"restore": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"source_cosmosdb_account_id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ForceNew:     true,
+							ValidateFunc: validate.RestorableDatabaseAccountID,
+						},
+
+						"restore_timestamp_in_utc": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ForceNew:     true,
+							ValidateFunc: validation.IsRFC3339Time,
+						},
+
+						"database": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							ForceNew: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ForceNew:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+
+									"collection_names": {
+										Type:     pluginsdk.TypeSet,
+										Optional: true,
+										ForceNew: true,
+										Elem: &pluginsdk.Schema{
+											Type:         pluginsdk.TypeString,
+											ValidateFunc: validation.StringIsNotEmpty,
+										},
+									},
+								},
+							},
+						},
+
+						"gremlin_database": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							ForceNew: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ForceNew:     true,
+										ValidateFunc: validate.CosmosEntityName,
+									},
+
+									"graph_names": {
+										Type:     pluginsdk.TypeList,
+										Optional: true,
+										ForceNew: true,
+										Elem: &pluginsdk.Schema{
+											Type:         pluginsdk.TypeString,
+											ValidateFunc: validate.CosmosEntityName,
+										},
+									},
+								},
+							},
+						},
+
+						"tables_to_restore": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							ForceNew: true,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validate.CosmosEntityName,
+							},
+						},
+					},
+				},
+			},
+
+			// computed
+			"endpoint": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"read_endpoints": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"write_endpoints": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"primary_key": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"secondary_key": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"primary_readonly_key": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"secondary_readonly_key": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"primary_sql_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"secondary_sql_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"primary_readonly_sql_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"secondary_readonly_sql_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"primary_mongodb_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"secondary_mongodb_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"primary_readonly_mongodb_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"secondary_readonly_mongodb_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"tags": commonschema.Tags(),
+		},
+	}
+
+	if !features.FivePointOh() {
+		resource.Schema["minimal_tls_version"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      string(cosmosdb.MinimalTlsVersionTlsOneTwo),
+			ValidateFunc: validation.StringInSlice(cosmosdb.PossibleValuesForMinimalTlsVersion(), false),
+		}
+	}
+
+	return resource
+}

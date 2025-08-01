@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2022-08-08/automationaccount"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2023-01-01/actiongroupsapis"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandMonitorActionGroupItsmReceiver(v []interface{}) (*[]actiongroupsapis.ItsmReceiver, error) {
+	receivers := make([]actiongroupsapis.ItsmReceiver, 0)
+	for _, receiverValue := range v {
+		val := receiverValue.(map[string]interface{})
+		ticketConfiguration := val["ticket_configuration"].(string)
+		receiver := actiongroupsapis.ItsmReceiver{
+			Name:                val["name"].(string),
+			WorkspaceId:         val["workspace_id"].(string),
+			ConnectionId:        val["connection_id"].(string),
+			TicketConfiguration: ticketConfiguration,
+			Region:              azure.NormalizeLocation(val["region"].(string)),
+		}
+
+		// https://github.com/Azure/azure-rest-api-specs/issues/20488 ticket_configuration should have `PayloadRevision` and `WorkItemType` keys
+
+		j := make(map[string]interface{})
+		err := json.Unmarshal([]byte(ticketConfiguration), &j)
+		if err != nil {
+			return nil, fmt.Errorf("`itsm_receiver.ticket_configuration` %s unmarshall json error: %+v", ticketConfiguration, err)
+		}
+
+		_, existKeyPayloadRevision := j["PayloadRevision"]
+		_, existKeyWorkItemType := j["WorkItemType"]
+		if !(existKeyPayloadRevision && existKeyWorkItemType) {
+			return nil, fmt.Errorf("`itsm_receiver.ticket_configuration` should be JSON blob with `PayloadRevision` and `WorkItemType` keys")
+		}
+		receivers = append(receivers, receiver)
+	}
+	return &receivers, nil
+}

@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2023-12-01-preview/alertrules"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAlertRuleGrouping(input []interface{}, withGroupPrefix bool) *alertrules.GroupingConfiguration {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	raw := input[0].(map[string]interface{})
+
+	output := &alertrules.GroupingConfiguration{
+		Enabled:              raw["enabled"].(bool),
+		ReopenClosedIncident: raw["reopen_closed_incidents"].(bool),
+		LookbackDuration:     raw["lookback_duration"].(string),
+		MatchingMethod:       alertrules.MatchingMethod(raw["entity_matching_method"].(string)),
+	}
+
+	key := "by_entities"
+	if withGroupPrefix {
+		key = "group_" + key
+	}
+	groupByEntitiesList := raw[key].([]interface{})
+	groupByEntities := make([]alertrules.EntityMappingType, len(groupByEntitiesList))
+	for idx, t := range groupByEntitiesList {
+		groupByEntities[idx] = alertrules.EntityMappingType(t.(string))
+	}
+	output.GroupByEntities = &groupByEntities
+
+	key = "by_alert_details"
+	if withGroupPrefix {
+		key = "group_" + key
+	}
+	groupByAlertDetailsList := raw[key].([]interface{})
+	groupByAlertDetails := make([]alertrules.AlertDetail, len(groupByAlertDetailsList))
+	for idx, t := range groupByAlertDetailsList {
+		groupByAlertDetails[idx] = alertrules.AlertDetail(t.(string))
+	}
+	output.GroupByAlertDetails = &groupByAlertDetails
+
+	key = "by_custom_details"
+	if withGroupPrefix {
+		key = "group_" + key
+	}
+	output.GroupByCustomDetails = utils.ExpandStringSlice(raw[key].([]interface{}))
+
+	return output
+}

@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func flattenSpringCloudContainerRegistries(state []appplatform.ContainerRegistryResource, input []appplatform.ContainerRegistryResource) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	statePasswordMap := make(map[string]string)
+	for _, v := range state {
+		if v.Name == nil || v.Properties == nil || v.Properties.Credentials == nil {
+			continue
+		}
+		if basicCredential, ok := v.Properties.Credentials.AsContainerRegistryBasicCredentials(); ok && basicCredential.Password != nil {
+			statePasswordMap[*v.Name] = *basicCredential.Password
+		}
+	}
+	result := make([]interface{}, 0)
+	for _, v := range input {
+		name := ""
+		username := ""
+		password := ""
+		server := ""
+		if v.Name != nil {
+			name = *v.Name
+			password = statePasswordMap[name]
+		}
+		if v.Properties != nil && v.Properties.Credentials != nil {
+			if basicCredential, ok := v.Properties.Credentials.AsContainerRegistryBasicCredentials(); ok {
+				if basicCredential.Username != nil {
+					username = *basicCredential.Username
+				}
+				if basicCredential.Server != nil {
+					server = *basicCredential.Server
+				}
+			}
+		}
+
+		result = append(result, map[string]interface{}{
+			"name":     name,
+			"username": username,
+			"password": password,
+			"server":   server,
+		})
+	}
+	return result
+}

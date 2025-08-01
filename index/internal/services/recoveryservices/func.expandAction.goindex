@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationrecoveryplans"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAction(input []ActionModel) ([]replicationrecoveryplans.RecoveryPlanAction, error) {
+	output := make([]replicationrecoveryplans.RecoveryPlanAction, 0)
+	for _, action := range input {
+		failoverDirections := make([]replicationrecoveryplans.PossibleOperationsDirections, 0)
+		for _, direction := range action.FailOverDirections {
+			failoverDirections = append(failoverDirections, replicationrecoveryplans.PossibleOperationsDirections(direction))
+		}
+
+		failoverTypes := make([]replicationrecoveryplans.ReplicationProtectedItemOperation, 0)
+		for _, failoverType := range action.FailOverTypes {
+			failoverTypes = append(failoverTypes, replicationrecoveryplans.ReplicationProtectedItemOperation(failoverType))
+		}
+
+		if action.ActionDetailType == "ManualActionDetails" && action.FabricLocation != "" {
+			return nil, fmt.Errorf("`fabric_location` must not be specified for `recovery_group` with `ManualActionDetails` type.")
+		}
+
+		output = append(output, replicationrecoveryplans.RecoveryPlanAction{
+			ActionName:         action.Name,
+			FailoverDirections: failoverDirections,
+			FailoverTypes:      failoverTypes,
+			CustomDetails:      expandActionDetail(action),
+		})
+	}
+
+	return output, nil
+}

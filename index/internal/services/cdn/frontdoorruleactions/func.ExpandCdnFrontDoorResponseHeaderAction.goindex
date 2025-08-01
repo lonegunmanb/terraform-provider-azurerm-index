@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdooractions
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-09-01/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandCdnFrontDoorResponseHeaderAction(input []interface{}) (*[]rules.DeliveryRuleAction, error) {
+	output := make([]rules.DeliveryRuleAction, 0)
+
+	m := InitializeCdnFrontDoorActionMappings()
+
+	for _, v := range input {
+		item := v.(map[string]interface{})
+
+		responseHeaderAction := rules.DeliveryRuleResponseHeaderAction{
+			Name: m.ResponseHeader.Name,
+			Parameters: rules.HeaderActionParameters{
+				TypeName:     rules.DeliveryRuleActionParametersType(m.ResponseHeader.TypeName),
+				HeaderAction: rules.HeaderAction(item["header_action"].(string)),
+				HeaderName:   item["header_name"].(string),
+				Value:        pointer.To(item["value"].(string)),
+			},
+		}
+
+		if headerValue := *responseHeaderAction.Parameters.Value; headerValue == "" {
+			if responseHeaderAction.Parameters.HeaderAction == rules.HeaderActionOverwrite || responseHeaderAction.Parameters.HeaderAction == rules.HeaderActionAppend {
+				return nil, fmt.Errorf("the 'response_header_action' block is not valid, 'value' cannot be empty if the 'header_action' is set to 'Append' or 'Overwrite'")
+			}
+		} else {
+			if responseHeaderAction.Parameters.HeaderAction == rules.HeaderActionDelete {
+				return nil, fmt.Errorf("the 'response_header_action' block is not valid, 'value' must be empty if the 'header_action' is set to 'Delete'")
+			}
+		}
+
+		output = append(output, responseHeaderAction)
+	}
+
+	return &output, nil
+}

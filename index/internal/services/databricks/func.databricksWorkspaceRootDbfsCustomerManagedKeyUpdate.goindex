@@ -1,0 +1,123 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func databricksWorkspaceRootDbfsCustomerManagedKeyUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	workspaceClient := meta.(*clients.Client).DataBricks.WorkspacesClient
+	keyVaultsClient := meta.(*clients.Client).KeyVault
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := workspaces.ParseWorkspaceID(d.Get("workspace_id").(string))
+	if err != nil {
+		return err
+	}
+
+	var key *keyVaultParse.NestedItemId
+	var params *workspaces.WorkspaceCustomParameters
+	var keyVaultId string
+	var keyVaultKeyId string
+
+	if v, ok := d.GetOk("key_vault_key_id"); ok {
+		keyVaultKeyId = v.(string)
+	}
+
+	if v, ok := d.GetOk("key_vault_id"); ok {
+		keyVaultId = v.(string)
+	}
+
+	key, err = keyVaultParse.ParseNestedItemID(keyVaultKeyId)
+	if err != nil {
+		return err
+	}
+
+	// Not sure if I should also lock the key vault here too
+	// or at the very least the key?
+	locks.ByName(id.WorkspaceName, "azurerm_databricks_workspace")
+	defer locks.UnlockByName(id.WorkspaceName, "azurerm_databricks_workspace")
+	var encryptionEnabled bool
+
+	workspace, err := workspaceClient.Get(ctx, *id)
+	if err != nil {
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	if model := workspace.Model; model != nil {
+		if params = model.Properties.Parameters; params != nil {
+			if params.PrepareEncryption != nil {
+				encryptionEnabled = model.Properties.Parameters.PrepareEncryption.Value
+			}
+		} else {
+			return fmt.Errorf("`WorkspaceCustomParameters` were nil")
+		}
+	} else {
+		return fmt.Errorf("`Workspace` was nil")
+	}
+
+	if !encryptionEnabled {
+		return fmt.Errorf("%s: `customer_managed_key_enabled` must be set to `true`", *id)
+	}
+
+	// If the 'root_dbfs_cmk_key_vault_id' was not defined assume
+	// the key vault exists in the same subscription as the workspace...
+	dbfsSubscriptionId := commonids.NewSubscriptionID(id.SubscriptionId)
+
+	if keyVaultId != "" {
+		v, err := commonids.ParseKeyVaultID(keyVaultId)
+		if err != nil {
+			return fmt.Errorf("parsing %q as a Key Vault ID: %+v", keyVaultId, err)
+		}
+
+		dbfsSubscriptionId = commonids.NewSubscriptionID(v.SubscriptionId)
+	}
+
+	// make sure the key vault exists
+	_, err = keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, dbfsSubscriptionId, key.KeyVaultBaseUrl)
+	if err != nil {
+		return fmt.Errorf("retrieving the Resource ID for the Key Vault in subscription %q at URL %q: %+v", dbfsSubscriptionId, key.KeyVaultBaseUrl, err)
+	}
+
+	// We need to pull all of the custom params from the parent
+	// workspace resource and then add our new encryption values into the
+	// structure, else the other values set in the parent workspace
+	// resource will be lost and overwritten as nil. ¯\_(ツ)_/¯
+	// NOTE: 'workspace.Parameters' will never be nil as 'customer_managed_key_enabled' and 'infrastructure_encryption_enabled'
+	// fields have a default value in the parent workspace resource.
+	params.Encryption = &workspaces.WorkspaceEncryptionParameter{
+		Value: &workspaces.Encryption{
+			KeySource:   pointer.To(workspaces.KeySourceMicrosoftPointKeyvault),
+			KeyName:     pointer.To(key.Name),
+			Keyversion:  pointer.To(key.Version),
+			Keyvaulturi: pointer.To(key.KeyVaultBaseUrl),
+		},
+	}
+
+	props := pointer.From(workspace.Model)
+	props.Properties.Parameters = params
+
+	if err = workspaceClient.CreateOrUpdateThenPoll(ctx, *id, props); err != nil {
+		return fmt.Errorf("updating Root DBFS Customer Managed Key for %s: %+v", *id, err)
+	}
+
+	// Always set this even if it's empty to keep the state file
+	// consistent with the configuration file...
+	d.Set("key_vault_id", keyVaultId)
+
+	return databricksWorkspaceRootDbfsCustomerManagedKeyRead(d, meta)
+}

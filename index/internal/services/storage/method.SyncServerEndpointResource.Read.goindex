@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagesync/2020-03-01/registeredserverresource"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagesync/2020-03-01/serverendpointresource"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r SyncServerEndpointResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Storage.SyncServerEndpointsClient
+
+			schema := StorageSyncServerEndpointResourceSchema{}
+
+			id, err := serverendpointresource.ParseServerEndpointID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.ServerEndpointsGet(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(*id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				schema.Name = id.ServerEndpointName
+				if props := model.Properties; props != nil {
+					schema.StorageSyncGroupId = serverendpointresource.NewSyncGroupID(id.SubscriptionId, id.ResourceGroupName, id.StorageSyncServiceName, id.SyncGroupName).ID()
+					schema.RegisteredServerId = pointer.From(props.ServerResourceId)
+					schema.ServerLocalPath = pointer.From(props.ServerLocalPath)
+					schema.VolumeFreeSpacePercent = pointer.From(props.VolumeFreeSpacePercent)
+					schema.CloudTieringEnabled = pointer.From(props.CloudTiering) == serverendpointresource.FeatureStatusOn
+					schema.InitialDownloadPolicy = string(pointer.From(props.InitialDownloadPolicy))
+					schema.LocalCacheMode = string(pointer.From(props.LocalCacheMode))
+					if pointer.From(props.TierFilesOlderThanDays) != 0 {
+						schema.TierFilesOlderThanDays = pointer.From(props.TierFilesOlderThanDays)
+					}
+				}
+			}
+
+			return metadata.Encode(&schema)
+		},
+	}
+}

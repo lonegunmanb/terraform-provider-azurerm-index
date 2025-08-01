@@ -1,0 +1,107 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/localnetworkgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func getVirtualNetworkGatewayProperties(id virtualnetworkgateways.VirtualNetworkGatewayId, d *pluginsdk.ResourceData) (*virtualnetworkgateways.VirtualNetworkGatewayPropertiesFormat, error) {
+	props := &virtualnetworkgateways.VirtualNetworkGatewayPropertiesFormat{
+		GatewayType:                     pointer.To(virtualnetworkgateways.VirtualNetworkGatewayType(d.Get("type").(string))),
+		VpnType:                         pointer.To(virtualnetworkgateways.VpnType(d.Get("vpn_type").(string))),
+		EnableBgp:                       pointer.To(d.Get("enable_bgp").(bool)),
+		EnablePrivateIPAddress:          pointer.To(d.Get("private_ip_address_enabled").(bool)),
+		ActiveActive:                    pointer.To(d.Get("active_active").(bool)),
+		EnableBgpRouteTranslationForNat: pointer.To(d.Get("bgp_route_translation_for_nat_enabled").(bool)),
+		DisableIPSecReplayProtection:    pointer.To(!d.Get("ip_sec_replay_protection_enabled").(bool)),
+		AllowRemoteVnetTraffic:          pointer.To(d.Get("remote_vnet_traffic_enabled").(bool)),
+		AllowVirtualWanTraffic:          pointer.To(d.Get("virtual_wan_traffic_enabled").(bool)),
+		Sku:                             expandVirtualNetworkGatewaySku(d),
+		IPConfigurations:                expandVirtualNetworkGatewayIPConfigurations(d),
+		CustomRoutes:                    expandVirtualNetworkGatewayAddressSpace(d.Get("custom_route").([]interface{})),
+	}
+
+	if v, ok := d.GetOk("generation"); ok {
+		props.VpnGatewayGeneration = pointer.To(virtualnetworkgateways.VpnGatewayGeneration(v.(string)))
+	}
+
+	if v, ok := d.GetOk("dns_forwarding_enabled"); ok {
+		props.EnableDnsForwarding = pointer.To(v.(bool))
+	}
+
+	if gatewayDefaultSiteID := d.Get("default_local_network_gateway_id").(string); gatewayDefaultSiteID != "" {
+		props.GatewayDefaultSite = &virtualnetworkgateways.SubResource{
+			Id: &gatewayDefaultSiteID,
+		}
+	}
+
+	if v, ok := d.GetOk("policy_group"); ok {
+		props.VirtualNetworkGatewayPolicyGroups = expandVirtualNetworkGatewayPolicyGroups(v.([]interface{}))
+	}
+
+	if _, ok := d.GetOk("vpn_client_configuration"); ok {
+		props.VpnClientConfiguration = expandVirtualNetworkGatewayVpnClientConfig(d, id)
+	}
+
+	if _, ok := d.GetOk("bgp_settings"); ok {
+		bgpSettings, err := expandVirtualNetworkGatewayBgpSettings(id, d)
+		if err != nil {
+			return nil, err
+		}
+		props.BgpSettings = bgpSettings
+	}
+
+	gatewayType := pointer.From(props.GatewayType)
+	vpnType := pointer.From(props.VpnType)
+	vpnGatewayGeneration := pointer.From(props.VpnGatewayGeneration)
+	skuName := string(pointer.From(props.Sku.Name))
+
+	// Sku validation for policy-based VPN gateways
+	if gatewayType == virtualnetworkgateways.VirtualNetworkGatewayTypeVpn && vpnType == virtualnetworkgateways.VpnTypePolicyBased {
+		if ok, err := evaluateSchemaValidateFunc(skuName, "sku", validateVirtualNetworkGatewayPolicyBasedVpnSku()); !ok {
+			return nil, err
+		}
+	}
+
+	// Sku validation for route-based VPN gateways of first geneneration
+	if gatewayType == virtualnetworkgateways.VirtualNetworkGatewayTypeVpn && vpnType == virtualnetworkgateways.VpnTypeRouteBased && vpnGatewayGeneration == virtualnetworkgateways.VpnGatewayGenerationGenerationOne {
+		if ok, err := evaluateSchemaValidateFunc(skuName, "sku", validateVirtualNetworkGatewayRouteBasedVpnSkuGeneration1()); !ok {
+			return nil, err
+		}
+	}
+
+	// Sku validation for route-based VPN gateways of second geneneration
+	if gatewayType == virtualnetworkgateways.VirtualNetworkGatewayTypeVpn && vpnType == virtualnetworkgateways.VpnTypeRouteBased && vpnGatewayGeneration == virtualnetworkgateways.VpnGatewayGenerationGenerationTwo {
+		if ok, err := evaluateSchemaValidateFunc(skuName, "sku", validateVirtualNetworkGatewayRouteBasedVpnSkuGeneration2()); !ok {
+			return nil, err
+		}
+	}
+
+	// Sku validation for ExpressRoute gateways
+	if gatewayType == virtualnetworkgateways.VirtualNetworkGatewayTypeExpressRoute {
+		if ok, err := evaluateSchemaValidateFunc(skuName, "sku", validateVirtualNetworkGatewayExpressRouteSku()); !ok {
+			return nil, err
+		}
+	}
+
+	return props, nil
+}

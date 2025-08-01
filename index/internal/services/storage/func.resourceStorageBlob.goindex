@@ -1,0 +1,170 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func resourceStorageBlob() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceStorageBlobCreate,
+		Read:   resourceStorageBlobRead,
+		Update: resourceStorageBlobUpdate,
+		Delete: resourceStorageBlobDelete,
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.BlobV0ToV1{},
+		}),
+
+		Importer: helpers.ImporterValidatingStorageResourceId(func(id, storageDomainSuffix string) error {
+			_, err := blobs.ParseBlobID(id, storageDomainSuffix)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"storage_account_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.StorageAccountName,
+			},
+
+			"storage_container_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.StorageContainerName,
+			},
+
+			"type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"Append",
+					"Block",
+					"Page",
+				}, false),
+			},
+
+			"size": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				ForceNew:     true,
+				Default:      0,
+				ValidateFunc: validation.IntDivisibleBy(512),
+			},
+
+			"access_tier": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(blobs.Archive),
+					string(blobs.Cool),
+					string(blobs.Hot),
+				}, false),
+			},
+
+			"content_type": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  "application/octet-stream",
+			},
+
+			"cache_control": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"encryption_scope": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.StorageEncryptionScopeName,
+			},
+
+			"source": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"source_uri", "source_content"},
+			},
+
+			"source_content": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"source", "source_uri"},
+			},
+
+			"source_uri": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"source", "source_content"},
+			},
+
+			"content_md5": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"source_uri"},
+			},
+
+			"url": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"parallelism": {
+				// TODO: @tombuildsstuff - a note this only works for Page blobs
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      8,
+				ForceNew:     true,
+				ValidateFunc: validation.IntAtLeast(1),
+			},
+
+			"metadata": MetaDataComputedSchema(),
+		},
+
+		CustomizeDiff: func(ctx context.Context, diff *pluginsdk.ResourceDiff, i interface{}) error {
+			if content := diff.Get("source_content"); content != "" && diff.Get("type") == "Page" {
+				if len(content.(string))%512 != 0 {
+					return fmt.Errorf(`"source" must be aligned to 512-byte boundary for "type" set to "Page"`)
+				}
+			}
+			return nil
+		},
+	}
+}

@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/connectivityconfigurations"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ManagerConnectivityConfigurationDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Network.ConnectivityConfigurations
+
+			var state ManagerConnectivityConfigurationDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			networkManagerId, err := connectivityconfigurations.ParseNetworkManagerID(state.NetworkManagerId)
+			if err != nil {
+				return err
+			}
+
+			id := connectivityconfigurations.NewConnectivityConfigurationID(networkManagerId.SubscriptionId, networkManagerId.ResourceGroupName, networkManagerId.NetworkManagerName, state.Name)
+
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s does not exist", id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				if properties := model.Properties; properties != nil {
+					state.AppliesToGroups = flattenConnectivityGroupItemModel(properties.AppliesToGroups)
+					state.ConnectivityTopology = properties.ConnectivityTopology
+					state.DeleteExistingPeeringEnabled = flattenDeleteExistingPeering(properties.DeleteExistingPeering)
+					state.GlobalMeshEnabled = flattenConnectivityConfIsGlobal(properties.IsGlobal)
+					state.Hub = flattenHubModel(properties.Hubs)
+					state.Description = pointer.From(properties.Description)
+				}
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&state)
+		},
+	}
+}

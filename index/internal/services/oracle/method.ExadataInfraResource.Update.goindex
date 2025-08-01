@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2024-06-01/cloudexadatainfrastructures"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r ExadataInfraResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Oracle.OracleClient.CloudExadataInfrastructures
+			id, err := cloudexadatainfrastructures.ParseCloudExadataInfrastructureID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var model ExadataInfraResourceModel
+			if err = metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding err: %+v", err)
+			}
+
+			_, err = client.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: ", *id)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				update := &cloudexadatainfrastructures.CloudExadataInfrastructureUpdate{
+					Tags: pointer.To(model.Tags),
+				}
+				err = client.UpdateThenPoll(ctx, *id, *update)
+				if err != nil {
+					return fmt.Errorf("updating %s: %v", id, err)
+				}
+			}
+			return nil
+		},
+	}
+}

@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/security/mgmt/v3.0/security" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandIotSecurityDeviceGroupAllowRule(input []interface{}) *[]security.BasicAllowlistCustomAlertRule {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	v := input[0].(map[string]interface{})
+	result := make([]security.BasicAllowlistCustomAlertRule, 0)
+
+	if connectionFromIPNotAllowed := v["connection_from_ips_not_allowed"].(*pluginsdk.Set).List(); len(connectionFromIPNotAllowed) > 0 {
+		result = append(result, security.ConnectionFromIPNotAllowed{
+			AllowlistValues: utils.ExpandStringSlice(connectionFromIPNotAllowed),
+			IsEnabled:       utils.Bool(true),
+		})
+	}
+
+	var connectionToIPListNotAllowed *security.ConnectionToIPNotAllowed
+	if connectionToIPsNotAllowed := v["connection_to_ips_not_allowed"].(*pluginsdk.Set).List(); len(connectionToIPsNotAllowed) > 0 {
+		connectionToIPListNotAllowed = &security.ConnectionToIPNotAllowed{
+			AllowlistValues: utils.ExpandStringSlice(connectionToIPsNotAllowed),
+			IsEnabled:       utils.Bool(true),
+		}
+	}
+	if connectionToIPListNotAllowed != nil {
+		result = append(result, *connectionToIPListNotAllowed)
+	}
+
+	var localUserListNotAllowed *security.LocalUserNotAllowed
+	if LocalUsersNotAllowed := v["local_users_not_allowed"].(*pluginsdk.Set).List(); len(LocalUsersNotAllowed) > 0 {
+		localUserListNotAllowed = &security.LocalUserNotAllowed{
+			AllowlistValues: utils.ExpandStringSlice(LocalUsersNotAllowed),
+			IsEnabled:       utils.Bool(true),
+		}
+	}
+	if localUserListNotAllowed != nil {
+		result = append(result, *localUserListNotAllowed)
+	}
+
+	var processListNotAllowed *security.ProcessNotAllowed
+	if processesNotAllowed := v["processes_not_allowed"].(*pluginsdk.Set).List(); len(processesNotAllowed) > 0 {
+		processListNotAllowed = &security.ProcessNotAllowed{
+			AllowlistValues: utils.ExpandStringSlice(processesNotAllowed),
+			IsEnabled:       utils.Bool(true),
+		}
+	}
+	if processListNotAllowed != nil {
+		result = append(result, *processListNotAllowed)
+	}
+
+	return &result
+}

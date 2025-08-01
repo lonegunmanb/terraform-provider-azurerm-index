@@ -1,0 +1,127 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicefabric
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicefabric/2021-06-01/cluster"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	serviceFabricValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicefabric/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceServiceFabricClusterCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).ServiceFabric.ClustersClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := cluster.NewClusterID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_service_fabric_cluster", id.ID())
+		}
+	}
+
+	addOnFeaturesRaw := d.Get("add_on_features").(*pluginsdk.Set).List()
+	addOnFeatures := expandServiceFabricClusterAddOnFeatures(addOnFeaturesRaw)
+
+	azureActiveDirectoryRaw := d.Get("azure_active_directory").([]interface{})
+	azureActiveDirectory := expandServiceFabricClusterAzureActiveDirectory(azureActiveDirectoryRaw)
+
+	diagnosticsRaw := d.Get("diagnostics_config").([]interface{})
+	diagnostics := expandServiceFabricClusterDiagnosticsConfig(diagnosticsRaw)
+
+	upgradePolicyRaw := d.Get("upgrade_policy").([]interface{})
+	upgradePolicy := expandServiceFabricClusterUpgradePolicy(upgradePolicyRaw)
+
+	fabricSettingsRaw := d.Get("fabric_settings").([]interface{})
+	fabricSettings := expandServiceFabricClusterFabricSettings(fabricSettingsRaw)
+
+	nodeTypesRaw := d.Get("node_type").([]interface{})
+	nodeTypes := expandServiceFabricClusterNodeTypes(nodeTypesRaw)
+
+	location := d.Get("location").(string)
+	reliabilityLevel := cluster.ReliabilityLevel(d.Get("reliability_level").(string))
+	managementEndpoint := d.Get("management_endpoint").(string)
+	upgradeMode := cluster.UpgradeMode(d.Get("upgrade_mode").(string))
+	clusterCodeVersion := d.Get("cluster_code_version").(string)
+	vmImage := d.Get("vm_image").(string)
+	t := d.Get("tags").(map[string]interface{})
+
+	clusterModel := cluster.Cluster{
+		Location: location,
+		Tags:     tags.Expand(t),
+		Properties: &cluster.ClusterProperties{
+			AddOnFeatures:                      addOnFeatures,
+			AzureActiveDirectory:               azureActiveDirectory,
+			CertificateCommonNames:             expandServiceFabricClusterCertificateCommonNames(d),
+			ReverseProxyCertificateCommonNames: expandServiceFabricClusterReverseProxyCertificateCommonNames(d),
+			DiagnosticsStorageAccountConfig:    diagnostics,
+			FabricSettings:                     fabricSettings,
+			ManagementEndpoint:                 managementEndpoint,
+			NodeTypes:                          nodeTypes,
+			ReliabilityLevel:                   &reliabilityLevel,
+			UpgradeDescription:                 upgradePolicy,
+			UpgradeMode:                        &upgradeMode,
+			VmImage:                            utils.String(vmImage),
+		},
+	}
+
+	if sfZonalUpgradeMode, ok := d.GetOk("service_fabric_zonal_upgrade_mode"); ok {
+		mode := cluster.SfZonalUpgradeMode(sfZonalUpgradeMode.(string))
+		clusterModel.Properties.SfZonalUpgradeMode = &mode
+	}
+
+	if vmssZonalUpgradeMode, ok := d.GetOk("vmss_zonal_upgrade_mode"); ok {
+		mode := cluster.VMSSZonalUpgradeMode(vmssZonalUpgradeMode.(string))
+		clusterModel.Properties.VMSSZonalUpgradeMode = &mode
+	}
+
+	if certificateRaw, ok := d.GetOk("certificate"); ok {
+		certificate := expandServiceFabricClusterCertificate(certificateRaw.([]interface{}))
+		clusterModel.Properties.Certificate = certificate
+	}
+
+	if reverseProxyCertificateRaw, ok := d.GetOk("reverse_proxy_certificate"); ok {
+		reverseProxyCertificate := expandServiceFabricClusterReverseProxyCertificate(reverseProxyCertificateRaw.([]interface{}))
+		clusterModel.Properties.ReverseProxyCertificate = reverseProxyCertificate
+	}
+
+	if clientCertificateThumbprintRaw, ok := d.GetOk("client_certificate_thumbprint"); ok {
+		clientCertificateThumbprints := expandServiceFabricClusterClientCertificateThumbprints(clientCertificateThumbprintRaw.([]interface{}))
+		clusterModel.Properties.ClientCertificateThumbprints = clientCertificateThumbprints
+	}
+
+	if clientCertificateCommonNamesRaw, ok := d.GetOk("client_certificate_common_name"); ok {
+		clientCertificateCommonNames := expandServiceFabricClusterClientCertificateCommonNames(clientCertificateCommonNamesRaw.([]interface{}))
+		clusterModel.Properties.ClientCertificateCommonNames = clientCertificateCommonNames
+	}
+
+	if clusterCodeVersion != "" {
+		clusterModel.Properties.ClusterCodeVersion = utils.String(clusterCodeVersion)
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, clusterModel); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceServiceFabricClusterRead(d, meta)
+}

@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/schema
+import (
+	"strconv"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2023-09-01/firewalls"
+	helpersValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func FlattenDestinationNAT(input *[]firewalls.FrontendSetting) []DestinationNAT {
+	result := make([]DestinationNAT, 0)
+	if feSettings := pointer.From(input); len(feSettings) > 0 {
+		for _, v := range feSettings {
+			bePort, _ := strconv.ParseInt(v.BackendConfiguration.Port, 10, 0)
+			fePort, _ := strconv.ParseInt(v.FrontendConfiguration.Port, 10, 0)
+			fe := DestinationNAT{
+				Name:     v.Name,
+				Protocol: string(v.Protocol),
+				BackendConfiguration: []BackendEndpointConfiguration{{
+					PublicIP: pointer.From(v.BackendConfiguration.Address.Address),
+					Port:     bePort,
+				}},
+				FrontendConfiguration: []FrontendEndpointConfiguration{{
+					PublicIPID: pointer.From(v.FrontendConfiguration.Address.ResourceId),
+					Port:       fePort,
+				}},
+			}
+
+			result = append(result, fe)
+		}
+	}
+	return result
+}

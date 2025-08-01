@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenVpnServerConfigurationRadius(input *virtualwans.VpnServerConfigurationProperties) []interface{} {
+	if input == nil || (input.RadiusServerAddress == nil && (input.RadiusServers == nil || len(*input.RadiusServers) == 0)) {
+		return []interface{}{}
+	}
+
+	clientRootCertificates := make([]interface{}, 0)
+	if input.RadiusClientRootCertificates != nil {
+		for _, v := range *input.RadiusClientRootCertificates {
+			name := ""
+			if v.Name != nil {
+				name = *v.Name
+			}
+
+			thumbprint := ""
+			if v.Thumbprint != nil {
+				thumbprint = *v.Thumbprint
+			}
+
+			clientRootCertificates = append(clientRootCertificates, map[string]interface{}{
+				"name":       name,
+				"thumbprint": thumbprint,
+			})
+		}
+	}
+
+	serverRootCertificates := make([]interface{}, 0)
+	if input.RadiusServerRootCertificates != nil {
+		for _, v := range *input.RadiusServerRootCertificates {
+			name := ""
+			if v.Name != nil {
+				name = *v.Name
+			}
+
+			publicCertData := ""
+			if v.PublicCertData != nil {
+				publicCertData = *v.PublicCertData
+			}
+
+			serverRootCertificates = append(serverRootCertificates, map[string]interface{}{
+				"name":             name,
+				"public_cert_data": publicCertData,
+			})
+		}
+	}
+
+	servers := make([]interface{}, 0)
+	if input.RadiusServers != nil && len(*input.RadiusServers) > 0 {
+		for _, v := range *input.RadiusServers {
+			servers = append(servers, map[string]interface{}{
+				"address": v.RadiusServerAddress,
+				"secret":  pointer.From(v.RadiusServerSecret),
+				"score":   pointer.From(v.RadiusServerScore),
+			})
+		}
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"client_root_certificate": clientRootCertificates,
+			"server_root_certificate": serverRootCertificates,
+			"server":                  servers,
+		},
+	}
+}

@@ -1,0 +1,118 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	keyvaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyvaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r AIFoundry) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MachineLearning.Workspaces
+
+			id, err := workspaces.ParseWorkspaceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			hub := AIFoundryModel{
+				Name:              id.WorkspaceName,
+				ResourceGroupName: id.ResourceGroupName,
+			}
+
+			if model := resp.Model; model != nil {
+				hub.Location = location.NormalizeNilable(model.Location)
+
+				flattenedIdentity, err := identity.FlattenLegacySystemAndUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return fmt.Errorf("flattening `identity`: %+v", err)
+				}
+
+				hub.Identity = flattenedIdentity
+				hub.Tags = tags.Flatten(model.Tags)
+
+				if props := model.Properties; props != nil {
+					if v := pointer.From(props.ApplicationInsights); v != "" {
+						applicationInsightsId, err := components.ParseComponentIDInsensitively(v)
+						if err != nil {
+							return err
+						}
+						hub.ApplicationInsightsId = applicationInsightsId.ID()
+					}
+
+					if v := pointer.From(props.ContainerRegistry); v != "" {
+						containerRegistryId, err := registries.ParseRegistryID(v)
+						if err != nil {
+							return err
+						}
+						hub.ContainerRegistryId = containerRegistryId.ID()
+					}
+
+					storageAccountId, err := commonids.ParseStorageAccountID(*props.StorageAccount)
+					if err != nil {
+						return err
+					}
+					hub.StorageAccountId = storageAccountId.ID()
+
+					keyVaultId, err := commonids.ParseKeyVaultID(*props.KeyVault)
+					if err != nil {
+						return err
+					}
+					hub.KeyVaultId = keyVaultId.ID()
+
+					hub.Description = pointer.From(props.Description)
+					hub.FriendlyName = pointer.From(props.FriendlyName)
+					hub.HighBusinessImpactEnabled = pointer.From(props.HbiWorkspace)
+					hub.PublicNetworkAccess = string(*props.PublicNetworkAccess)
+					hub.DiscoveryUrl = pointer.From(props.DiscoveryURL)
+					hub.WorkspaceId = pointer.From(props.WorkspaceId)
+					hub.ManagedNetwork = flattenManagedNetwork(props.ManagedNetwork)
+
+					if v := pointer.From(props.PrimaryUserAssignedIdentity); v != "" {
+						userAssignedId, err := commonids.ParseUserAssignedIdentityID(v)
+						if err != nil {
+							return err
+						}
+						hub.PrimaryUserAssignedIdentity = userAssignedId.ID()
+					}
+
+					encryption, err := flattenEncryption(props.Encryption)
+					if err != nil {
+						return fmt.Errorf("flattening `encryption`: %+v", err)
+					}
+					hub.Encryption = encryption
+				}
+			}
+
+			return metadata.Encode(&hub)
+		},
+	}
+}

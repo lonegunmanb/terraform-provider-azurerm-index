@@ -1,0 +1,89 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/machinelearningcomputes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceAksInferenceClusterCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).MachineLearning.MachineLearningComputes
+	aksClient := meta.(*clients.Client).Containers.KubernetesClustersClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	// Define Inference Cluster Name
+	name := d.Get("name").(string)
+
+	// Get Machine Learning Workspace Name and Resource Group from ID
+	workspaceID, err := workspaces.ParseWorkspaceID(d.Get("machine_learning_workspace_id").(string))
+	if err != nil {
+		return err
+	}
+	computeId := machinelearningcomputes.NewComputeID(workspaceID.SubscriptionId, workspaceID.ResourceGroupName, workspaceID.WorkspaceName, d.Get("name").(string))
+
+	// Check if Inference Cluster already exists
+	existing, err := client.ComputeGet(ctx, computeId)
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for existing Inference Cluster %q in Workspace %q (Resource Group %q): %s", name, workspaceID.WorkspaceName, workspaceID.ResourceGroupName, err)
+		}
+	}
+	if existing.Model != nil && *existing.Model.Id != "" {
+		return tf.ImportAsExistsError("azurerm_machine_learning_inference_cluster", *existing.Model.Id)
+	}
+
+	// Get AKS Compute Properties
+	aksID, err := commonids.ParseKubernetesClusterID(d.Get("kubernetes_cluster_id").(string))
+	if err != nil {
+		return err
+	}
+	aks, err := aksClient.Get(ctx, *aksID)
+	if err != nil {
+		return err
+	}
+
+	aksModel := aks.Model
+	if aksModel == nil {
+		return fmt.Errorf("AKS not found")
+	}
+
+	identity, err := expandIdentity(d.Get("identity").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding `identity`: %+v", err)
+	}
+
+	inferenceClusterParameters := machinelearningcomputes.ComputeResource{
+		Properties: expandAksComputeProperties(aksID.ID(), aksModel, d),
+		Identity:   identity,
+		Location:   utils.String(azure.NormalizeLocation(d.Get("location").(string))),
+		Tags:       tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	future, err := client.ComputeCreateOrUpdate(ctx, computeId, inferenceClusterParameters)
+	if err != nil {
+		return fmt.Errorf("creating Inference Cluster %q in workspace %q (Resource Group %q): %+v", name, workspaceID.WorkspaceName, workspaceID.ResourceGroupName, err)
+	}
+	if err := future.Poller.PollUntilDone(ctx); err != nil {
+		return fmt.Errorf("waiting for creation of Inference Cluster %q in workspace %q (Resource Group %q): %+v", name, workspaceID.ResourceGroupName, workspaceID.ResourceGroupName, err)
+	}
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	id := machinelearningcomputes.NewComputeID(subscriptionId, workspaceID.ResourceGroupName, workspaceID.WorkspaceName, name)
+	d.SetId(id.ID())
+
+	return resourceAksInferenceClusterRead(d, meta)
+}

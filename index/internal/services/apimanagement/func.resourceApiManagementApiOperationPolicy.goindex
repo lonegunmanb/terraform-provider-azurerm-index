@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"errors"
+	"fmt"
+	"html"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apioperationpolicy"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceApiManagementApiOperationPolicy() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceApiManagementAPIOperationPolicyCreateUpdate,
+		Read:   resourceApiManagementAPIOperationPolicyRead,
+		Update: resourceApiManagementAPIOperationPolicyCreateUpdate,
+		Delete: resourceApiManagementAPIOperationPolicyDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := apioperationpolicy.ParseOperationID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		SchemaVersion: 2,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.ApiManagementApiOperationPolicyV0ToV1{},
+			1: migration.ApiManagementApiOperationPolicyV1ToV2{},
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"api_management_name": schemaz.SchemaApiManagementName(),
+
+			"api_name": schemaz.SchemaApiManagementApiName(),
+
+			"operation_id": schemaz.SchemaApiManagementChildName(),
+
+			"xml_content": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				Computed:         true,
+				ConflictsWith:    []string{"xml_link"},
+				DiffSuppressFunc: XmlWithDotNetInterpolationsDiffSuppress,
+			},
+
+			"xml_link": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ConflictsWith: []string{"xml_content"},
+			},
+		},
+	}
+}

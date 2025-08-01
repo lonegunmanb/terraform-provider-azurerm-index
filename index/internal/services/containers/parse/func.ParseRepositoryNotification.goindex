@@ -1,0 +1,33 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/parse
+import (
+	"fmt"
+	"strings"
+)
+func ParseRepositoryNotification(v string) (*RepositoryNotification, error) {
+	idx := strings.LastIndex(v, ":")
+	if idx == -1 {
+		return nil, fmt.Errorf(`no separator ":" found`)
+	}
+	if idx == len(v)-1 {
+		return nil, fmt.Errorf(`malformed format: unexpected trailing ":"`)
+	}
+	artifact, err := parseArtifact(v[:idx])
+	if err != nil {
+		return nil, fmt.Errorf("parsing artifact %q: %w", v[:idx], err)
+	}
+	action := RepositoryNotificationAction(v[idx+1:])
+	isAllowedAction := false
+	for _, a := range allowedRepositoryNotificationActions {
+		if a == action {
+			isAllowedAction = true
+			break
+		}
+	}
+	if !isAllowedAction {
+		return nil, fmt.Errorf("invalid action %q found", action)
+	}
+	return &RepositoryNotification{
+		Artifact: *artifact,
+		Action:   action,
+	}, nil
+}

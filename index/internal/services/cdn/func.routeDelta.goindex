@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func routeDelta(oldRoutes *[]parse.FrontDoorRouteId, newRoutes *[]parse.FrontDoorRouteId) (*[]parse.FrontDoorRouteId, *[]parse.FrontDoorRouteId) {
+	remove := make([]parse.FrontDoorRouteId, 0)
+	shared := make([]parse.FrontDoorRouteId, 0)
+	if len(*newRoutes) == 0 || newRoutes == nil {
+		return oldRoutes, &shared
+	}
+
+	if len(*oldRoutes) == 0 || oldRoutes == nil {
+		return &remove, &shared
+	}
+
+	// just find what old routes are not in the new route list...
+	for _, oldRoute := range *oldRoutes {
+		if !routeSliceContains(newRoutes, oldRoute.ID()) {
+			remove = append(remove, oldRoute)
+		} else {
+			shared = append(shared, oldRoute)
+		}
+	}
+
+	return &remove, &shared
+}

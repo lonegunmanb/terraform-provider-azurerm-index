@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/azurefirewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFirewallNetworkRuleCollectionRules(rules *[]azurefirewalls.AzureFirewallNetworkRule) []interface{} {
+	outputs := make([]interface{}, 0)
+	if rules == nil {
+		return outputs
+	}
+
+	for _, rule := range *rules {
+		var (
+			name            string
+			description     string
+			sourceAddresses []interface{}
+			sourceIPGroups  []interface{}
+			destAddresses   []interface{}
+			destIPGroups    []interface{}
+			destPorts       []interface{}
+			destFqdns       []interface{}
+		)
+
+		if rule.Name != nil {
+			name = *rule.Name
+		}
+		if rule.Description != nil {
+			description = *rule.Description
+		}
+		if rule.SourceAddresses != nil {
+			sourceAddresses = utils.FlattenStringSlice(rule.SourceAddresses)
+		}
+		if rule.SourceIPGroups != nil {
+			sourceIPGroups = utils.FlattenStringSlice(rule.SourceIPGroups)
+		}
+		if rule.DestinationAddresses != nil {
+			destAddresses = utils.FlattenStringSlice(rule.DestinationAddresses)
+		}
+		if rule.DestinationIPGroups != nil {
+			destIPGroups = utils.FlattenStringSlice(rule.DestinationIPGroups)
+		}
+		if rule.DestinationPorts != nil {
+			destPorts = utils.FlattenStringSlice(rule.DestinationPorts)
+		}
+		if rule.DestinationFqdns != nil {
+			destFqdns = utils.FlattenStringSlice(rule.DestinationFqdns)
+		}
+		protocols := make([]string, 0)
+		if rule.Protocols != nil {
+			for _, protocol := range *rule.Protocols {
+				protocols = append(protocols, string(protocol))
+			}
+		}
+		outputs = append(outputs, map[string]interface{}{
+			"name":                  name,
+			"description":           description,
+			"source_addresses":      sourceAddresses,
+			"source_ip_groups":      sourceIPGroups,
+			"destination_addresses": destAddresses,
+			"destination_ip_groups": destIPGroups,
+			"destination_ports":     destPorts,
+			"destination_fqdns":     destFqdns,
+			"protocols":             utils.FlattenStringSlice(&protocols),
+		})
+	}
+	return outputs
+}

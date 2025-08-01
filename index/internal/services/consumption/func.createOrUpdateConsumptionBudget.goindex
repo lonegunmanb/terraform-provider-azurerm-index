@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/consumption/2019-10-01/budgets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func createOrUpdateConsumptionBudget(ctx context.Context, client *budgets.BudgetsClient, metadata sdk.ResourceMetaData, id budgets.ScopedBudgetId) error {
+	timePeriod, err := expandConsumptionBudgetTimePeriod(metadata.ResourceData.Get("time_period").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding `time_period`: %+v", err)
+	}
+
+	// The Consumption Budget API requires the category type field to be set in a budget's properties.
+	// 'Cost' is the only valid Budget type today according to the API spec.
+
+	parameters := budgets.Budget{
+		Name: utils.String(id.BudgetName),
+		Properties: &budgets.BudgetProperties{
+			Amount:        metadata.ResourceData.Get("amount").(float64),
+			Category:      budgets.CategoryTypeCost,
+			Filter:        expandConsumptionBudgetFilter(metadata.ResourceData.Get("filter").([]interface{})),
+			Notifications: expandConsumptionBudgetNotifications(metadata.ResourceData.Get("notification").(*pluginsdk.Set).List()),
+			TimeGrain:     budgets.TimeGrainType(metadata.ResourceData.Get("time_grain").(string)),
+			TimePeriod:    *timePeriod,
+		},
+	}
+
+	if v, ok := metadata.ResourceData.GetOk("etag"); ok {
+		parameters.ETag = utils.String(v.(string))
+	}
+
+	_, err = client.CreateOrUpdate(ctx, id, parameters)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

@@ -1,0 +1,26 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network/custompollers
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/localnetworkgateways"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+)
+func (p localNetworkGatewayPoller) Poll(ctx context.Context) (*pollers.PollResult, error) {
+	resp, err := p.client.Get(ctx, p.id)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving %s: %+v", p.id, err)
+	}
+
+	if resp.Model != nil {
+		if provisioningStatus := resp.Model.Properties.ProvisioningState; provisioningStatus != nil {
+			if !strings.EqualFold(string(*provisioningStatus), string(pollingSuccess.Status)) {
+				return &pollingInProgress, nil
+			}
+		}
+	}
+
+	return &pollingSuccess, nil
+}

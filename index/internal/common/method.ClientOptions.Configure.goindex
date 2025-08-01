@@ -1,0 +1,29 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/common
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/hashicorp/go-azure-helpers/sender"
+	"github.com/hashicorp/go-azure-sdk/sdk/auth"
+	"github.com/hashicorp/go-azure-sdk/sdk/client"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/version"
+)
+func (o ClientOptions) Configure(c client.BaseClient, authorizer auth.Authorizer) {
+	c.SetAuthorizer(authorizer)
+	c.SetUserAgent(userAgent(c.GetUserAgent(), o.TerraformVersion, o.PartnerId, o.DisableTerraformPartnerID))
+
+	if !o.DisableCorrelationRequestID {
+		id := o.CustomCorrelationRequestID
+		if id == "" {
+			id = correlationRequestID()
+		}
+		c.AppendRequestMiddleware(correlationRequestIDMiddleware(id))
+	}
+
+	c.AppendRequestMiddleware(requestLoggerMiddleware("AzureRM"))
+	c.AppendResponseMiddleware(responseLoggerMiddleware("AzureRM"))
+}

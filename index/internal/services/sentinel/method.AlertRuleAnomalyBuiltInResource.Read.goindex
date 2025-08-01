@@ -1,0 +1,99 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/workspaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
+)
+func (r AlertRuleAnomalyBuiltInResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Sentinel.AnalyticsSettingsClient
+
+			id, err := parse.MLAnalyticsSettingsID(metadata.ResourceData.Id())
+			if err != nil {
+				return fmt.Errorf("parsing %s: %+v", metadata.ResourceData.Id(), err)
+			}
+			workspaceId := workspaces.NewWorkspaceID(id.SubscriptionId, id.ResourceGroup, id.WorkspaceName)
+
+			resp, err := AlertRuleAnomalyReadWithPredicate(ctx, client.BaseClient, workspaceId, func(v *azuresdkhacks.AnomalySecurityMLAnalyticsSettings) bool {
+				if v.ID != nil && strings.EqualFold(*v.ID, id.ID()) {
+					return true
+				}
+				return false
+			})
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+			if resp == nil {
+				return metadata.MarkAsGone(id)
+			}
+
+			state := AlertRuleAnomalyBuiltInModel{
+				WorkspaceId: workspaceId.ID(),
+				Mode:        string(resp.SettingsStatus),
+			}
+
+			if resp.Name != nil {
+				state.Name = *resp.Name
+			}
+
+			if resp.DisplayName != nil {
+				state.DisplayName = *resp.DisplayName
+			}
+
+			if resp.AnomalyVersion != nil {
+				state.AnomalyVersion = *resp.AnomalyVersion
+			}
+
+			if resp.AnomalySettingsVersion != nil {
+				state.AnomalySettingsVersion = int64(*resp.AnomalySettingsVersion)
+			}
+
+			if resp.Description != nil {
+				state.Description = *resp.Description
+			}
+
+			if resp.Enabled != nil {
+				state.Enabled = *resp.Enabled
+			}
+
+			if resp.Frequency != nil {
+				state.Frequency = *resp.Frequency
+			}
+
+			state.RequiredDataConnectors = flattenSentinelAlertRuleAnomalyRequiredDataConnectors(resp.RequiredDataConnectors)
+
+			if resp.SettingsDefinitionID != nil {
+				state.SettingsDefinitionId = resp.SettingsDefinitionID.String()
+			}
+
+			state.Tactics = flattenSentinelAlertRuleAnomalyTactics(resp.Tactics)
+
+			if resp.Techniques != nil {
+				state.Techniques = *resp.Techniques
+			}
+
+			if resp.CustomizableObservations != nil {
+				state.MultiSelectObservation = flattenSentinelAlertRuleAnomalyMultiSelect(resp.CustomizableObservations.MultiSelectObservations)
+				state.SingleSelectObservation = flattenSentinelAlertRuleAnomalySingleSelect(resp.CustomizableObservations.SingleSelectObservations)
+				state.PrioritizeExcludeObservation = flattenSentinelAlertRuleAnomalyPriority(resp.CustomizableObservations.PrioritizeExcludeObservations)
+				state.ThresholdObservation = flattenSentinelAlertRuleAnomalyThreshold(resp.CustomizableObservations.ThresholdObservations)
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

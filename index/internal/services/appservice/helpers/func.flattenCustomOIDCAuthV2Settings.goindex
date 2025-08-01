@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/kermit/sdk/web/2022-09-01/web"
+)
+func flattenCustomOIDCAuthV2Settings(input *map[string]webapps.CustomOpenIdConnectProvider) []CustomOIDCAuthV2Settings {
+	if input == nil || len(*input) == 0 {
+		return []CustomOIDCAuthV2Settings{}
+	}
+
+	result := make([]CustomOIDCAuthV2Settings, 0)
+	for k, v := range *input {
+		if !pointer.From(v.Enabled) {
+			continue
+		} else {
+			provider := CustomOIDCAuthV2Settings{
+				Name: k,
+			}
+			if reg := v.Registration; reg != nil {
+				provider.ClientId = pointer.From(reg.ClientId)
+				if reg.ClientCredential != nil {
+					provider.ClientSecretSettingName = pointer.From(reg.ClientCredential.ClientSecretSettingName)
+					provider.ClientCredentialMethod = string(pointer.From(reg.ClientCredential.Method))
+				}
+				if config := reg.OpenIdConnectConfiguration; config != nil {
+					provider.OpenIDConfigurationEndpoint = pointer.From(config.WellKnownOpenIdConfiguration)
+					provider.AuthorizationEndpoint = pointer.From(config.AuthorizationEndpoint)
+					provider.TokenEndpoint = pointer.From(config.TokenEndpoint)
+					provider.IssuerEndpoint = pointer.From(config.Issuer)
+					provider.CertificationURI = pointer.From(config.CertificationUri)
+				}
+			}
+			if login := v.Login; login != nil {
+				if login.Scopes != nil {
+					provider.Scopes = *login.Scopes
+				}
+				provider.NameClaimType = pointer.From(login.NameClaimType)
+			}
+			result = append(result, provider)
+		}
+	}
+
+	return result
+}

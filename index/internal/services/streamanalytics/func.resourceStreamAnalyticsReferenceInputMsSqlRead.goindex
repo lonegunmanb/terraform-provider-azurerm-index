@@ -1,0 +1,115 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/streamanalytics
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2020-03-01/inputs"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/streamanalytics/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/streamanalytics/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceStreamAnalyticsReferenceInputMsSqlRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).StreamAnalytics.InputsClient
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := inputs.ParseInputID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found - removing from state!", *id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	d.SetId(id.ID())
+	d.Set("name", id.InputName)
+	d.Set("stream_analytics_job_name", id.StreamingJobName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		if props := model.Properties; props != nil {
+			input, ok := props.(inputs.InputProperties) // nolint: gosimple
+			if !ok {
+				return fmt.Errorf("converting %s to an Input", *id)
+			}
+
+			reference, ok := input.(inputs.ReferenceInputProperties)
+			if !ok {
+				return fmt.Errorf("converting %s to Reference Input", *id)
+			}
+
+			referenceInputAzureSql, ok := reference.Datasource.(inputs.AzureSqlReferenceInputDataSource)
+			if !ok {
+				return fmt.Errorf("converting %s to an Azure Sql Reference Input", *id)
+			}
+
+			if referenceInputAzureSql.Properties != nil {
+				server := ""
+				if v := referenceInputAzureSql.Properties.Server; v != nil {
+					server = *v
+				}
+				d.Set("server", server)
+
+				database := ""
+				if v := referenceInputAzureSql.Properties.Database; v != nil {
+					database = *v
+				}
+				d.Set("database", database)
+
+				username := ""
+				if v := referenceInputAzureSql.Properties.User; v != nil {
+					username = *v
+				}
+				d.Set("username", username)
+
+				refreshType := ""
+				if v := referenceInputAzureSql.Properties.RefreshType; v != nil {
+					refreshType = string(*v)
+				}
+				d.Set("refresh_type", refreshType)
+
+				intervalDuration := ""
+				if v := referenceInputAzureSql.Properties.RefreshRate; v != nil {
+					intervalDuration = *v
+				}
+				d.Set("refresh_interval_duration", intervalDuration)
+
+				fullSnapshotQuery := ""
+				if v := referenceInputAzureSql.Properties.FullSnapshotQuery; v != nil {
+					fullSnapshotQuery = *v
+				}
+				d.Set("full_snapshot_query", fullSnapshotQuery)
+
+				deltaSnapshotQuery := ""
+				if v := referenceInputAzureSql.Properties.DeltaSnapshotQuery; v != nil {
+					deltaSnapshotQuery = *v
+				}
+				d.Set("delta_snapshot_query", deltaSnapshotQuery)
+
+				table := ""
+				if v := referenceInputAzureSql.Properties.Table; v != nil {
+					table = *v
+				}
+				d.Set("table", table)
+			}
+		}
+	}
+
+	return nil
+}

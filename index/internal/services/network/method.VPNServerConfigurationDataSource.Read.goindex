@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (d VPNServerConfigurationDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Network.VirtualWANs
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var model VPNServerConfigurationDataSourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			id := virtualwans.NewVpnServerConfigurationID(subscriptionId, model.ResourceGroup, model.Name)
+
+			resp, err := client.VpnServerConfigurationsGet(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			m := VPNServerConfigurationDataSourceModel{
+				Name:          id.VpnServerConfigurationName,
+				ResourceGroup: id.ResourceGroupName,
+			}
+
+			if model := resp.Model; model != nil {
+				m.Location = pointer.ToString(model.Location)
+				if tags := model.Tags; tags != nil {
+					m.Tags = pointer.ToMapOfStringStrings(tags)
+				}
+
+				if props := resp.Model.Properties; props != nil {
+					m.AzureActiveDirectoryAuthentication = dataSourceFlattenVpnServerConfigurationAADAuthentication(props.AadAuthenticationParameters)
+					m.ClientRootCertificate = dataSourceFlattenVpnServerConfigurationClientRootCertificates(props.VpnClientRootCertificates)
+					m.ClientRevokedCertificate = dataSourceFlattenVpnServerConfigurationClientRevokedCertificates(props.VpnClientRevokedCertificates)
+					m.IpsecPolicy = dataSourceFlattenVpnServerConfigurationIPSecPolicies(props.VpnClientIPsecPolicies)
+					m.Radius = dataSourceFlattenVpnServerConfigurationRadius(props)
+					m.VpnAuthenticationTypes = dataSourceFlattenVpnServerConfigurationVpnAuthenticationTypes(props.VpnAuthenticationTypes)
+					m.VpnProtocols = dataSourceFlattenVpnServerConfigurationVPNProtocols(props.VpnProtocols)
+				}
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&m)
+		},
+	}
+}

@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/virtualwans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/azurefirewalls"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFirewallIPConfigurations(input *[]azurefirewalls.AzureFirewallIPConfiguration) []interface{} {
+	result := make([]interface{}, 0)
+	if input == nil {
+		return result
+	}
+
+	for _, v := range *input {
+		afIPConfig := make(map[string]interface{})
+		props := v.Properties
+		if props == nil {
+			continue
+		}
+
+		if name := v.Name; name != nil {
+			afIPConfig["name"] = *name
+		}
+
+		if subnet := props.Subnet; subnet != nil {
+			if id := subnet.Id; id != nil {
+				afIPConfig["subnet_id"] = *id
+			}
+		}
+
+		if ipAddress := props.PrivateIPAddress; ipAddress != nil {
+			afIPConfig["private_ip_address"] = *ipAddress
+		}
+
+		if pip := props.PublicIPAddress; pip != nil {
+			if id := pip.Id; id != nil {
+				afIPConfig["public_ip_address_id"] = *id
+			}
+		}
+		result = append(result, afIPConfig)
+	}
+
+	return result
+}

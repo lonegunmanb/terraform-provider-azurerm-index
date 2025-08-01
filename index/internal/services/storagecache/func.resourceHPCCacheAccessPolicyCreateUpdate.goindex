@@ -1,0 +1,80 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/caches"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceHPCCacheAccessPolicyCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).StorageCache.Caches
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	name := d.Get("name").(string)
+	cacheId, err := caches.ParseCacheID(d.Get("hpc_cache_id").(string))
+	if err != nil {
+		return err
+	}
+	id := parse.NewCacheAccessPolicyID(cacheId.SubscriptionId, cacheId.ResourceGroupName, cacheId.CacheName, name)
+
+	locks.ByID(id.ID())
+	defer locks.UnlockByID(id.ID())
+
+	existCache, err := client.Get(ctx, *cacheId)
+	if err != nil {
+		return fmt.Errorf("checking for containing HPC Cache %s: %+v", cacheId, err)
+	}
+
+	m := existCache.Model
+	if m == nil {
+		return fmt.Errorf("nil Model of HPC Cache %s", cacheId)
+	}
+
+	prop := m.Properties
+	if prop == nil {
+		return fmt.Errorf("nil CacheProperties of HPC Cache %s", cacheId)
+	}
+
+	setting := prop.SecuritySettings
+	if setting == nil {
+		return fmt.Errorf("nil SecuritySettings of HPC Cache %s", cacheId)
+	}
+
+	policies := setting.AccessPolicies
+	if policies == nil {
+		return fmt.Errorf("nil AccessPolicies of HPC Cache %s", cacheId)
+	}
+
+	if d.IsNewResource() {
+		p := CacheGetAccessPolicyByName(*policies, id.Name)
+		if p != nil {
+			return tf.ImportAsExistsError("azurerm_hpc_cache_access_policy", id.ID())
+		}
+	}
+
+	p := caches.NfsAccessPolicy{
+		Name:        id.Name,
+		AccessRules: expandStorageCacheNfsAccessRules(d.Get("access_rule").(*pluginsdk.Set).List()),
+	}
+
+	*policies, err = CacheInsertOrUpdateAccessPolicy(*policies, p)
+	if err != nil {
+		return err
+	}
+
+	if err = client.CreateOrUpdateThenPoll(ctx, *cacheId, *existCache.Model); err != nil {
+		return fmt.Errorf("updating the HPC Cache for creating/updating Access Policy %q: %v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceHPCCacheAccessPolicyRead(d, meta)
+}

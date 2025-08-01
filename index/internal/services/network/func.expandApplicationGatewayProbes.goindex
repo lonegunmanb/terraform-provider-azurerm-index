@@ -1,0 +1,90 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewayProbes(d *pluginsdk.ResourceData) *[]applicationgateways.ApplicationGatewayProbe {
+	vs := d.Get("probe").(*schema.Set).List()
+	results := make([]applicationgateways.ApplicationGatewayProbe, 0)
+
+	for _, raw := range vs {
+		v := raw.(map[string]interface{})
+
+		host := v["host"].(string)
+		interval := int64(v["interval"].(int))
+		minServers := int64(v["minimum_servers"].(int))
+		name := v["name"].(string)
+		probePath := v["path"].(string)
+		protocol := v["protocol"].(string)
+		port := int64(v["port"].(int))
+		timeout := int64(v["timeout"].(int))
+		unhealthyThreshold := int64(v["unhealthy_threshold"].(int))
+		pickHostNameFromBackendHTTPSettings := v["pick_host_name_from_backend_http_settings"].(bool)
+
+		output := applicationgateways.ApplicationGatewayProbe{
+			Name: pointer.To(name),
+			Properties: &applicationgateways.ApplicationGatewayProbePropertiesFormat{
+				Host:                                pointer.To(host),
+				Interval:                            pointer.To(interval),
+				MinServers:                          pointer.To(minServers),
+				Path:                                pointer.To(probePath),
+				Protocol:                            pointer.To(applicationgateways.ApplicationGatewayProtocol(protocol)),
+				Timeout:                             pointer.To(timeout),
+				UnhealthyThreshold:                  pointer.To(unhealthyThreshold),
+				PickHostNameFromBackendHTTPSettings: pointer.To(pickHostNameFromBackendHTTPSettings),
+			},
+		}
+
+		matchConfigs := v["match"].([]interface{})
+		if len(matchConfigs) > 0 {
+			matchBody := ""
+			outputMatch := &applicationgateways.ApplicationGatewayProbeHealthResponseMatch{}
+			if matchConfigs[0] != nil {
+				match := matchConfigs[0].(map[string]interface{})
+				matchBody = match["body"].(string)
+
+				statusCodes := make([]string, 0)
+				for _, statusCode := range match["status_code"].([]interface{}) {
+					statusCodes = append(statusCodes, statusCode.(string))
+				}
+				outputMatch.StatusCodes = &statusCodes
+			}
+			outputMatch.Body = pointer.To(matchBody)
+			output.Properties.Match = outputMatch
+		}
+
+		if port != 0 {
+			output.Properties.Port = pointer.To(port)
+		}
+
+		results = append(results, output)
+	}
+
+	return &results
+}

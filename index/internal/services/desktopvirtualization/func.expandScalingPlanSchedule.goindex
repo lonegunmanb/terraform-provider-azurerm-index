@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/desktopvirtualization
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/desktopvirtualization/2022-02-10-preview/hostpool"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/desktopvirtualization/2022-02-10-preview/scalingplan"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandScalingPlanSchedule(input []interface{}) *[]scalingplan.ScalingSchedule {
+	if len(input) == 0 {
+		return nil
+	}
+
+	results := make([]scalingplan.ScalingSchedule, 0)
+	for _, item := range input {
+		if item == nil {
+			continue
+		}
+
+		v := item.(map[string]interface{})
+		name := v["name"].(string)
+		daysOfWeekRaw := v["days_of_week"].(*pluginsdk.Set).List()
+		daysOfWeek := make([]scalingplan.DaysOfWeek, 0)
+		for _, weekday := range daysOfWeekRaw {
+			daysOfWeek = append(daysOfWeek, scalingplan.DaysOfWeek(weekday.(string)))
+		}
+
+		rampUpStartTime := v["ramp_up_start_time"].(string)
+		rampUpLoadBalancingAlgorithm := scalingplan.SessionHostLoadBalancingAlgorithm(v["ramp_up_load_balancing_algorithm"].(string))
+		rampUpMinimumHostsPct := v["ramp_up_minimum_hosts_percent"].(int)
+		rampUpCapacityThresholdPct := v["ramp_up_capacity_threshold_percent"].(int)
+		peakStartTime := v["peak_start_time"].(string)
+		peakLoadBalancingAlgorithm := scalingplan.SessionHostLoadBalancingAlgorithm(v["peak_load_balancing_algorithm"].(string))
+		rampDownStartTime := v["ramp_down_start_time"].(string)
+		rampDownLoadBalancingAlgorithm := scalingplan.SessionHostLoadBalancingAlgorithm(v["ramp_down_load_balancing_algorithm"].(string))
+		rampDownMinimumHostsPct := v["ramp_down_minimum_hosts_percent"].(int)
+		rampDownCapacityThresholdPct := v["ramp_down_capacity_threshold_percent"].(int)
+		rampDownForceLogoffUsers := v["ramp_down_force_logoff_users"].(bool)
+		rampDownStopHostsWhen := scalingplan.StopHostsWhen(v["ramp_down_stop_hosts_when"].(string))
+		rampDownWaitTimeMinutes := v["ramp_down_wait_time_minutes"].(int)
+		rampDownNotificationMessage := v["ramp_down_notification_message"].(string)
+		offPeakStartTime := v["off_peak_start_time"].(string)
+		offPeakLoadBalancingAlgorithm := scalingplan.SessionHostLoadBalancingAlgorithm(v["off_peak_load_balancing_algorithm"].(string))
+
+		results = append(results, scalingplan.ScalingSchedule{
+			Name:                           utils.String(name),
+			DaysOfWeek:                     &daysOfWeek,
+			RampUpStartTime:                expandScalingPlanScheduleTime(rampUpStartTime),
+			RampUpLoadBalancingAlgorithm:   &rampUpLoadBalancingAlgorithm,
+			RampUpMinimumHostsPct:          utils.Int64(int64(rampUpMinimumHostsPct)),
+			RampUpCapacityThresholdPct:     utils.Int64(int64(rampUpCapacityThresholdPct)),
+			PeakStartTime:                  expandScalingPlanScheduleTime(peakStartTime),
+			PeakLoadBalancingAlgorithm:     &peakLoadBalancingAlgorithm,
+			RampDownStartTime:              expandScalingPlanScheduleTime(rampDownStartTime),
+			RampDownLoadBalancingAlgorithm: &rampDownLoadBalancingAlgorithm,
+			RampDownMinimumHostsPct:        utils.Int64(int64(rampDownMinimumHostsPct)),
+			RampDownCapacityThresholdPct:   utils.Int64(int64(rampDownCapacityThresholdPct)),
+			RampDownForceLogoffUsers:       utils.Bool(rampDownForceLogoffUsers),
+			RampDownStopHostsWhen:          &rampDownStopHostsWhen,
+			RampDownWaitTimeMinutes:        utils.Int64(int64(rampDownWaitTimeMinutes)),
+			RampDownNotificationMessage:    utils.String(rampDownNotificationMessage),
+			OffPeakStartTime:               expandScalingPlanScheduleTime(offPeakStartTime),
+			OffPeakLoadBalancingAlgorithm:  &offPeakLoadBalancingAlgorithm,
+		})
+	}
+
+	return &results
+}

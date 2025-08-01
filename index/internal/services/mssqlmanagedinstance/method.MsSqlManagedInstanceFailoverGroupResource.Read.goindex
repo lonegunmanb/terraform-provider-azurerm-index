@@ -1,0 +1,106 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/instancefailovergroups"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r MsSqlManagedInstanceFailoverGroupResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MSSQLManagedInstance.ManagedInstanceFailoverGroupsClient
+
+			id, err := instancefailovergroups.ParseInstanceFailoverGroupID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			metadata.Logger.Infof("Decoding state for %s", id)
+			var state MsSqlManagedInstanceFailoverGroupModel
+			if err := metadata.Decode(&state); err != nil {
+				return err
+			}
+
+			result, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(result.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %v", id, err)
+			}
+
+			model := MsSqlManagedInstanceFailoverGroupModel{
+				Name:     id.InstanceFailoverGroupName,
+				Location: id.LocationName,
+			}
+
+			if result.Model != nil {
+				if props := result.Model.Properties; props != nil {
+					model.Role = string(pointer.From(props.ReplicationRole))
+
+					if instancePairs := props.ManagedInstancePairs; len(instancePairs) == 1 {
+						if primaryId := instancePairs[0].PrimaryManagedInstanceId; primaryId != nil {
+							id, err := parse.ManagedInstanceIDInsensitively(*primaryId)
+							if err != nil {
+								return fmt.Errorf("parsing `PrimaryManagedInstanceID` from response: %v", err)
+							}
+
+							model.ManagedInstanceId = id.ID()
+						}
+
+						if partnerId := instancePairs[0].PartnerManagedInstanceId; partnerId != nil {
+							id, err := parse.ManagedInstanceIDInsensitively(*partnerId)
+							if err != nil {
+								return fmt.Errorf("parsing `PrimaryManagedInstanceID` from response: %v", err)
+							}
+
+							model.PartnerManagedInstanceId = id.ID()
+						}
+					}
+
+					for _, partnerRegion := range props.PartnerRegions {
+						var location string
+						if partnerRegion.Location != nil {
+							location = *partnerRegion.Location
+						}
+
+						model.PartnerRegion = append(model.PartnerRegion, MsSqlManagedInstancePartnerRegionModel{
+							Location: location,
+							Role:     string(pointer.From(partnerRegion.ReplicationRole)),
+						})
+					}
+
+					if readOnlyEndpoint := props.ReadOnlyEndpoint; readOnlyEndpoint != nil {
+						if *readOnlyEndpoint.FailoverPolicy == instancefailovergroups.ReadOnlyEndpointFailoverPolicyEnabled {
+							model.ReadOnlyEndpointFailoverPolicyEnabled = true
+						}
+					}
+
+					model.SecondaryType = string(pointer.From(props.SecondaryType))
+
+					model.ReadWriteEndpointFailurePolicy = []MsSqlManagedInstanceReadWriteEndpointFailurePolicyModel{
+						{
+							Mode:         string(props.ReadWriteEndpoint.FailoverPolicy),
+							GraceMinutes: pointer.From(props.ReadWriteEndpoint.FailoverWithDataLossGracePeriodMinutes),
+						},
+					}
+				}
+			}
+
+			return metadata.Encode(&model)
+		},
+	}
+}

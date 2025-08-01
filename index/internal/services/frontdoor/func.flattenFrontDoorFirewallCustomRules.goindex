@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFrontDoorFirewallCustomRules(input *webapplicationfirewallpolicies.CustomRuleList) []interface{} {
+	if input == nil || input.Rules == nil {
+		return make([]interface{}, 0)
+	}
+
+	results := make([]interface{}, 0)
+	for _, r := range *input.Rules {
+		output := make(map[string]interface{})
+
+		output["name"] = r.Name
+		output["type"] = string(r.RuleType)
+		output["action"] = string(r.Action)
+		if r.EnabledState != nil {
+			output["enabled"] = *r.EnabledState == webapplicationfirewallpolicies.CustomRuleEnabledStateEnabled
+		}
+		output["match_condition"] = flattenFrontDoorFirewallMatchConditions(r.MatchConditions)
+		output["priority"] = int(r.Priority)
+
+		if v := r.RateLimitDurationInMinutes; v != nil {
+			output["rate_limit_duration_in_minutes"] = int(*v)
+		}
+
+		if v := r.RateLimitThreshold; v != nil {
+			output["rate_limit_threshold"] = int(*v)
+		}
+
+		results = append(results, output)
+	}
+
+	return results
+}

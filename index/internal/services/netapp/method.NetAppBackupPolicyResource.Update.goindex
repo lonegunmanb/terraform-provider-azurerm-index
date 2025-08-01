@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backuppolicy"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r NetAppBackupPolicyResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 120 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.NetApp.BackupPolicyClient
+
+			id, err := backuppolicy.ParseBackupPolicyID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			metadata.Logger.Infof("Decoding state for %s", id)
+			var state netAppModels.NetAppBackupPolicyModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			update := backuppolicy.BackupPolicyPatch{
+				Properties: &backuppolicy.BackupPolicyProperties{},
+			}
+
+			// Checking properties with changes
+			if metadata.ResourceData.HasChange("tags") {
+				update.Tags = pointer.To(state.Tags)
+			}
+
+			if metadata.ResourceData.HasChange("daily_backups_to_keep") {
+				update.Properties.DailyBackupsToKeep = pointer.To(state.DailyBackupsToKeep)
+			}
+
+			if metadata.ResourceData.HasChange("weekly_backups_to_keep") {
+				update.Properties.WeeklyBackupsToKeep = pointer.To(state.WeeklyBackupsToKeep)
+			}
+
+			if metadata.ResourceData.HasChange("monthly_backups_to_keep") {
+				update.Properties.MonthlyBackupsToKeep = pointer.To(state.MonthlyBackupsToKeep)
+			}
+
+			if metadata.ResourceData.HasChange("enabled") {
+				update.Properties.Enabled = pointer.To(state.Enabled)
+			}
+
+			metadata.Logger.Infof("Updating %s", id)
+
+			if err := client.BackupPoliciesUpdateThenPoll(ctx, pointer.From(id), update); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

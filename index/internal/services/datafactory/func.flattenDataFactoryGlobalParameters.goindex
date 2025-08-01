@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/managedvirtualnetworks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/purview/2021-07-01/account"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenDataFactoryGlobalParameters(input *map[string]factories.GlobalParameterSpecification) (*[]interface{}, error) {
+	output := make([]interface{}, 0)
+	if input == nil || len(*input) == 0 {
+		return &output, nil
+	}
+
+	for name, item := range *input {
+		var valueResult string
+		_, valueIsString := item.Value.(string)
+		if (item.Type == factories.GlobalParameterTypeArray || item.Type == factories.GlobalParameterTypeObject) && !valueIsString {
+			bytes, err := json.Marshal(item.Value)
+			if err != nil {
+				return nil, fmt.Errorf("marshalling value for global parameter %q (value %+v): %+v", name, item.Value, err)
+			}
+			valueResult = string(bytes)
+		} else {
+			valueResult = fmt.Sprintf("%v", item.Value)
+		}
+
+		output = append(output, map[string]interface{}{
+			"name":  name,
+			"type":  string(item.Type),
+			"value": valueResult,
+		})
+	}
+	return &output, nil
+}

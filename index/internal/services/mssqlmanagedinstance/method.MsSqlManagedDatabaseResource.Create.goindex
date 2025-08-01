@@ -1,0 +1,115 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedbackupshorttermretentionpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/manageddatabases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstancelongtermretentionpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstances"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper"
+	miParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r MsSqlManagedDatabaseResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MSSQLManagedInstance.ManagedDatabasesClient
+			instancesClient := metadata.Client.MSSQLManagedInstance.ManagedInstancesClient
+			longTermRetentionClient := metadata.Client.MSSQLManagedInstance.ManagedInstancesLongTermRetentionPoliciesClient
+			shortTermRetentionClient := metadata.Client.MSSQLManagedInstance.ManagedInstancesShortTermRetentionPoliciesClient
+
+			var model MsSqlManagedDatabaseModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			managedInstanceId, err := commonids.ParseSqlManagedInstanceID(model.ManagedInstanceId)
+			if err != nil {
+				return err
+			}
+
+			id := commonids.NewSqlManagedInstanceDatabaseID(managedInstanceId.SubscriptionId,
+				managedInstanceId.ResourceGroupName, managedInstanceId.ManagedInstanceName, model.Name)
+
+			managedInstance, err := instancesClient.Get(ctx, *managedInstanceId, managedinstances.GetOperationOptions{})
+			if err != nil || managedInstance.Model == nil || managedInstance.Model.Location == "" {
+				return fmt.Errorf("checking for existence and region of Managed Instance for %s: %+v", id, err)
+			}
+
+			metadata.Logger.Infof("Import check for %s", id)
+			existing, err := client.Get(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			parameters := manageddatabases.ManagedDatabase{
+				Location:   managedInstance.Model.Location,
+				Properties: pointer.To(manageddatabases.ManagedDatabaseProperties{}),
+				Tags:       pointer.To(model.Tags),
+			}
+
+			if len(model.PointInTimeRestore) > 0 {
+				restorePointInTime := model.PointInTimeRestore[0]
+				parameters.Properties.CreateMode = pointer.To(manageddatabases.ManagedDatabaseCreateModePointInTimeRestore)
+				parameters.Properties.RestorePointInTime = &restorePointInTime.RestorePointInTime
+
+				if _, err := miParse.RestorableDroppedDatabaseID(restorePointInTime.SourceDatabaseId); err == nil {
+					parameters.Properties.RestorableDroppedDatabaseId = pointer.To(restorePointInTime.SourceDatabaseId)
+				} else {
+					parameters.Properties.SourceDatabaseId = pointer.To(restorePointInTime.SourceDatabaseId)
+				}
+			}
+
+			metadata.Logger.Infof("Creating %s", id)
+
+			err = client.CreateOrUpdateThenPoll(ctx, id, parameters)
+			if err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			if len(model.LongTermRetentionPolicy) > 0 {
+				longTermRetentionPolicy := managedinstancelongtermretentionpolicies.ManagedInstanceLongTermRetentionPolicy{
+					Properties: pointer.To(expandLongTermRetentionPolicy(model.LongTermRetentionPolicy)),
+				}
+
+				err := longTermRetentionClient.CreateOrUpdateThenPoll(ctx, id, longTermRetentionPolicy)
+				if err != nil {
+					return fmt.Errorf("setting Long Term Retention Policies for %s: %+v", id, err)
+				}
+			}
+
+			if model.ShortTermRetentionDays > 0 {
+				shortTermRetentionPolicy := managedbackupshorttermretentionpolicies.ManagedBackupShortTermRetentionPolicy{
+					Properties: &managedbackupshorttermretentionpolicies.ManagedBackupShortTermRetentionPolicyProperties{
+						RetentionDays: pointer.To(model.ShortTermRetentionDays),
+					},
+				}
+				if err = shortTermRetentionClient.CreateOrUpdateThenPoll(ctx, id, shortTermRetentionPolicy); err != nil {
+					return fmt.Errorf("setting Short Term Retention Policy for %s: %+v", id, err)
+				}
+			}
+
+			metadata.SetID(id)
+
+			return nil
+		},
+	}
+}

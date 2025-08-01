@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/routetables"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandRouteTableRoutes(d *pluginsdk.ResourceData) *[]routetables.Route {
+	configs := d.Get("route").(*pluginsdk.Set).List()
+	routes := make([]routetables.Route, 0, len(configs))
+
+	for _, configRaw := range configs {
+		data := configRaw.(map[string]interface{})
+
+		route := routetables.Route{
+			Name: utils.String(data["name"].(string)),
+			Properties: &routetables.RoutePropertiesFormat{
+				AddressPrefix: utils.String(data["address_prefix"].(string)),
+				NextHopType:   routetables.RouteNextHopType(data["next_hop_type"].(string)),
+			},
+		}
+
+		if v := data["next_hop_in_ip_address"].(string); v != "" {
+			route.Properties.NextHopIPAddress = &v
+		}
+
+		routes = append(routes, route)
+	}
+
+	return &routes
+}

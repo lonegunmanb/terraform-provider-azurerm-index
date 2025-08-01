@@ -1,0 +1,105 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/publicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	compute2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	intStor "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func expandAzureRmVirtualMachineOsProfileWindowsConfig(d *pluginsdk.ResourceData) *virtualmachines.WindowsConfiguration {
+	osProfilesWindowsConfig := d.Get("os_profile_windows_config").(*pluginsdk.Set).List()
+
+	osProfileConfig := osProfilesWindowsConfig[0].(map[string]interface{})
+	config := &virtualmachines.WindowsConfiguration{}
+
+	if v := osProfileConfig["provision_vm_agent"]; v != nil {
+		provision := v.(bool)
+		config.ProvisionVMAgent = &provision
+	}
+
+	if v := osProfileConfig["enable_automatic_upgrades"]; v != nil {
+		update := v.(bool)
+		config.EnableAutomaticUpdates = &update
+	}
+
+	if v := osProfileConfig["timezone"]; v != nil && v.(string) != "" {
+		config.TimeZone = pointer.To(v.(string))
+	}
+
+	if v := osProfileConfig["winrm"]; v != nil {
+		winRm := v.([]interface{})
+		if len(winRm) > 0 {
+			winRmListeners := make([]virtualmachines.WinRMListener, 0, len(winRm))
+			for _, winRmConfig := range winRm {
+				config := winRmConfig.(map[string]interface{})
+
+				protocol := config["protocol"].(string)
+				winRmListener := virtualmachines.WinRMListener{
+					Protocol: pointer.To(virtualmachines.ProtocolTypes(protocol)),
+				}
+				if v := config["certificate_url"].(string); v != "" {
+					winRmListener.CertificateURL = &v
+				}
+
+				winRmListeners = append(winRmListeners, winRmListener)
+			}
+			config.WinRM = &virtualmachines.WinRMConfiguration{
+				Listeners: &winRmListeners,
+			}
+		}
+	}
+	if v := osProfileConfig["additional_unattend_config"]; v != nil {
+		additionalConfig := v.([]interface{})
+		if len(additionalConfig) > 0 {
+			additionalConfigContent := make([]virtualmachines.AdditionalUnattendContent, 0, len(additionalConfig))
+			for _, addConfig := range additionalConfig {
+				config := addConfig.(map[string]interface{})
+				pass := config["pass"].(string)
+				component := config["component"].(string)
+				settingName := config["setting_name"].(string)
+				content := config["content"].(string)
+
+				addContent := virtualmachines.AdditionalUnattendContent{
+					PassName:      pointer.To(virtualmachines.PassNames(pass)),
+					ComponentName: pointer.To(virtualmachines.ComponentNames(component)),
+					SettingName:   pointer.To(virtualmachines.SettingNames(settingName)),
+				}
+
+				if content != "" {
+					addContent.Content = &content
+				}
+
+				additionalConfigContent = append(additionalConfigContent, addContent)
+			}
+			config.AdditionalUnattendContent = &additionalConfigContent
+		}
+	}
+	return config
+}

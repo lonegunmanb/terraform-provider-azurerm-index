@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/disasterrecoveryconfigs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/namespacesauthorizationrule"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2022-10-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func waitForPairedNamespaceReplication(ctx context.Context, meta interface{}, id namespaces.NamespaceId, timeout time.Duration) error {
+	namespaceClient := meta.(*clients.Client).ServiceBus.NamespacesClient
+	resp, err := namespaceClient.Get(ctx, id)
+
+	if model := resp.Model; model != nil {
+		if !strings.EqualFold(string(model.Sku.Name), "Premium") {
+			return err
+		}
+	}
+
+	disasterRecoveryClient := meta.(*clients.Client).ServiceBus.DisasterRecoveryConfigsClient
+	disasterRecoveryNamespaceId := disasterrecoveryconfigs.NewNamespaceID(id.SubscriptionId, id.ResourceGroupName, id.NamespaceName)
+	disasterRecoveryResponse, err := disasterRecoveryClient.List(ctx, disasterRecoveryNamespaceId)
+
+	if disasterRecoveryResponse.Model == nil {
+		return err
+	}
+
+	if len(*disasterRecoveryResponse.Model) != 1 {
+		return err
+	}
+
+	aliasName := (*disasterRecoveryResponse.Model)[0].Name
+
+	disasterRecoveryConfigId := disasterrecoveryconfigs.NewDisasterRecoveryConfigID(disasterRecoveryNamespaceId.SubscriptionId, disasterRecoveryNamespaceId.ResourceGroupName, disasterRecoveryNamespaceId.NamespaceName, *aliasName)
+
+	stateConf := &pluginsdk.StateChangeConf{
+		Pending:    []string{string(disasterrecoveryconfigs.ProvisioningStateDRAccepted)},
+		Target:     []string{string(disasterrecoveryconfigs.ProvisioningStateDRSucceeded)},
+		MinTimeout: 30 * time.Second,
+		Timeout:    timeout,
+		Refresh: func() (interface{}, string, error) {
+			resp, err := disasterRecoveryClient.Get(ctx, disasterRecoveryConfigId)
+			if err != nil {
+				return nil, "error", fmt.Errorf("wait read for %s: %v", disasterRecoveryConfigId, err)
+			}
+
+			if model := resp.Model; model != nil {
+				if *model.Properties.ProvisioningState == disasterrecoveryconfigs.ProvisioningStateDRFailed {
+					return resp, "failed", fmt.Errorf("replication for %s failed", disasterRecoveryConfigId)
+				}
+				return resp, string(*model.Properties.ProvisioningState), nil
+			}
+
+			return resp, "nil", fmt.Errorf("waiting for replication error for %s: provisioning state is nil", disasterRecoveryConfigId)
+		},
+	}
+
+	_, waitErr := stateConf.WaitForStateContext(ctx)
+	return waitErr
+}

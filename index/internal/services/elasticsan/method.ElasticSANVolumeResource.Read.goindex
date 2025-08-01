@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/elasticsan
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	diskSnapshots "github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-02/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-03-01/restorepoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/elasticsan/2023-01-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/elasticsan/2023-01-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/elasticsan/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ElasticSANVolumeResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ElasticSan.Volumes
+			schema := ElasticSANVolumeResourceModel{}
+
+			id, err := volumes.ParseVolumeID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			volumeGroupId := volumes.NewVolumeGroupID(id.SubscriptionId, id.ResourceGroupName, id.ElasticSanName, id.VolumeGroupName)
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(*id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			schema.Name = id.VolumeName
+			schema.VolumeGroupId = volumeGroupId.ID()
+
+			if model := resp.Model; model != nil {
+				// model.Properties is not a pointer
+				props := model.Properties
+
+				schema.SizeInGiB = props.SizeGiB
+				schema.VolumeId = pointer.From(props.VolumeId)
+				schema.CreateSource = FlattenElasticSANVolumeCreateSource(props.CreationData)
+
+				if storageTarget := props.StorageTarget; storageTarget != nil {
+					schema.TargetIqn = pointer.From(storageTarget.TargetIqn)
+					schema.TargetPortalPort = pointer.From(storageTarget.TargetPortalPort)
+					schema.TargetPortalHostname = pointer.From(storageTarget.TargetPortalHostname)
+				}
+			}
+
+			return metadata.Encode(&schema)
+		},
+	}
+}

@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-09-01/providers"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders/custompollers"
+)
+func registerWithSubscription(ctx context.Context, client *providers.ProvidersClient, subscriptionId commonids.SubscriptionId, providerName string) error {
+	providerId := providers.NewSubscriptionProviderID(subscriptionId.SubscriptionId, providerName)
+	log.Printf("[DEBUG] Registering %s..", providerId)
+	if resp, err := client.Register(ctx, providerId, providers.ProviderRegistrationRequest{}); err != nil {
+		msg := fmt.Sprintf("registering resource provider %q: %s", providerName, err)
+
+		if response.WasForbidden(resp.HttpResponse) {
+			// a 403 response was received, so wrap ErrNoAuthorization in order to expose messaging for this
+			return fmt.Errorf("%w: %s", ErrNoAuthorization, msg)
+		}
+
+		return errors.New(msg)
+	}
+
+	log.Printf("[DEBUG] Waiting for %s to finish registering..", providerId)
+	pollerType := custompollers.NewResourceProviderRegistrationPoller(client, providerId)
+	poller := pollers.NewPoller(pollerType, 10*time.Second, pollers.DefaultNumberOfDroppedConnectionsToAllow)
+	if err := poller.PollUntilDone(ctx); err != nil {
+		return fmt.Errorf("waiting for %s to be registered: %s", providerId, err)
+	}
+
+	log.Printf("[DEBUG] %s is registered.", providerId)
+
+	return nil
+}

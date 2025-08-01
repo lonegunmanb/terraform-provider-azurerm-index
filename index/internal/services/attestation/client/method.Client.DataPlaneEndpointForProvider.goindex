@@ -1,0 +1,28 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/attestation/client
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/attestation/2020-10-01/attestationproviders"
+	authWrapper "github.com/hashicorp/go-azure-sdk/sdk/auth/autorest"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/common"
+	"github.com/jackofallops/kermit/sdk/attestation/2022-08-01/attestation"
+)
+func (c *Client) DataPlaneEndpointForProvider(ctx context.Context, id attestationproviders.AttestationProvidersId) (*string, error) {
+	// NOTE: there's potential performance benefits to caching this, but since this is used in a single resource for now it's not really needed
+	existing, err := c.ProviderClient.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+	dataPlaneUri := ""
+	if model := existing.Model; model != nil && model.Properties != nil && model.Properties.AttestUri != nil {
+		dataPlaneUri = *model.Properties.AttestUri
+	}
+	if dataPlaneUri == "" {
+		return nil, fmt.Errorf("retrieving %s: unable to determining the Data Plane URI `model.Properties.AttestUri` was nil", id)
+	}
+	return &dataPlaneUri, nil
+}

@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkprofiles"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandNetworkProfileContainerNetworkInterface(input []interface{}) *[]networkprofiles.ContainerNetworkInterfaceConfiguration {
+	retCNIConfigs := make([]networkprofiles.ContainerNetworkInterfaceConfiguration, 0)
+
+	for _, cniConfig := range input {
+		nciData := cniConfig.(map[string]interface{})
+		nciName := nciData["name"].(string)
+		ipConfigs := nciData["ip_configuration"].([]interface{})
+
+		retIPConfigs := make([]networkprofiles.IPConfigurationProfile, 0)
+		for _, ipConfig := range ipConfigs {
+			ipData := ipConfig.(map[string]interface{})
+			ipName := ipData["name"].(string)
+			subnetId := ipData["subnet_id"].(string)
+
+			retIPConfig := networkprofiles.IPConfigurationProfile{
+				Name: &ipName,
+				Properties: &networkprofiles.IPConfigurationProfilePropertiesFormat{
+					Subnet: &networkprofiles.Subnet{
+						Id: &subnetId,
+					},
+				},
+			}
+
+			retIPConfigs = append(retIPConfigs, retIPConfig)
+		}
+
+		retCNIConfig := networkprofiles.ContainerNetworkInterfaceConfiguration{
+			Name: &nciName,
+			Properties: &networkprofiles.ContainerNetworkInterfaceConfigurationPropertiesFormat{
+				IPConfigurations: &retIPConfigs,
+			},
+		}
+
+		retCNIConfigs = append(retCNIConfigs, retCNIConfig)
+	}
+
+	return &retCNIConfigs
+}

@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	schema2 "github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/md"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func diffDocMiss(rt, path string, s *schema2.Schema, f *model.Field) (res []Checker) {
+	// skip deprecated property
+	if shouldSkipDocProp(rt, path) {
+		return res
+	}
+
+	if isSkipProp(rt, path) {
+		return res
+	}
+
+	if f == nil {
+		if s.Deprecated == "" && !s.Computed && path != "id" {
+			parts := strings.Split(path, ".")
+			name := parts[len(parts)-1]
+			f2 := &model.Field{
+				Name:    name,
+				Path:    path,
+				Content: s.GoString(),
+			}
+			res = append(res, newMissInDoc(path, f2))
+		}
+		return res
+	}
+	if s == nil || s.Elem == nil {
+		return nil
+	}
+
+	switch ele := s.Elem.(type) {
+	case *schema2.Schema:
+		return nil
+	case *schema2.Resource:
+		if f.Subs == nil {
+			res = append(res, newMissBlockDeclare(path, f))
+			return res
+		}
+		for key, val := range ele.Schema {
+			subField := f.Subs[key]
+			res = append(res, diffDocMiss(rt, path+"."+key, val, subField)...)
+		}
+	default:
+		return res
+	}
+	return res
+}

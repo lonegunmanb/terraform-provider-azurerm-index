@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/capacitypools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/snapshotpolicy"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func findVolumesUsingSnapshotPolicy(ctx context.Context, client *clients.Client, snapshotPolicyId snapshotpolicy.SnapshotPolicyId) ([]string, error) {
+	volumeIds := make([]string, 0)
+	poolClient := client.NetApp.PoolClient
+	accountId := capacitypools.NewNetAppAccountID(snapshotPolicyId.SubscriptionId, snapshotPolicyId.ResourceGroupName, snapshotPolicyId.NetAppAccountName)
+
+	poolsResult, err := poolClient.PoolsList(ctx, accountId)
+	if err != nil {
+		return nil, fmt.Errorf("listing capacity pools in account %s: %+v", snapshotPolicyId.NetAppAccountName, err)
+	}
+
+	if model := poolsResult.Model; model != nil {
+		volumeClient := client.NetApp.VolumeClient
+
+		for _, pool := range *model {
+			if pool.Name == nil {
+				continue
+			}
+
+			poolNameParts := strings.Split(pointer.From(pool.Name), "/")
+			poolName := poolNameParts[len(poolNameParts)-1]
+			volumeId := volumes.NewCapacityPoolID(snapshotPolicyId.SubscriptionId, snapshotPolicyId.ResourceGroupName, snapshotPolicyId.NetAppAccountName, poolName)
+
+			volumesResult, err := volumeClient.List(ctx, volumeId)
+			if err != nil {
+				return nil, fmt.Errorf("listing volumes in pool %s: %+v", poolName, err)
+			}
+
+			if volumesModel := volumesResult.Model; volumesModel != nil {
+				for _, volume := range *volumesModel {
+					if volume.Id == nil || volume.Properties.DataProtection == nil ||
+						volume.Properties.DataProtection.Snapshot == nil || volume.Properties.DataProtection.Snapshot.SnapshotPolicyId == nil {
+						continue
+					}
+
+					if strings.EqualFold(*volume.Properties.DataProtection.Snapshot.SnapshotPolicyId, snapshotPolicyId.ID()) {
+						volumeIds = append(volumeIds, *volume.Id)
+					}
+				}
+			}
+		}
+	}
+
+	return volumeIds, nil
+}

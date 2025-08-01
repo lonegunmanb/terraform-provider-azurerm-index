@@ -1,0 +1,96 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/desktopvirtualization
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/desktopvirtualization/2022-02-10-preview/hostpool"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/desktopvirtualization/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceVirtualDesktopHostPoolUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).DesktopVirtualization.HostPoolsClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := hostpool.ParseHostPoolID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	locks.ByName(id.HostPoolName, hostPoolResourceType)
+	defer locks.UnlockByName(id.HostPoolName, hostPoolResourceType)
+
+	payload := hostpool.HostPoolPatch{}
+
+	if d.HasChange("tags") {
+		payload.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+	}
+
+	if d.HasChanges("custom_rdp_properties", "description", "friendly_name", "load_balancer_type", "maximum_sessions_allowed", "preferred_app_group_type", "public_network_access", "start_vm_on_connect", "validate_environment", "scheduled_agent_updates") {
+		payload.Properties = &hostpool.HostPoolPatchProperties{}
+
+		if d.HasChange("custom_rdp_properties") {
+			payload.Properties.CustomRdpProperty = utils.String(d.Get("custom_rdp_properties").(string))
+		}
+
+		if d.HasChange("description") {
+			payload.Properties.Description = utils.String(d.Get("description").(string))
+		}
+
+		if d.HasChange("friendly_name") {
+			payload.Properties.FriendlyName = utils.String(d.Get("friendly_name").(string))
+		}
+
+		if d.HasChange("load_balancer_type") {
+			loadBalancerType := hostpool.LoadBalancerType(d.Get("load_balancer_type").(string))
+			payload.Properties.LoadBalancerType = &loadBalancerType
+		}
+
+		if d.HasChange("maximum_sessions_allowed") {
+			payload.Properties.MaxSessionLimit = utils.Int64(int64(d.Get("maximum_sessions_allowed").(int)))
+		}
+
+		if d.HasChange("preferred_app_group_type") {
+			preferredAppGroupType := hostpool.PreferredAppGroupType(d.Get("preferred_app_group_type").(string))
+			payload.Properties.PreferredAppGroupType = &preferredAppGroupType
+		}
+
+		if d.HasChange("public_network_access") {
+			payload.Properties.PublicNetworkAccess = pointer.To(hostpool.HostpoolPublicNetworkAccess(d.Get("public_network_access").(string)))
+		}
+
+		if d.HasChange("start_vm_on_connect") {
+			payload.Properties.StartVMOnConnect = utils.Bool(d.Get("start_vm_on_connect").(bool))
+		}
+
+		if d.HasChange("validate_environment") {
+			payload.Properties.ValidationEnvironment = utils.Bool(d.Get("validate_environment").(bool))
+		}
+
+		if d.HasChanges("scheduled_agent_updates") {
+			payload.Properties.AgentUpdate = expandAgentUpdatePatch(d.Get("scheduled_agent_updates").([]interface{}))
+		}
+
+		if d.HasChanges("vm_template") {
+			payload.Properties.VMTemplate = utils.String(d.Get("vm_template").(string))
+		}
+	}
+
+	if _, err := client.Update(ctx, *id, payload); err != nil {
+		return fmt.Errorf("updating %s: %+v", id, err)
+	}
+
+	return resourceVirtualDesktopHostPoolRead(d, meta)
+}

@@ -1,0 +1,109 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redisenterprise
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2024-06-01-preview/databases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2024-06-01-preview/redisenterprise"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redisenterprise/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceRedisEnterpriseDatabaseCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	client := meta.(*clients.Client).RedisEnterprise.DatabaseClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	clusterId, err := redisenterprise.ParseRedisEnterpriseID(d.Get("cluster_id").(string))
+	if err != nil {
+		return fmt.Errorf("parsing `cluster_id`: %+v", err)
+	}
+
+	id := databases.NewDatabaseID(subscriptionId, clusterId.ResourceGroupName, clusterId.RedisEnterpriseName, d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_redis_enterprise_database", id.ID())
+		}
+	}
+
+	clusteringPolicy := databases.ClusteringPolicy(d.Get("clustering_policy").(string))
+	evictionPolicy := databases.EvictionPolicy(d.Get("eviction_policy").(string))
+	protocol := databases.Protocol(d.Get("client_protocol").(string))
+
+	oldItems, newItems := d.GetChange("linked_database_id")
+	isForceUnlink, data := forceUnlinkItems(oldItems.(*pluginsdk.Set).List(), newItems.(*pluginsdk.Set).List())
+	if isForceUnlink {
+		if err := forceUnlinkDatabase(d, meta, *data); err != nil {
+			return fmt.Errorf("unlinking database error: %+v", err)
+		}
+	}
+
+	linkedDatabase, err := expandArmGeoLinkedDatabase(d.Get("linked_database_id").(*pluginsdk.Set).List(), id.ID(), d.Get("linked_database_group_nickname").(string))
+	if err != nil {
+		return fmt.Errorf("Setting geo database for database %s error: %+v", id.ID(), err)
+	}
+
+	isGeoEnabled := false
+	if linkedDatabase != nil {
+		isGeoEnabled = true
+	}
+	module, err := expandArmDatabaseModuleArray(d.Get("module").([]interface{}), isGeoEnabled)
+	if err != nil {
+		return fmt.Errorf("setting module error: %+v", err)
+	}
+
+	parameters := databases.Database{
+		Properties: &databases.DatabaseProperties{
+			ClientProtocol:   &protocol,
+			ClusteringPolicy: &clusteringPolicy,
+			EvictionPolicy:   &evictionPolicy,
+			Modules:          module,
+			// Persistence:      expandArmDatabasePersistence(d.Get("persistence").([]interface{})),
+			GeoReplication: linkedDatabase,
+			Port:           utils.Int64(int64(d.Get("port").(int))),
+		},
+	}
+
+	future, err := client.Create(ctx, id, parameters)
+	if err != nil {
+		// @tombuildsstuff: investigate moving this above
+
+		// Need to check if this was due to the cluster having the wrong sku
+		if strings.Contains(err.Error(), "The value of the parameter 'properties.modules' is invalid") {
+			clusterClient := meta.(*clients.Client).RedisEnterprise.Client
+			resp, err := clusterClient.Get(ctx, *clusterId)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *clusterId, err)
+			}
+
+			if resp.Model != nil && strings.Contains(strings.ToLower(string(resp.Model.Sku.Name)), "flash") {
+				return fmt.Errorf("creating a Redis Enterprise Database with modules in a Redis Enterprise Cluster that has an incompatible Flash SKU type %q - please remove the Redis Enterprise Database modules or change the Redis Enterprise Cluster SKU type %s", string(resp.Model.Sku.Name), id)
+			}
+		}
+
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	if err := future.Poller.PollUntilDone(ctx); err != nil {
+		return fmt.Errorf("waiting for creation of %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceRedisEnterpriseDatabaseRead(d, meta)
+}

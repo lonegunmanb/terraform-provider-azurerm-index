@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	validate2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAzureRmVirtualMachineScaleSetOsProfileLinuxConfig(d *pluginsdk.ResourceData) *virtualmachinescalesets.LinuxConfiguration {
+	osProfilesLinuxConfig := d.Get("os_profile_linux_config").(*pluginsdk.Set).List()
+
+	linuxConfig := osProfilesLinuxConfig[0].(map[string]interface{})
+	disablePasswordAuth := linuxConfig["disable_password_authentication"].(bool)
+
+	linuxKeys := linuxConfig["ssh_keys"].([]interface{})
+	sshPublicKeys := make([]virtualmachinescalesets.SshPublicKey, 0, len(linuxKeys))
+	for _, key := range linuxKeys {
+		if key == nil {
+			continue
+		}
+		sshKey := key.(map[string]interface{})
+		path := sshKey["path"].(string)
+		keyData := sshKey["key_data"].(string)
+
+		sshPublicKey := virtualmachinescalesets.SshPublicKey{
+			Path:    &path,
+			KeyData: &keyData,
+		}
+
+		sshPublicKeys = append(sshPublicKeys, sshPublicKey)
+	}
+
+	config := &virtualmachinescalesets.LinuxConfiguration{
+		DisablePasswordAuthentication: &disablePasswordAuth,
+		Ssh: &virtualmachinescalesets.SshConfiguration{
+			PublicKeys: &sshPublicKeys,
+		},
+	}
+
+	return config
+}

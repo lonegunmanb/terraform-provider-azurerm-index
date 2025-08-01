@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	apimValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func FlattenSiteConfigWindowsFunctionAppSlot(functionAppSlotSiteConfig *webapps.SiteConfig) (*SiteConfigWindowsFunctionAppSlot, error) {
+	if functionAppSlotSiteConfig == nil {
+		return nil, fmt.Errorf("flattening site config: SiteConfig was nil")
+	}
+
+	result := &SiteConfigWindowsFunctionAppSlot{
+		AlwaysOn:                      pointer.From(functionAppSlotSiteConfig.AlwaysOn),
+		AppCommandLine:                pointer.From(functionAppSlotSiteConfig.AppCommandLine),
+		AppScaleLimit:                 pointer.From(functionAppSlotSiteConfig.FunctionAppScaleLimit),
+		AutoSwapSlotName:              pointer.From(functionAppSlotSiteConfig.AutoSwapSlotName),
+		Cors:                          FlattenCorsSettings(functionAppSlotSiteConfig.Cors),
+		DetailedErrorLogging:          pointer.From(functionAppSlotSiteConfig.DetailedErrorLoggingEnabled),
+		HealthCheckPath:               pointer.From(functionAppSlotSiteConfig.HealthCheckPath),
+		Http2Enabled:                  pointer.From(functionAppSlotSiteConfig.HTTP20Enabled),
+		WindowsFxVersion:              pointer.From(functionAppSlotSiteConfig.WindowsFxVersion),
+		LoadBalancing:                 string(pointer.From(functionAppSlotSiteConfig.LoadBalancing)),
+		ManagedPipelineMode:           string(pointer.From(functionAppSlotSiteConfig.ManagedPipelineMode)),
+		NumberOfWorkers:               pointer.From(functionAppSlotSiteConfig.NumberOfWorkers),
+		ScmType:                       string(pointer.From(functionAppSlotSiteConfig.ScmType)),
+		FtpsState:                     string(pointer.From(functionAppSlotSiteConfig.FtpsState)),
+		RuntimeScaleMonitoring:        pointer.From(functionAppSlotSiteConfig.FunctionsRuntimeScaleMonitoringEnabled),
+		MinTlsVersion:                 string(pointer.From(functionAppSlotSiteConfig.MinTlsVersion)),
+		ScmMinTlsVersion:              string(pointer.From(functionAppSlotSiteConfig.ScmMinTlsVersion)),
+		PreWarmedInstanceCount:        pointer.From(functionAppSlotSiteConfig.PreWarmedInstanceCount),
+		ElasticInstanceMinimum:        pointer.From(functionAppSlotSiteConfig.MinimumElasticInstanceCount),
+		Use32BitWorker:                pointer.From(functionAppSlotSiteConfig.Use32BitWorkerProcess),
+		WebSockets:                    pointer.From(functionAppSlotSiteConfig.WebSocketsEnabled),
+		ScmUseMainIpRestriction:       pointer.From(functionAppSlotSiteConfig.ScmIPSecurityRestrictionsUseMain),
+		RemoteDebugging:               pointer.From(functionAppSlotSiteConfig.RemoteDebuggingEnabled),
+		RemoteDebuggingVersion:        strings.ToUpper(pointer.From(functionAppSlotSiteConfig.RemoteDebuggingVersion)),
+		VnetRouteAllEnabled:           pointer.From(functionAppSlotSiteConfig.VnetRouteAllEnabled),
+		IpRestrictionDefaultAction:    string(pointer.From(functionAppSlotSiteConfig.IPSecurityRestrictionsDefaultAction)),
+		ScmIpRestrictionDefaultAction: string(pointer.From(functionAppSlotSiteConfig.ScmIPSecurityRestrictionsDefaultAction)),
+	}
+
+	if v := functionAppSlotSiteConfig.ApiDefinition; v != nil && v.Url != nil {
+		result.ApiDefinition = *v.Url
+	}
+
+	if v := functionAppSlotSiteConfig.ApiManagementConfig; v != nil && v.Id != nil {
+		result.ApiManagementConfigId = *v.Id
+	}
+
+	if functionAppSlotSiteConfig.IPSecurityRestrictions != nil {
+		result.IpRestriction = FlattenIpRestrictions(functionAppSlotSiteConfig.IPSecurityRestrictions)
+	}
+
+	if functionAppSlotSiteConfig.ScmIPSecurityRestrictions != nil {
+		result.ScmIpRestriction = FlattenIpRestrictions(functionAppSlotSiteConfig.ScmIPSecurityRestrictions)
+	}
+
+	if v := functionAppSlotSiteConfig.DefaultDocuments; v != nil {
+		result.DefaultDocuments = *v
+	}
+
+	powershellVersion := ""
+	if p := functionAppSlotSiteConfig.PowerShellVersion; p != nil {
+		powershellVersion = *p
+		if powershellVersion == "~7" {
+			powershellVersion = "7"
+		}
+	}
+
+	result.ApplicationStack = []ApplicationStackWindowsFunctionApp{{
+		DotNetVersion:         pointer.From(functionAppSlotSiteConfig.NetFrameworkVersion),
+		DotNetIsolated:        false, // Note: this is set later from app_settings.FUNCTIONS_WORKER_RUNTIME in unpackWindowsFunctionAppSettings
+		NodeVersion:           "",    // Note: this will be set from app_settings later in unpackWindowsFunctionAppSettings
+		JavaVersion:           pointer.From(functionAppSlotSiteConfig.JavaVersion),
+		PowerShellCoreVersion: powershellVersion,
+		CustomHandler:         false, // Note: this is set later from app_settings
+	}}
+
+	return result, nil
+}

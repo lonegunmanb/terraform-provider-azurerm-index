@@ -1,0 +1,112 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/topics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2022-10-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceServiceBusTopicSchema() map[string]*pluginsdk.Schema {
+	schema := map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: azValidate.TopicName(),
+		},
+
+		// lintignore: S013
+		"namespace_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: namespaces.ValidateNamespaceID,
+		},
+
+		"status": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  string(topics.EntityStatusActive),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(topics.EntityStatusActive),
+				string(topics.EntityStatusDisabled),
+			}, false),
+		},
+
+		"auto_delete_on_idle": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      "P10675199DT2H48M5.4775807S", // Never
+			ValidateFunc: validate.ISO8601Duration,
+		},
+
+		"default_message_ttl": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      "P10675199DT2H48M5.4775807S", // Unbounded
+			ValidateFunc: validate.ISO8601Duration,
+		},
+
+		"duplicate_detection_history_time_window": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      "PT10M", // 10 minutes
+			ValidateFunc: validate.ISO8601Duration,
+		},
+
+		"batched_operations_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+		},
+
+		"express_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+		},
+
+		"partitioning_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			ForceNew: true,
+		},
+
+		"max_message_size_in_kilobytes": {
+			Type:     pluginsdk.TypeInt,
+			Optional: true,
+			// NOTE: O+C this gets a variable default based on the sku and can be updated without issues
+			Computed:     true,
+			ValidateFunc: azValidate.ServiceBusMaxMessageSizeInKilobytes(),
+		},
+
+		"max_size_in_megabytes": {
+			Type:     pluginsdk.TypeInt,
+			Optional: true,
+			// NOTE: O+C this gets a variable default based on the sku and can be updated without issues
+			Computed:     true,
+			ValidateFunc: azValidate.ServiceBusMaxSizeInMegabytes(),
+		},
+
+		"requires_duplicate_detection": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			ForceNew: true,
+		},
+
+		"support_ordering": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+		},
+	}
+
+	return schema
+}

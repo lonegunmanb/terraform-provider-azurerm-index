@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewayIPConfigurations(d *pluginsdk.ResourceData) (*[]applicationgateways.ApplicationGatewayIPConfiguration, bool) {
+	vs := d.Get("gateway_ip_configuration").([]interface{})
+	results := make([]applicationgateways.ApplicationGatewayIPConfiguration, 0)
+	stopApplicationGateway := false
+
+	for _, configRaw := range vs {
+		data := configRaw.(map[string]interface{})
+
+		name := data["name"].(string)
+		subnetID := data["subnet_id"].(string)
+
+		output := applicationgateways.ApplicationGatewayIPConfiguration{
+			Name: pointer.To(name),
+			Properties: &applicationgateways.ApplicationGatewayIPConfigurationPropertiesFormat{
+				Subnet: &applicationgateways.SubResource{
+					Id: pointer.To(subnetID),
+				},
+			},
+		}
+		results = append(results, output)
+	}
+
+	if d.HasChange("gateway_ip_configuration") {
+		oldRaw, newRaw := d.GetChange("gateway_ip_configuration")
+		oldVS := oldRaw.([]interface{})
+		newVS := newRaw.([]interface{})
+
+		// If we're creating the application gateway return the current gateway ip configuration.
+		if len(oldVS) == 0 {
+			return &results, false
+		}
+
+		// The application gateway needs to be stopped if a gateway ip configuration is added or removed
+		if len(oldVS) != len(newVS) {
+			return &results, true
+		}
+
+		for i, configRaw := range newVS {
+			newData := configRaw.(map[string]interface{})
+			oldData := oldVS[i].(map[string]interface{})
+
+			newSubnetID := newData["subnet_id"].(string)
+			oldSubnetID := oldData["subnet_id"].(string)
+			// The application gateway needs to be shutdown if the subnet ids don't match
+			if newSubnetID != oldSubnetID {
+				stopApplicationGateway = true
+			}
+		}
+	}
+
+	return &results, stopApplicationGateway
+}

@@ -1,0 +1,87 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/trafficmanager
+import (
+	"errors"
+	"fmt"
+	"log"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/trafficmanager/2022-04-01/profiles"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/trafficmanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceArmTrafficManagerProfileCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).TrafficManager.ProfilesClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	log.Printf("[INFO] preparing arguments for Traffic Manager Profile creation.")
+
+	id := profiles.NewTrafficManagerProfileID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	existing, err := client.Get(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for presence of existing %s", id)
+		}
+	}
+
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_traffic_manager_profile", id.ID())
+	}
+
+	trafficRoutingMethod := profiles.TrafficRoutingMethod(d.Get("traffic_routing_method").(string))
+	// No existing profile - start from a new struct.
+	profile := profiles.Profile{
+		Name:     utils.String(id.TrafficManagerProfileName),
+		Location: utils.String("global"), // must be provided in request
+		Properties: &profiles.ProfileProperties{
+			TrafficRoutingMethod: &trafficRoutingMethod,
+			DnsConfig:            expandArmTrafficManagerDNSConfig(d),
+			MonitorConfig:        expandArmTrafficManagerMonitorConfig(d),
+		},
+		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	if maxReturn, ok := d.GetOk("max_return"); ok {
+		profile.Properties.MaxReturn = utils.Int64(int64(maxReturn.(int)))
+	}
+
+	if status, ok := d.GetOk("profile_status"); ok {
+		profileStatus := profiles.ProfileStatus(status.(string))
+		profile.Properties.ProfileStatus = &profileStatus
+	}
+
+	if trafficViewStatus, ok := d.GetOk("traffic_view_enabled"); ok {
+		profile.Properties.TrafficViewEnrollmentStatus = expandArmTrafficManagerTrafficView(trafficViewStatus.(bool))
+	}
+
+	trafficRoutingMethodPtr := profile.Properties.TrafficRoutingMethod
+	if *trafficRoutingMethodPtr == profiles.TrafficRoutingMethodMultiValue &&
+		profile.Properties.MaxReturn == nil {
+		return errors.New("`max_return` must be specified when `traffic_routing_method` is set to `MultiValue`")
+	}
+
+	if *profile.Properties.MonitorConfig.IntervalInSeconds == int64(10) &&
+		*profile.Properties.MonitorConfig.TimeoutInSeconds == int64(10) {
+		return errors.New("`timeout_in_seconds` must be between `5` and `9` when `interval_in_seconds` is set to `10`")
+	}
+
+	if _, err := client.CreateOrUpdate(ctx, id, profile); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceArmTrafficManagerProfileRead(d, meta)
+}

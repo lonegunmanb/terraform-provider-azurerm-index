@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryimageversions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceSharedImageVersionsRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Compute.GalleryImageVersionsClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := galleryimageversions.NewGalleryImageID(subscriptionId, d.Get("resource_group_name").(string), d.Get("gallery_name").(string), d.Get("image_name").(string))
+	filterTags := tags.Expand(d.Get("tags_filter").(map[string]interface{}))
+
+	resp, err := client.ListByGalleryImageComplete(ctx, id)
+	if err != nil {
+		if response.WasNotFound(resp.LatestHttpResponse) {
+			return fmt.Errorf("no versions were found for %s", id)
+		}
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	flattenedImages := flattenSharedImageVersions(resp.Items, filterTags)
+	if len(flattenedImages) == 0 {
+		return fmt.Errorf("unable to find any images")
+	}
+
+	d.SetId(fmt.Sprintf("%s-%s-%s", id.ImageName, id.GalleryName, id.ResourceGroupName))
+
+	d.Set("image_name", id.ImageName)
+	d.Set("gallery_name", id.GalleryName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if err := d.Set("images", flattenedImages); err != nil {
+		return fmt.Errorf("setting `images`: %+v", err)
+	}
+
+	return nil
+}

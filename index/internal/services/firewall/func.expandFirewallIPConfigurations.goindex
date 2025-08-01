@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/virtualwans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/azurefirewalls"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFirewallIPConfigurations(configs []interface{}) (*[]azurefirewalls.AzureFirewallIPConfiguration, *[]string, *[]string, error) {
+	ipConfigs := make([]azurefirewalls.AzureFirewallIPConfiguration, 0)
+	subnetNamesToLock := make([]string, 0)
+	virtualNetworkNamesToLock := make([]string, 0)
+
+	for _, configRaw := range configs {
+		data := configRaw.(map[string]interface{})
+		name := data["name"].(string)
+		subnetId := data["subnet_id"].(string)
+		pubID := data["public_ip_address_id"].(string)
+
+		ipConfig := azurefirewalls.AzureFirewallIPConfiguration{
+			Name:       utils.String(name),
+			Properties: &azurefirewalls.AzureFirewallIPConfigurationPropertiesFormat{},
+		}
+
+		if pubID != "" {
+			ipConfig.Properties.PublicIPAddress = &azurefirewalls.SubResource{
+				Id: utils.String(pubID),
+			}
+		}
+
+		if subnetId != "" {
+			subnetID, err := commonids.ParseSubnetID(subnetId)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+
+			if !utils.SliceContainsValue(subnetNamesToLock, subnetID.SubnetName) {
+				subnetNamesToLock = append(subnetNamesToLock, subnetID.SubnetName)
+			}
+
+			if !utils.SliceContainsValue(virtualNetworkNamesToLock, subnetID.VirtualNetworkName) {
+				virtualNetworkNamesToLock = append(virtualNetworkNamesToLock, subnetID.VirtualNetworkName)
+			}
+
+			ipConfig.Properties.Subnet = &azurefirewalls.SubResource{
+				Id: utils.String(subnetId),
+			}
+		}
+		ipConfigs = append(ipConfigs, ipConfig)
+	}
+	return &ipConfigs, &subnetNamesToLock, &virtualNetworkNamesToLock, nil
+}

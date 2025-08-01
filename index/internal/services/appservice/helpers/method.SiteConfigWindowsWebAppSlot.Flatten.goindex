@@ -1,0 +1,91 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	apimValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (s *SiteConfigWindowsWebAppSlot) Flatten(appSiteSlotConfig *webapps.SiteConfig, currentStack string) {
+	if appSiteSlotConfig == nil {
+		return
+	}
+
+	s.AlwaysOn = pointer.From(appSiteSlotConfig.AlwaysOn)
+	s.AppCommandLine = pointer.From(appSiteSlotConfig.AppCommandLine)
+	s.AutoHealSettings = flattenAutoHealSettingsWindows(appSiteSlotConfig.AutoHealRules)
+	s.AutoSwapSlotName = pointer.From(appSiteSlotConfig.AutoSwapSlotName)
+	s.ContainerRegistryUserMSI = pointer.From(appSiteSlotConfig.AcrUserManagedIdentityID)
+	s.Cors = FlattenCorsSettings(appSiteSlotConfig.Cors)
+	s.DetailedErrorLogging = pointer.From(appSiteSlotConfig.DetailedErrorLoggingEnabled)
+	s.FtpsState = string(pointer.From(appSiteSlotConfig.FtpsState))
+	s.HealthCheckPath = pointer.From(appSiteSlotConfig.HealthCheckPath)
+	s.Http2Enabled = pointer.From(appSiteSlotConfig.HTTP20Enabled)
+	s.IpRestriction = FlattenIpRestrictions(appSiteSlotConfig.IPSecurityRestrictions)
+	s.LoadBalancing = string(pointer.From(appSiteSlotConfig.LoadBalancing))
+	s.LocalMysql = pointer.From(appSiteSlotConfig.LocalMySqlEnabled)
+	s.ManagedPipelineMode = string(pointer.From(appSiteSlotConfig.ManagedPipelineMode))
+	s.MinTlsVersion = string(pointer.From(appSiteSlotConfig.MinTlsVersion))
+	s.WorkerCount = pointer.From(appSiteSlotConfig.NumberOfWorkers)
+	s.RemoteDebugging = pointer.From(appSiteSlotConfig.RemoteDebuggingEnabled)
+	s.RemoteDebuggingVersion = strings.ToUpper(pointer.From(appSiteSlotConfig.RemoteDebuggingVersion))
+	s.ScmIpRestriction = FlattenIpRestrictions(appSiteSlotConfig.ScmIPSecurityRestrictions)
+	s.ScmMinTlsVersion = string(pointer.From(appSiteSlotConfig.ScmMinTlsVersion))
+	s.ScmType = string(pointer.From(appSiteSlotConfig.ScmType))
+	s.ScmUseMainIpRestriction = pointer.From(appSiteSlotConfig.ScmIPSecurityRestrictionsUseMain)
+	s.Use32BitWorker = pointer.From(appSiteSlotConfig.Use32BitWorkerProcess)
+	s.UseManagedIdentityACR = pointer.From(appSiteSlotConfig.AcrUseManagedIdentityCreds)
+	s.HandlerMapping = flattenHandlerMapping(appSiteSlotConfig.HandlerMappings)
+	s.VirtualApplications = flattenVirtualApplications(appSiteSlotConfig.VirtualApplications)
+	s.WebSockets = pointer.From(appSiteSlotConfig.WebSocketsEnabled)
+	s.VnetRouteAllEnabled = pointer.From(appSiteSlotConfig.VnetRouteAllEnabled)
+	s.IpRestrictionDefaultAction = string(pointer.From(appSiteSlotConfig.IPSecurityRestrictionsDefaultAction))
+	s.ScmIpRestrictionDefaultAction = string(pointer.From(appSiteSlotConfig.ScmIPSecurityRestrictionsDefaultAction))
+
+	if appSiteSlotConfig.ApiManagementConfig != nil && appSiteSlotConfig.ApiManagementConfig.Id != nil {
+		s.ApiManagementConfigId = *appSiteSlotConfig.ApiManagementConfig.Id
+	}
+
+	if appSiteSlotConfig.ApiDefinition != nil && appSiteSlotConfig.ApiDefinition.Url != nil {
+		s.ApiDefinition = *appSiteSlotConfig.ApiDefinition.Url
+	}
+
+	if appSiteSlotConfig.DefaultDocuments != nil {
+		s.DefaultDocuments = *appSiteSlotConfig.DefaultDocuments
+	}
+
+	if appSiteSlotConfig.NumberOfWorkers != nil {
+		s.WorkerCount = *appSiteSlotConfig.NumberOfWorkers
+	}
+
+	winAppStack := ApplicationStackWindows{}
+
+	winAppStack.NetFrameworkVersion = pointer.From(appSiteSlotConfig.NetFrameworkVersion)
+	if currentStack == CurrentStackDotNetCore {
+		winAppStack.NetCoreVersion = pointer.From(appSiteSlotConfig.NetFrameworkVersion)
+	}
+	winAppStack.PhpVersion = pointer.From(appSiteSlotConfig.PhpVersion)
+	if winAppStack.PhpVersion == "" {
+		winAppStack.PhpVersion = PhpVersionOff
+	}
+	winAppStack.PythonVersion = pointer.From(appSiteSlotConfig.PythonVersion) // This _should_ always be `""`
+	winAppStack.Python = currentStack == CurrentStackPython
+	winAppStack.JavaVersion = pointer.From(appSiteSlotConfig.JavaVersion)
+	switch pointer.From(appSiteSlotConfig.JavaContainer) {
+	case JavaContainerTomcat:
+		winAppStack.TomcatVersion = *appSiteSlotConfig.JavaContainerVersion
+	case JavaContainerEmbeddedServer:
+		winAppStack.JavaEmbeddedServer = true
+	}
+
+	s.WindowsFxVersion = pointer.From(appSiteSlotConfig.WindowsFxVersion)
+	winAppStack.CurrentStack = currentStack
+
+	s.ApplicationStack = []ApplicationStackWindows{winAppStack}
+}

@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2023-02-01/webpubsub"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r CustomCertWebPubsubResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.SignalR.WebPubSubClient.WebPubSub
+			keyVaultClient := metadata.Client.KeyVault
+			id, err := webpubsub.ParseCustomCertificateID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.CustomCertificatesGet(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if resp.Model == nil {
+				return fmt.Errorf("retrieving %s: got nil model", *id)
+			}
+
+			vaultBasedUri := resp.Model.Properties.KeyVaultBaseUri
+			certName := resp.Model.Properties.KeyVaultSecretName
+
+			subscriptionResourceId := commonids.NewSubscriptionID(id.SubscriptionId)
+			keyVaultIdRaw, err := keyVaultClient.KeyVaultIDFromBaseUrl(ctx, subscriptionResourceId, vaultBasedUri)
+			if err != nil {
+				return fmt.Errorf("getting key vault base uri from %s: %+v", id, err)
+			}
+			vaultId, err := commonids.ParseKeyVaultID(*keyVaultIdRaw)
+			if err != nil {
+				return fmt.Errorf("parsing key vault %s: %+v", vaultId, err)
+			}
+
+			certVersion := ""
+			if resp.Model.Properties.KeyVaultSecretVersion != nil {
+				certVersion = *resp.Model.Properties.KeyVaultSecretVersion
+			}
+			nestedItem, err := keyVaultParse.NewNestedItemID(vaultBasedUri, keyVaultParse.NestedItemTypeCertificate, certName, certVersion)
+			if err != nil {
+				return err
+			}
+
+			certId := nestedItem.ID()
+
+			state := CustomCertWebPubsubModel{
+				Name:               id.CustomCertificateName,
+				CustomCertId:       certId,
+				WebPubsubId:        webpubsub.NewWebPubSubID(id.SubscriptionId, id.ResourceGroupName, id.WebPubSubName).ID(),
+				CertificateVersion: pointer.From(resp.Model.Properties.KeyVaultSecretVersion),
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

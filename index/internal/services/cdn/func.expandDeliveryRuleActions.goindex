@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/deliveryruleactions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/deliveryruleconditions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandDeliveryRuleActions(input map[string]interface{}) ([]cdn.BasicDeliveryRuleAction, error) {
+	actions := make([]cdn.BasicDeliveryRuleAction, 0)
+
+	type expandFunc func(input []interface{}) (*[]cdn.BasicDeliveryRuleAction, error)
+	actionTypes := map[string]expandFunc{
+		"cache_expiration_action":       deliveryruleactions.ExpandArmCdnEndpointActionCacheExpiration,
+		"cache_key_query_string_action": deliveryruleactions.ExpandArmCdnEndpointActionCacheKeyQueryString,
+		"modify_request_header_action":  deliveryruleactions.ExpandArmCdnEndpointActionModifyRequestHeader,
+		"modify_response_header_action": deliveryruleactions.ExpandArmCdnEndpointActionModifyResponseHeader,
+		"url_redirect_action":           deliveryruleactions.ExpandArmCdnEndpointActionUrlRedirect,
+		"url_rewrite_action":            deliveryruleactions.ExpandArmCdnEndpointActionURLRewrite,
+	}
+
+	for schemaKey, expandFunc := range actionTypes {
+		raw := input[schemaKey].([]interface{})
+		expanded, err := expandFunc(raw)
+		if err != nil {
+			return nil, err
+		}
+
+		actions = append(actions, *expanded...)
+	}
+
+	return actions, nil
+}

@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"math"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryapplicationversions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenVirtualMachineGalleryApplication(input *[]virtualmachines.VMGalleryApplication) []interface{} {
+	if len(*input) == 0 {
+		return nil
+	}
+
+	out := make([]interface{}, 0)
+
+	for _, v := range *input {
+		var packageReferenceId, configurationReference, tag string
+		var order int
+		var automaticUpgradeEnabled, treatFailureAsDeploymentFailureEnabled bool
+
+		packageReferenceId = v.PackageReferenceId
+
+		if v.ConfigurationReference != nil {
+			configurationReference = *v.ConfigurationReference
+		}
+
+		if v.EnableAutomaticUpgrade != nil {
+			automaticUpgradeEnabled = *v.EnableAutomaticUpgrade
+		}
+
+		if v.Order != nil {
+			order = int(*v.Order)
+		}
+
+		if v.Tags != nil {
+			tag = *v.Tags
+		}
+
+		if v.TreatFailureAsDeploymentFailure != nil {
+			treatFailureAsDeploymentFailureEnabled = *v.TreatFailureAsDeploymentFailure
+		}
+
+		app := map[string]interface{}{
+			"version_id":                packageReferenceId,
+			"automatic_upgrade_enabled": automaticUpgradeEnabled,
+			"configuration_blob_uri":    configurationReference,
+			"order":                     order,
+			"tag":                       tag,
+			"treat_failure_as_deployment_failure_enabled": treatFailureAsDeploymentFailureEnabled,
+		}
+
+		out = append(out, app)
+	}
+
+	return out
+}

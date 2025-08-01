@@ -1,0 +1,422 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2021-06-01/serverrestart"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2023-06-01-preview/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourcePostgresqlFlexibleServerCreate,
+		Read:   resourcePostgresqlFlexibleServerRead,
+		Update: resourcePostgresqlFlexibleServerUpdate,
+		Delete: resourcePostgresqlFlexibleServerDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(1 * time.Hour),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(1 * time.Hour),
+			Delete: pluginsdk.DefaultTimeout(1 * time.Hour),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := servers.ParseFlexibleServerID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.FlexibleServerName,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"location": commonschema.Location(),
+
+			"administrator_login": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.All(validation.StringIsNotWhiteSpace, validate.AdminUsernames),
+			},
+
+			"administrator_password": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Sensitive:    true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"authentication": {
+				Type:     pluginsdk.TypeList,
+				MaxItems: 1,
+				Optional: true,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"active_directory_auth_enabled": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+						"password_auth_enabled": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  true,
+						},
+						"tenant_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: validation.IsUUID,
+							RequiredWith: []string{
+								"authentication.0.active_directory_auth_enabled",
+							},
+						},
+					},
+				},
+			},
+
+			"sku_name": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validate.FlexibleServerSkuName,
+			},
+
+			"auto_grow_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"storage_mb": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.IntInSlice([]int{32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4193280, 4194304, 8388608, 16777216, 33553408}),
+			},
+
+			"storage_tier": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(servers.AzureManagedDiskPerformanceTiersPFour),
+					string(servers.AzureManagedDiskPerformanceTiersPSix),
+					string(servers.AzureManagedDiskPerformanceTiersPOneZero),
+					string(servers.AzureManagedDiskPerformanceTiersPOneFive),
+					string(servers.AzureManagedDiskPerformanceTiersPTwoZero),
+					string(servers.AzureManagedDiskPerformanceTiersPThreeZero),
+					string(servers.AzureManagedDiskPerformanceTiersPFourZero),
+					string(servers.AzureManagedDiskPerformanceTiersPFiveZero),
+					string(servers.AzureManagedDiskPerformanceTiersPSixZero),
+					string(servers.AzureManagedDiskPerformanceTiersPSevenZero),
+					string(servers.AzureManagedDiskPerformanceTiersPEightZero),
+				}, false),
+			},
+
+			"version": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.StringInSlice(servers.PossibleValuesForServerVersion(), false),
+			},
+
+			"zone": commonschema.ZoneSingleOptional(),
+
+			"create_mode": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(servers.CreateModeDefault),
+					string(servers.CreateModePointInTimeRestore),
+					string(servers.CreateModeReplica),
+					string(servers.CreateModeGeoRestore),
+					string(servers.CreateModeUpdate),
+				}, false),
+			},
+
+			"delegated_subnet_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: commonids.ValidateSubnetID,
+			},
+
+			"private_dns_zone_id": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				// todo make this case sensitive when https://github.com/Azure/azure-rest-api-specs/issues/26346 is fixed
+				DiffSuppressFunc: suppress.CaseDifference,
+				// This is `computed`, because there is a breaking change to require this field when setting vnet.
+				// For existing fs who don't want to be recreated, they could contact service team to manually migrate to the private dns zone
+				// We need to ignore the diff when remote is set private dns zone
+				ValidateFunc: privatezones.ValidatePrivateDnsZoneID,
+			},
+
+			"point_in_time_restore_time_in_utc": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.IsRFC3339Time,
+			},
+
+			"source_server_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: servers.ValidateFlexibleServerID,
+			},
+
+			"maintenance_window": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"day_of_week": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Default:      0,
+							ValidateFunc: validation.IntBetween(0, 6),
+						},
+
+						"start_hour": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Default:      0,
+							ValidateFunc: validation.IntBetween(0, 23),
+						},
+
+						"start_minute": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Default:      0,
+							ValidateFunc: validation.IntBetween(0, 59),
+						},
+					},
+				},
+			},
+
+			"backup_retention_days": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.IntBetween(7, 35),
+			},
+
+			"geo_redundant_backup_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+				ForceNew: true,
+			},
+
+			"high_availability": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"mode": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(servers.HighAvailabilityModeZoneRedundant),
+								string(servers.HighAvailabilityModeSameZone),
+							}, false),
+						},
+
+						"standby_availability_zone": commonschema.ZoneSingleOptional(),
+					},
+				},
+			},
+
+			"fqdn": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"public_network_access_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"replication_role": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(servers.ReplicationRoleNone),
+				}, false),
+			},
+
+			"identity": commonschema.UserAssignedIdentityOptional(),
+
+			"customer_managed_key": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				ForceNew: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"key_vault_key_id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: keyVaultValidate.NestedItemIdWithOptionalVersion,
+							RequiredWith: []string{
+								"identity",
+								"customer_managed_key.0.primary_user_assigned_identity_id",
+							},
+						},
+						"primary_user_assigned_identity_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: commonids.ValidateUserAssignedIdentityID,
+						},
+						"geo_backup_key_vault_key_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: keyVaultValidate.NestedItemIdWithOptionalVersion,
+							RequiredWith: []string{
+								"identity",
+								"customer_managed_key.0.geo_backup_user_assigned_identity_id",
+							},
+						},
+						"geo_backup_user_assigned_identity_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: commonids.ValidateUserAssignedIdentityID,
+						},
+					},
+				},
+			},
+
+			"tags": commonschema.Tags(),
+		},
+
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			createModeVal := d.Get("create_mode").(string)
+
+			if createModeVal == string(servers.CreateModeUpdate) {
+				oldVersionVal, newVersionVal := d.GetChange("version")
+
+				if oldVersionVal != "" && newVersionVal != "" {
+					oldVersion, err := strconv.ParseInt(oldVersionVal.(string), 10, 32)
+					if err != nil {
+						return err
+					}
+
+					newVersion, err := strconv.ParseInt(newVersionVal.(string), 10, 32)
+					if err != nil {
+						return err
+					}
+
+					if oldVersion < newVersion {
+						return nil
+					}
+				}
+			}
+
+			d.ForceNew("create_mode")
+			d.ForceNew("version")
+
+			return nil
+		}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			oldLoginName, _ := diff.GetChange("administrator_login")
+			if oldLoginName != "" {
+				diff.ForceNew("administrator_login")
+			}
+			return nil
+		}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			storageTierMappings := validate.InitializeFlexibleServerStorageTierDefaults()
+			var newTier string
+			var newMb int
+			var isValid bool
+
+			oldStorageMbRaw, newStorageMbRaw := diff.GetChange("storage_mb")
+			oldTierRaw, newTierRaw := diff.GetChange("storage_tier")
+
+			if oldStorageMbRaw.(int) == 0 && oldTierRaw.(string) == "" && newStorageMbRaw.(int) == 0 && newTierRaw.(string) == "" {
+				// This is a new resource without any values in the state
+				// or config, default values will be set in create...
+				return nil
+			}
+
+			newMb = newStorageMbRaw.(int)
+			newTier = newTierRaw.(string)
+
+			// if newMb or newTier values are empty,
+			// assign the default values that will
+			// be assigned in the create func...
+			if newMb == 0 {
+				newMb = 32768
+			}
+
+			// get the valid mappings for the passed
+			// storage_mb size...
+			storageTiers := storageTierMappings[newMb]
+
+			if newTier == "" {
+				newTier = string(storageTiers.DefaultTier)
+			}
+
+			// verify that the storage_tier is valid
+			// for the given storage_mb...
+			for _, tier := range *storageTiers.ValidTiers {
+				if newTier == tier {
+					isValid = true
+					break
+				}
+			}
+
+			if !isValid {
+				if strings.EqualFold(oldTierRaw.(string), newTier) {
+					// The tier value did not change, so we need to determin if they are
+					// using the default value for the tier, or they actually defined the
+					// tier in the config or not... If they did not define
+					// the tier in the config we need to assign a new valid default
+					// tier for the newMb value. However, if the tier is in the config
+					// this is a valid error and should be returned...
+					if v := diff.GetRawConfig().AsValueMap()["storage_tier"]; v.IsNull() {
+						diff.SetNew("storage_tier", string(storageTiers.DefaultTier))
+						log.Printf("[DEBUG]: 'storage_tier' was not valid and was not in the config assigning new default 'storage_tier' %q -> %q\n", newTier, storageTiers.DefaultTier)
+						return nil
+					}
+				}
+
+				return fmt.Errorf("invalid 'storage_tier' %q for defined 'storage_mb' size '%d', expected one of [%s]", newTier, newMb, azure.QuotedStringSlice(*storageTiers.ValidTiers))
+			}
+
+			return nil
+		},
+		),
+	}
+}

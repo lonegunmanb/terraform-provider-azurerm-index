@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandBackupProtectionPolicyVMWorkloadSchedulePolicy(input ProtectionPolicy, times []string) protectionpolicies.SchedulePolicy {
+	if input.PolicyType == string(protectionpolicies.PolicyTypeLog) {
+		schedule := protectionpolicies.LogSchedulePolicy{}
+
+		if v := input.Backup[0].FrequencyInMinutes; v != 0 {
+			schedule.ScheduleFrequencyInMins = pointer.To(v)
+		}
+
+		return schedule
+	} else {
+		schedule := protectionpolicies.SimpleSchedulePolicy{}
+
+		backupBlock := input.Backup[0]
+		if backupBlock.Frequency != "" {
+			schedule.ScheduleRunFrequency = pointer.To(protectionpolicies.ScheduleRunType(backupBlock.Frequency))
+		}
+
+		if len(times) > 0 {
+			schedule.ScheduleRunTimes = &times
+		}
+
+		if v := backupBlock.Weekdays; len(v) > 0 {
+			days := make([]protectionpolicies.DayOfWeek, 0)
+			for _, day := range v {
+				days = append(days, protectionpolicies.DayOfWeek(day))
+			}
+			schedule.ScheduleRunDays = &days
+		}
+
+		return schedule
+	}
+}

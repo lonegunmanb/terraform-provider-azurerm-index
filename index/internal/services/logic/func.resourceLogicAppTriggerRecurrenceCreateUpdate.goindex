@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflows"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflowtriggers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func resourceLogicAppTriggerRecurrenceCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	trigger := map[string]interface{}{
+		"recurrence": map[string]interface{}{
+			"frequency": d.Get("frequency").(string),
+			"interval":  d.Get("interval").(int),
+		},
+		"type": "Recurrence",
+	}
+
+	if v, ok := d.GetOk("start_time"); ok {
+		trigger["recurrence"].(map[string]interface{})["startTime"] = v.(string)
+	}
+
+	if v, ok := d.GetOk("time_zone"); ok {
+		trigger["recurrence"].(map[string]interface{})["timeZone"] = v.(string)
+	}
+
+	if v, ok := d.GetOk("schedule"); ok {
+		trigger["recurrence"].(map[string]interface{})["schedule"] = expandLogicAppTriggerRecurrenceSchedule(v.([]interface{}))
+	}
+
+	workflowId, err := workflows.ParseWorkflowID(d.Get("logic_app_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := workflowtriggers.NewTriggerID(workflowId.SubscriptionId, workflowId.ResourceGroupName, workflowId.WorkflowName, d.Get("name").(string))
+
+	if err := resourceLogicAppTriggerUpdate(d, meta, *workflowId, id, trigger, "azurerm_logic_app_trigger_recurrence"); err != nil {
+		return err
+	}
+
+	return resourceLogicAppTriggerRecurrenceRead(d, meta)
+}

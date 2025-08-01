@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenRoutingRuleForwardingConfiguration(config frontdoors.RouteConfiguration, oldConfig interface{}) (*[]interface{}, error) {
+	v, ok := config.(frontdoors.ForwardingConfiguration)
+	if !ok {
+		return &[]interface{}{}, nil
+	}
+
+	name := ""
+	if v.BackendPool != nil && v.BackendPool.Id != nil {
+		backendPoolId, err := parse.BackendPoolIDInsensitively(*v.BackendPool.Id)
+		if err != nil {
+			return nil, err
+		}
+		name = backendPoolId.Name
+	}
+	customForwardingPath := ""
+	if v.CustomForwardingPath != nil {
+		customForwardingPath = *v.CustomForwardingPath
+	}
+
+	cacheEnabled := false
+	cacheQueryParameterStripDirective := string(frontdoors.FrontDoorQueryStripAll)
+	cacheUseDynamicCompression := false
+
+	var cacheQueryParameters []interface{}
+	var cacheQueryParametersArray []string
+	var cacheDuration *string
+
+	if cacheConfiguration := v.CacheConfiguration; cacheConfiguration != nil {
+		cacheEnabled = true
+		if stripDirective := cacheConfiguration.QueryParameterStripDirective; stripDirective != nil && *stripDirective != "" {
+			cacheQueryParameterStripDirective = string(*stripDirective)
+		}
+		if dynamicCompression := cacheConfiguration.DynamicCompression; dynamicCompression != nil && *dynamicCompression != "" {
+			cacheUseDynamicCompression = string(*dynamicCompression) == string(frontdoors.DynamicCompressionEnabledEnabled)
+		}
+		if queryParameters := cacheConfiguration.QueryParameters; queryParameters != nil {
+			cacheQueryParametersArray = strings.Split(*queryParameters, ",")
+		}
+		if duration := cacheConfiguration.CacheDuration; duration != nil {
+			cacheDuration = duration
+		}
+	} else {
+		// if the cache is disabled, use the default values or revert to what they were in the previous plan
+		old, ok := oldConfig.([]interface{})
+		if ok {
+			for _, oldValue := range old {
+				oldVal, ok := oldValue.(map[string]interface{})
+				if ok {
+					thisName := oldVal["name"].(string)
+					if name == thisName {
+						oldConfigs := oldVal["forwarding_configuration"].([]interface{})
+						if len(oldConfigs) > 0 {
+							ofc := oldConfigs[0].(map[string]interface{})
+							cacheQueryParameterStripDirective = ofc["cache_query_parameter_strip_directive"].(string)
+							cacheUseDynamicCompression = ofc["cache_use_dynamic_compression"].(bool)
+							cacheDuration = utils.String(ofc["cache_duration"].(string))
+
+							cacheQueryParameters = ofc["cache_query_parameters"].([]interface{})
+							for _, p := range cacheQueryParameters {
+								cacheQueryParametersArray = append(cacheQueryParametersArray, p.(string))
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	forwardingProtocol := ""
+	if v.ForwardingProtocol != nil {
+		forwardingProtocol = string(*v.ForwardingProtocol)
+	}
+
+	return &[]interface{}{
+		map[string]interface{}{
+			"backend_pool_name":                     name,
+			"custom_forwarding_path":                customForwardingPath,
+			"forwarding_protocol":                   forwardingProtocol,
+			"cache_enabled":                         cacheEnabled,
+			"cache_query_parameter_strip_directive": cacheQueryParameterStripDirective,
+			"cache_use_dynamic_compression":         cacheUseDynamicCompression,
+			"cache_query_parameters":                cacheQueryParametersArray,
+			"cache_duration":                        cacheDuration,
+		},
+	}, nil
+}

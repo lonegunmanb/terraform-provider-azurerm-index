@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appplatform/2024-01-01-preview/appplatform"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (s SpringCloudAPIPortalResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.AppPlatform.AppPlatformClient
+
+			id, err := appplatform.ParseApiPortalID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.ApiPortalsGet(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			springId := commonids.NewSpringCloudServiceID(id.SubscriptionId, id.ResourceGroupName, id.SpringName)
+
+			var model SpringCloudAPIPortalModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			state := SpringCloudAPIPortalModel{
+				Name:                 id.ApiPortalName,
+				SpringCloudServiceId: springId.ID(),
+			}
+			if resp.Model != nil {
+				if props := resp.Model.Properties; props != nil {
+					state.GatewayIds = flattenSpringCloudAPIPortalGatewayIds(props.GatewayIds)
+					state.HttpsOnlyEnabled = pointer.From(props.HTTPSOnly)
+					state.PublicNetworkAccessEnabled = pointer.From(props.Public)
+					state.Sso = flattenAPIPortalSsoProperties(props.SsoProperties, model.Sso)
+					state.ApiTryOutEnabled = props.ApiTryOutEnabledState != nil && *props.ApiTryOutEnabledState == appplatform.ApiPortalApiTryOutEnabledStateEnabled
+				}
+
+				if sku := resp.Model.Sku; sku != nil {
+					state.InstanceCount = pointer.From(sku.Capacity)
+				}
+			}
+			return metadata.Encode(&state)
+		},
+	}
+}

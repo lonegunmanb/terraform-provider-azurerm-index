@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandCdnFrontDoorFirewallCustomRules(input []interface{}) *waf.CustomRuleList {
+	if len(input) == 0 {
+		return nil
+	}
+
+	output := make([]waf.CustomRule, 0)
+
+	for _, cr := range input {
+		custom := cr.(map[string]interface{})
+
+		enabled := waf.CustomRuleEnabledStateDisabled
+		if custom["enabled"].(bool) {
+			enabled = waf.CustomRuleEnabledStateEnabled
+		}
+
+		name := custom["name"].(string)
+		priority := int64(custom["priority"].(int))
+		ruleType := custom["type"].(string)
+		rateLimitDurationInMinutes := int64(custom["rate_limit_duration_in_minutes"].(int))
+		rateLimitThreshold := int64(custom["rate_limit_threshold"].(int))
+		matchConditions := expandCdnFrontDoorFirewallMatchConditions(custom["match_condition"].([]interface{}))
+		action := custom["action"].(string)
+
+		output = append(output, waf.CustomRule{
+			Name:                       pointer.To(name),
+			Priority:                   priority,
+			EnabledState:               pointer.To(enabled),
+			RuleType:                   waf.RuleType(ruleType),
+			RateLimitDurationInMinutes: pointer.To(rateLimitDurationInMinutes),
+			RateLimitThreshold:         pointer.To(rateLimitThreshold),
+			MatchConditions:            matchConditions,
+			Action:                     waf.ActionType(action),
+		})
+	}
+
+	return &waf.CustomRuleList{
+		Rules: &output,
+	}
+}

@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datadog
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datadog/2021-03-01/monitorsresource"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datadog/2021-03-01/singlesignon"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datadog/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceDatadogSingleSignOnConfigurations() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceDatadogSingleSignOnConfigurationsCreate,
+		Read:   resourceDatadogSingleSignOnConfigurationsRead,
+		Update: resourceDatadogSingleSignOnConfigurationsUpdate,
+		Delete: resourceDatadogSingleSignOnConfigurationsDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := singlesignon.ParseSingleSignOnConfigurationID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"datadog_monitor_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: monitorsresource.ValidateMonitorID,
+			},
+
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  "default",
+			},
+
+			"enterprise_application_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validate.DatadogEnterpriseApplicationID,
+			},
+
+			"single_sign_on_enabled": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					// @tombuildsstuff: other options are available, but the Create handles this as a boolean for now
+					// should the field be a boolean? one to consider for 4.0 when this resource is inlined
+					string(singlesignon.SingleSignOnStatesEnable),
+					string(singlesignon.SingleSignOnStatesDisable),
+				}, false),
+			},
+
+			"login_url": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+		},
+	}
+}

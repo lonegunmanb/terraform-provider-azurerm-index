@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk" // nolint: typecheck
+)
+func commonPrefixGroups(names []string) [][]string {
+	var prefixGroups [][]string
+
+	if len(names) > 0 {
+		sort.Strings(names)
+
+		// get the prefix of the first name in the list matching azurerm_xxxx or azurerm_xxx_* and add it to the first group
+		re := regexp.MustCompile("azurerm_[a-zA-Z0-9]+($|_)")
+		prefix := ""
+		if match := re.FindStringSubmatch(names[0]); match != nil {
+			prefix = strings.TrimSuffix(match[0], "_")
+		}
+		group := []string{names[0]}
+
+		// loop through the rest of the names beginning with the second in the list
+		// adding names to the group when their prefix matches the prefix of the previous name
+		for i := 1; i < len(names); i++ {
+			currentPrefix := ""
+			if match := re.FindStringSubmatch(names[i]); match != nil {
+				currentPrefix = strings.TrimSuffix(match[0], "_")
+			}
+			if currentPrefix == prefix {
+				group = append(group, names[i])
+			} else {
+				// append group and start a new prefix group if the current prefix does not match the prefix from the previous group
+				prefixGroups = append(prefixGroups, group)
+				group = []string{names[i]}
+				prefix = currentPrefix
+			}
+		}
+		prefixGroups = append(prefixGroups, group)
+	}
+	return prefixGroups
+}

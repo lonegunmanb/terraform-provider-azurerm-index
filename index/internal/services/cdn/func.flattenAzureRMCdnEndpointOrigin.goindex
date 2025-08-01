@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAzureRMCdnEndpointOrigin(input *[]cdn.DeepCreatedOrigin) []interface{} {
+	results := make([]interface{}, 0)
+
+	if list := input; list != nil {
+		for _, i := range *list {
+			name := ""
+			if i.Name != nil {
+				name = *i.Name
+			}
+
+			hostName := ""
+			httpPort := 80
+			httpsPort := 443
+			if props := i.DeepCreatedOriginProperties; props != nil {
+				if props.HostName != nil {
+					hostName = *props.HostName
+				}
+				if port := props.HTTPPort; port != nil {
+					httpPort = int(*port)
+				}
+				if port := props.HTTPSPort; port != nil {
+					httpsPort = int(*port)
+				}
+			}
+
+			results = append(results, map[string]interface{}{
+				"name":       name,
+				"host_name":  hostName,
+				"http_port":  httpPort,
+				"https_port": httpsPort,
+			})
+		}
+	}
+
+	return results
+}

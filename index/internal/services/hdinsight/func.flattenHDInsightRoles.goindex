@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/applications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/extensions"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenHDInsightRoles(d *pluginsdk.ResourceData, input *clusters.ComputeProfile, definition hdInsightRoleDefinition) []interface{} {
+	if input == nil || input.Roles == nil {
+		return []interface{}{}
+	}
+
+	var existingKafkaManagementNodes, existingEdgeNodes, existingHeadNodes, existingWorkerNodes, existingZookeeperNodes []interface{}
+
+	existingVs := d.Get("roles").([]interface{})
+	if len(existingVs) > 0 {
+		existingV := existingVs[0].(map[string]interface{})
+
+		if definition.EdgeNodeDef != nil {
+			existingEdgeNodes = existingV["edge_node"].([]interface{})
+		}
+
+		if definition.KafkaManagementNodeDef != nil {
+			existingKafkaManagementNodes = existingV["kafka_management_node"].([]interface{})
+		}
+
+		existingHeadNodes = existingV["head_node"].([]interface{})
+		existingWorkerNodes = existingV["worker_node"].([]interface{})
+		existingZookeeperNodes = existingV["zookeeper_node"].([]interface{})
+	}
+
+	headNode := FindHDInsightRole(input.Roles, "headnode")
+	headNodes := FlattenHDInsightNodeDefinition(headNode, existingHeadNodes, definition.HeadNodeDef)
+
+	workerNode := FindHDInsightRole(input.Roles, "workernode")
+	workerNodes := FlattenHDInsightNodeDefinition(workerNode, existingWorkerNodes, definition.WorkerNodeDef)
+
+	zookeeperNode := FindHDInsightRole(input.Roles, "zookeepernode")
+	zookeeperNodes := FlattenHDInsightNodeDefinition(zookeeperNode, existingZookeeperNodes, definition.ZookeeperNodeDef)
+
+	result := map[string]interface{}{
+		"head_node":      headNodes,
+		"worker_node":    workerNodes,
+		"zookeeper_node": zookeeperNodes,
+	}
+
+	if definition.EdgeNodeDef != nil {
+		edgeNode := FindHDInsightRole(input.Roles, "edgenode")
+		edgeNodes := FlattenHDInsightNodeDefinition(edgeNode, existingEdgeNodes, *definition.EdgeNodeDef)
+		result["edge_node"] = edgeNodes
+	}
+
+	if definition.KafkaManagementNodeDef != nil {
+		kafkaManagementNode := FindHDInsightRole(input.Roles, "kafkamanagementnode")
+		kafkaManagementNodes := FlattenHDInsightNodeDefinition(kafkaManagementNode, existingKafkaManagementNodes, *definition.KafkaManagementNodeDef)
+		result["kafka_management_node"] = kafkaManagementNodes
+	}
+
+	return []interface{}{
+		result,
+	}
+}

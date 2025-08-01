@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"fmt"
+	"log"
+	"math"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAppServiceIpRestriction(input interface{}) ([]web.IPSecurityRestriction, error) {
+	restrictions := make([]web.IPSecurityRestriction, 0)
+
+	for _, r := range input.([]interface{}) {
+		if r == nil {
+			continue
+		}
+
+		restriction := r.(map[string]interface{})
+
+		ipAddress := restriction["ip_address"].(string)
+		vNetSubnetID := ""
+
+		if subnetID, ok := restriction["virtual_network_subnet_id"]; ok && subnetID != "" {
+			vNetSubnetID = subnetID.(string)
+		}
+
+		serviceTag := restriction["service_tag"].(string)
+
+		name := restriction["name"].(string)
+		priority := restriction["priority"].(int)
+		action := restriction["action"].(string)
+
+		if vNetSubnetID != "" && ipAddress != "" && serviceTag != "" {
+			return nil, fmt.Errorf("only one of `ip_address`, `service_tag` or `virtual_network_subnet_id` can be set for an IP restriction")
+		}
+
+		if vNetSubnetID == "" && ipAddress == "" && serviceTag == "" {
+			return nil, fmt.Errorf("one of `ip_address`, `service_tag` or `virtual_network_subnet_id` must be set for an IP restriction")
+		}
+
+		ipSecurityRestriction := web.IPSecurityRestriction{}
+		if ipAddress == "Any" {
+			continue
+		}
+
+		if ipAddress != "" {
+			ipSecurityRestriction.IPAddress = &ipAddress
+		}
+
+		if serviceTag != "" {
+			ipSecurityRestriction.IPAddress = &serviceTag
+			ipSecurityRestriction.Tag = web.IPFilterTagServiceTag
+		}
+
+		if vNetSubnetID != "" {
+			ipSecurityRestriction.VnetSubnetResourceID = &vNetSubnetID
+		}
+
+		if name != "" {
+			ipSecurityRestriction.Name = &name
+		}
+
+		if priority != 0 {
+			ipSecurityRestriction.Priority = utils.Int32(int32(priority))
+		}
+
+		if action != "" {
+			ipSecurityRestriction.Action = &action
+		}
+		if headers, ok := restriction["headers"]; ok {
+			ipSecurityRestriction.Headers = expandHeaders(headers.([]interface{}))
+		}
+
+		restrictions = append(restrictions, ipSecurityRestriction)
+	}
+
+	return restrictions, nil
+}

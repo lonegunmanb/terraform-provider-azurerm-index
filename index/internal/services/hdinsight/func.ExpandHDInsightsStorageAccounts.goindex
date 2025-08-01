@@ -1,0 +1,87 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/extensions"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVault "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandHDInsightsStorageAccounts(storageAccounts []interface{}, gen2storageAccounts []interface{}) (*[]clusters.StorageAccount, *identity.SystemAndUserAssignedMap, error) {
+	results := make([]clusters.StorageAccount, 0)
+
+	var clusterIdentity *identity.SystemAndUserAssignedMap
+
+	for _, vs := range storageAccounts {
+		v := vs.(map[string]interface{})
+
+		storageAccountKey := v["storage_account_key"].(string)
+		storageContainerID := v["storage_container_id"].(string)
+		storageResourceID := v["storage_resource_id"].(string)
+		isDefault := v["is_default"].(bool)
+
+		uri, err := url.Parse(storageContainerID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing %q: %s", storageContainerID, err)
+		}
+
+		result := clusters.StorageAccount{
+			Name:       utils.String(uri.Host),
+			ResourceId: utils.String(storageResourceID),
+			Container:  utils.String(strings.TrimPrefix(uri.Path, "/")),
+			Key:        utils.String(storageAccountKey),
+			IsDefault:  utils.Bool(isDefault),
+		}
+		results = append(results, result)
+	}
+
+	for _, vs := range gen2storageAccounts {
+		v := vs.(map[string]interface{})
+
+		fileSystemID := v["filesystem_id"].(string)
+		storageResourceID := v["storage_resource_id"].(string)
+		managedIdentityResourceID := v["managed_identity_resource_id"].(string)
+
+		isDefault := v["is_default"].(bool)
+
+		uri, err := url.Parse(fileSystemID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing %q: %s", fileSystemID, err)
+		}
+
+		if clusterIdentity == nil {
+			clusterIdentity = &identity.SystemAndUserAssignedMap{
+				Type:        identity.TypeUserAssigned,
+				IdentityIds: make(map[string]identity.UserAssignedIdentityDetails),
+			}
+		}
+
+		clusterIdentity.IdentityIds[managedIdentityResourceID] = identity.UserAssignedIdentityDetails{
+			// intentionally empty
+		}
+
+		result := clusters.StorageAccount{
+			Name:          utils.String(uri.Host), // https://storageaccountname.dfs.core.windows.net/filesystemname -> storageaccountname.dfs.core.windows.net
+			ResourceId:    utils.String(storageResourceID),
+			FileSystem:    utils.String(uri.Path[1:]), // https://storageaccountname.dfs.core.windows.net/filesystemname -> filesystemname
+			MsiResourceId: utils.String(managedIdentityResourceID),
+			IsDefault:     utils.Bool(isDefault),
+		}
+		results = append(results, result)
+	}
+
+	return &results, clusterIdentity, nil
+}

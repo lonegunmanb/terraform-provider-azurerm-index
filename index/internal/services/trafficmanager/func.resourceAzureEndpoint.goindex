@@ -1,0 +1,145 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/trafficmanager
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/trafficmanager/2022-04-01/endpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/trafficmanager/2022-04-01/profiles"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	azSchema "github.com/hashicorp/terraform-provider-azurerm/internal/tf/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceAzureEndpoint() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceAzureEndpointCreate,
+		Read:   resourceAzureEndpointRead,
+		Update: resourceAzureEndpointUpdate,
+		Delete: resourceAzureEndpointDelete,
+		Importer: azSchema.ValidateResourceIDPriorToImport(func(id string) error {
+			endpointType, err := endpoints.ParseEndpointTypeID(id)
+			if err != nil {
+				return err
+			}
+
+			if endpointType.EndpointType != endpoints.EndpointTypeAzureEndpoints {
+				return fmt.Errorf("this resource only supports `AzureEndpoints` but got %s", string(endpointType.EndpointType))
+			}
+
+			return nil
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"profile_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: profiles.ValidateTrafficManagerProfileID,
+			},
+
+			"target_resource_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: azure.ValidateResourceID,
+			},
+
+			"weight": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      1,
+				ValidateFunc: validation.IntBetween(1, 1000),
+			},
+
+			"enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"always_serve_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"custom_header": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.NoZeroValues,
+						},
+						"value": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.NoZeroValues,
+						},
+					},
+				},
+			},
+
+			"priority": {
+				Type:     pluginsdk.TypeInt,
+				Optional: true,
+				// NOTE: O+C the API dynamically increments the default value for priority depending on the number of endpoints
+				Computed:     true,
+				ValidateFunc: validation.IntBetween(1, 1000),
+			},
+
+			"geo_mappings": {
+				Type:     pluginsdk.TypeList,
+				Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+				Optional: true,
+			},
+
+			"subnet": {
+				Type:     pluginsdk.TypeList,
+				ForceNew: true,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"first": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: azValidate.IPv4Address,
+						},
+						"last": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: azValidate.IPv4Address,
+						},
+						"scope": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							ValidateFunc: validation.IntBetween(0, 32),
+						},
+					},
+				},
+			},
+		},
+	}
+}

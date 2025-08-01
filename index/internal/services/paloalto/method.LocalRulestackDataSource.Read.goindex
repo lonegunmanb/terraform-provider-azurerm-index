@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2022-08-29/localrulestacks"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (l LocalRulestackDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.PaloAlto.Client.LocalRulestacks
+
+			var state LocalRulestackDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return err
+			}
+
+			id := localrulestacks.NewLocalRulestackID(metadata.Client.Account.SubscriptionId, state.ResourceGroupName, state.Name)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("reading %s: %+v", id, err)
+			}
+
+			if model := existing.Model; model != nil {
+				state.Location = location.Normalize(model.Location)
+				props := model.Properties
+
+				state.Description = pointer.From(props.Description)
+
+				if secServices := props.SecurityServices; secServices != nil {
+					state.FileBlockingProfile = pointer.From(secServices.FileBlockingProfile)
+					state.AntiVirusProfile = pointer.From(secServices.AntiVirusProfile)
+					state.AntiSpywareProfile = pointer.From(secServices.AntiSpywareProfile)
+					state.URLFilteringProfile = pointer.From(secServices.UrlFilteringProfile)
+					state.VulnerabilityProfile = pointer.From(secServices.VulnerabilityProfile)
+					state.DNSSubscription = pointer.From(secServices.DnsSubscription)
+					state.OutboundTrustCertificate = pointer.From(secServices.OutboundTrustCertificate)
+					state.OutboundUnTrustCertificate = pointer.From(secServices.OutboundUnTrustCertificate)
+				}
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&state)
+		},
+	}
+}

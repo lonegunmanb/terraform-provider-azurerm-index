@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/backend"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApiManagementBackendServiceFabricCluster(input []interface{}) (error, *backend.BackendServiceFabricClusterProperties) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+	v := input[0].(map[string]interface{})
+	managementEndpoints := v["management_endpoints"].(*pluginsdk.Set).List()
+	maxPartitionResolutionRetries := int64(v["max_partition_resolution_retries"].(int))
+	properties := backend.BackendServiceFabricClusterProperties{
+		ManagementEndpoints:           pointer.From(utils.ExpandStringSlice(managementEndpoints)),
+		MaxPartitionResolutionRetries: pointer.To(maxPartitionResolutionRetries),
+	}
+
+	if v2, ok := v["client_certificate_thumbprint"].(string); ok && v2 != "" {
+		properties.ClientCertificatethumbprint = pointer.To(v2)
+	}
+
+	if v2, ok := v["client_certificate_id"].(string); ok && v2 != "" {
+		properties.ClientCertificateId = pointer.To(v2)
+	}
+
+	if properties.ClientCertificateId == nil && properties.ClientCertificatethumbprint == nil {
+		return errors.New("at least one of `client_certificate_thumbprint` and `client_certificate_id` must be set"), nil
+	}
+
+	serverCertificateThumbprintsUnset := true
+	serverX509NamesUnset := true
+	if serverCertificateThumbprints := v["server_certificate_thumbprints"]; serverCertificateThumbprints != nil {
+		properties.ServerCertificateThumbprints = utils.ExpandStringSlice(serverCertificateThumbprints.(*pluginsdk.Set).List())
+		serverCertificateThumbprintsUnset = false
+	}
+	if serverX509Names := v["server_x509_name"]; serverX509Names != nil {
+		properties.ServerX509Names = expandApiManagementBackendServiceFabricClusterServerX509Names(serverX509Names.(*pluginsdk.Set).List())
+		serverX509NamesUnset = false
+	}
+	if serverCertificateThumbprintsUnset && serverX509NamesUnset {
+		return errors.New("one of `server_certificate_thumbprints` or `server_x509_name` must be set"), nil
+	}
+	return nil, &properties
+}

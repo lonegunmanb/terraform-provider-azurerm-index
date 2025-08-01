@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/security/2019-01-01-preview/automations"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandSecurityCenterAutomationSources(sourcesRaw []interface{}) (*[]automations.AutomationSource, error) {
+	if len(sourcesRaw) == 0 {
+		return &[]automations.AutomationSource{}, nil
+	}
+
+	// Output is an array of AutomationSource
+	output := make([]automations.AutomationSource, 0)
+
+	// Top level loop over sources array
+	for _, sourceRaw := range sourcesRaw {
+		sourceMap, ok := sourceRaw.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("Security Center automation, unable to decode sources")
+		}
+
+		// Build and parse array of RuleSets
+		ruleSets := make([]automations.AutomationRuleSet, 0)
+		ruleSetsRaw := sourceMap["rule_set"].([]interface{})
+		for _, ruleSetRaw := range ruleSetsRaw {
+			ruleSetMap := ruleSetRaw.(map[string]interface{})
+			rulesRaw := ruleSetMap["rule"].([]interface{})
+
+			// Build and parse array of Rules in each RuleSet
+			rules := make([]automations.AutomationTriggeringRule, 0)
+			for _, ruleRaw := range rulesRaw {
+				// Parse the rule fields
+				ruleMap := ruleRaw.(map[string]interface{})
+				rulePath := ruleMap["property_path"].(string)
+				ruleType := automations.PropertyType(ruleMap["property_type"].(string))
+				ruleValue := ruleMap["expected_value"].(string)
+				ruleOperator := automations.Operator(ruleMap["operator"].(string))
+
+				// Create AutomationTriggeringRule struct and push into array
+				rule := automations.AutomationTriggeringRule{
+					PropertyJPath: &rulePath,
+					PropertyType:  &ruleType,
+					ExpectedValue: &ruleValue,
+					Operator:      &ruleOperator,
+				}
+				rules = append(rules, rule)
+			}
+
+			// Create AutomationRuleSet struct and push into array
+			ruleSet := automations.AutomationRuleSet{
+				Rules: &rules,
+			}
+			ruleSets = append(ruleSets, ruleSet)
+		}
+
+		// Finally create AutomationSource struct holding our list of RuleSets
+		eventSource := automations.EventSource(sourceMap["event_source"].(string))
+		source := automations.AutomationSource{
+			EventSource: &eventSource,
+			RuleSets:    &ruleSets,
+		}
+
+		// Finally (no really this time), push AutomationSource into output
+		output = append(output, source)
+	}
+
+	return &output, nil
+}

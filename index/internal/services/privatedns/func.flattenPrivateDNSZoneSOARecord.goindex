@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/privatedns
+import (
+	"fmt"
+	"math"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/recordsets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/privatedns/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenPrivateDNSZoneSOARecord(input *recordsets.RecordSet) []interface{} {
+	if input == nil || input.Properties == nil {
+		return make([]interface{}, 0)
+	}
+
+	ttl := 0
+	if input.Properties.Ttl != nil {
+		ttl = int(*input.Properties.Ttl)
+	}
+
+	metaData := make(map[string]interface{})
+	if input.Properties.Metadata != nil {
+		metaData = tags.Flatten(input.Properties.Metadata)
+	}
+
+	fqdn := ""
+	if input.Properties.Fqdn != nil {
+		fqdn = *input.Properties.Fqdn
+	}
+
+	email := ""
+	hostName := ""
+	expireTime := 0
+	minimumTTL := 0
+	refreshTime := 0
+	retryTime := 0
+	serialNumber := 0
+	if record := input.Properties.SoaRecord; record != nil {
+		if record.Email != nil {
+			email = *record.Email
+		}
+
+		if record.Host != nil {
+			hostName = *record.Host
+		}
+
+		if record.ExpireTime != nil {
+			expireTime = int(*record.ExpireTime)
+		}
+
+		if record.MinimumTtl != nil {
+			minimumTTL = int(*record.MinimumTtl)
+		}
+
+		if record.RefreshTime != nil {
+			refreshTime = int(*record.RefreshTime)
+		}
+
+		if record.RetryTime != nil {
+			retryTime = int(*record.RetryTime)
+		}
+
+		if record.SerialNumber != nil {
+			serialNumber = int(*record.SerialNumber)
+		}
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"email":         email,
+			"host_name":     hostName,
+			"expire_time":   expireTime,
+			"minimum_ttl":   minimumTTL,
+			"refresh_time":  refreshTime,
+			"retry_time":    retryTime,
+			"serial_number": serialNumber,
+			"ttl":           ttl,
+			"tags":          metaData,
+			"fqdn":          fqdn,
+		},
+	}
+}

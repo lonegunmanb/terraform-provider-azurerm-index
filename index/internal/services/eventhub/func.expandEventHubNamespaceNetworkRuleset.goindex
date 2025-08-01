@@ -1,0 +1,94 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/authorizationrulesnamespaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/eventhubsclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/networkrulesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2022-01-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandEventHubNamespaceNetworkRuleset(input []interface{}) *networkrulesets.NetworkRuleSetProperties {
+	if len(input) == 0 {
+		return nil
+	}
+
+	block := input[0].(map[string]interface{})
+
+	publicNetworkAccess := networkrulesets.PublicNetworkAccessFlagEnabled
+	if !block["public_network_access_enabled"].(bool) {
+		publicNetworkAccess = networkrulesets.PublicNetworkAccessFlagDisabled
+	}
+
+	ruleset := networkrulesets.NetworkRuleSetProperties{
+		DefaultAction: func() *networkrulesets.DefaultAction {
+			v := networkrulesets.DefaultAction(block["default_action"].(string))
+			return &v
+		}(),
+		PublicNetworkAccess: &publicNetworkAccess,
+	}
+
+	if v, ok := block["trusted_service_access_enabled"]; ok {
+		ruleset.TrustedServiceAccessEnabled = utils.Bool(v.(bool))
+	}
+
+	if v, ok := block["virtual_network_rule"]; ok {
+		value := v.(*pluginsdk.Set).List()
+		if len(value) > 0 {
+			var rules []networkrulesets.NWRuleSetVirtualNetworkRules
+			for _, r := range value {
+				rblock := r.(map[string]interface{})
+				rules = append(rules, networkrulesets.NWRuleSetVirtualNetworkRules{
+					Subnet: &networkrulesets.Subnet{
+						Id: utils.String(rblock["subnet_id"].(string)),
+					},
+					IgnoreMissingVnetServiceEndpoint: utils.Bool(rblock["ignore_missing_virtual_network_service_endpoint"].(bool)),
+				})
+			}
+
+			ruleset.VirtualNetworkRules = &rules
+		}
+	}
+
+	if v, ok := block["ip_rule"].([]interface{}); ok {
+		if len(v) > 0 {
+			var rules []networkrulesets.NWRuleSetIPRules
+			for _, r := range v {
+				rblock := r.(map[string]interface{})
+				rules = append(rules, networkrulesets.NWRuleSetIPRules{
+					IPMask: utils.String(rblock["ip_mask"].(string)),
+					Action: func() *networkrulesets.NetworkRuleIPAction {
+						v := networkrulesets.NetworkRuleIPAction(rblock["action"].(string))
+						return &v
+					}(),
+				})
+			}
+
+			ruleset.IPRules = &rules
+		}
+	}
+
+	return &ruleset
+}

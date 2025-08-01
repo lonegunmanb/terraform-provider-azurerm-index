@@ -1,0 +1,243 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceFrontDoorRulesEngine() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceFrontDoorRulesEngineCreateUpdate,
+		Read:   resourceFrontDoorRulesEngineRead,
+		Update: resourceFrontDoorRulesEngineCreateUpdate,
+		Delete: resourceFrontDoorRulesEngineDelete,
+
+		SchemaVersion: 2,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.RulesEngineV0ToV1{},
+			1: migration.RulesEngineV1ToV2{},
+		}),
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.RulesEngineID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(6 * time.Hour),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(6 * time.Hour),
+			Delete: pluginsdk.DefaultTimeout(6 * time.Hour),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+			"frontdoor_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: azValidate.FrontDoorName,
+			},
+			"location": commonschema.LocationComputed(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"rule": {
+				Type:     pluginsdk.TypeList,
+				MaxItems: 100,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+
+						"priority": {
+							Type:     pluginsdk.TypeInt,
+							Required: true,
+						},
+
+						"match_condition": {
+							Type:     pluginsdk.TypeList,
+							MaxItems: 100,
+							Optional: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"variable": {
+										Type:     pluginsdk.TypeString,
+										Optional: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											"IsMobile",
+											"RemoteAddr",
+											"RequestMethod",
+											"QueryString",
+											"PostArgs",
+											"RequestUri",
+											"RequestPath",
+											"RequestFilename",
+											"RequestFilenameExtension",
+											"RequestHeader",
+											"RequestBody",
+											"RequestScheme",
+										}, false),
+									},
+
+									"selector": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+
+									"operator": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											"Any",
+											"IPMatch",
+											"GeoMatch",
+											"Equal",
+											"Contains",
+											"LessThan",
+											"GreaterThan",
+											"LessThanOrEqual",
+											"GreaterThanOrEqual",
+											"BeginsWith",
+											"EndsWith",
+										}, false),
+									},
+
+									"transform": {
+										Type:     pluginsdk.TypeList,
+										Optional: true,
+										MaxItems: 6,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+											ValidateFunc: validation.StringInSlice([]string{
+												"Lowercase",
+												"RemoveNulls",
+												"Trim",
+												"Uppercase",
+												"UrlDecode",
+												"UrlEncode",
+											}, false),
+										},
+									},
+
+									"negate_condition": {
+										Type:     pluginsdk.TypeBool,
+										Optional: true,
+										Default:  false,
+									},
+
+									"value": {
+										Type:     pluginsdk.TypeList,
+										Optional: true,
+										MaxItems: 25,
+										Elem: &pluginsdk.Schema{
+											Type:         pluginsdk.TypeString,
+											ValidateFunc: validation.StringIsNotEmpty,
+										},
+									},
+								},
+							},
+						},
+
+						"action": {
+							Type:     pluginsdk.TypeList,
+							MaxItems: 1,
+							Optional: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"request_header": {
+										Type:     pluginsdk.TypeList,
+										MaxItems: 100,
+										Optional: true,
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"header_action_type": {
+													Type: pluginsdk.TypeString,
+													ValidateFunc: validation.StringInSlice([]string{
+														string(frontdoors.HeaderActionTypeAppend),
+														string(frontdoors.HeaderActionTypeDelete),
+														string(frontdoors.HeaderActionTypeOverwrite),
+													}, false),
+													Optional: true,
+												},
+
+												"header_name": {
+													Type:         pluginsdk.TypeString,
+													ValidateFunc: validation.StringIsNotEmpty,
+													Optional:     true,
+												},
+
+												"value": {
+													Type:         pluginsdk.TypeString,
+													ValidateFunc: validation.StringIsNotEmpty,
+													Optional:     true,
+												},
+											},
+										},
+									},
+
+									"response_header": {
+										Type:     pluginsdk.TypeList,
+										MaxItems: 100,
+										Optional: true,
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"header_action_type": {
+													Type: pluginsdk.TypeString,
+													ValidateFunc: validation.StringInSlice([]string{
+														string(frontdoors.HeaderActionTypeAppend),
+														string(frontdoors.HeaderActionTypeDelete),
+														string(frontdoors.HeaderActionTypeOverwrite),
+													}, false),
+													Optional: true,
+												},
+
+												"header_name": {
+													Type:         pluginsdk.TypeString,
+													ValidateFunc: validation.StringIsNotEmpty,
+													Optional:     true,
+												},
+
+												"value": {
+													Type:         pluginsdk.TypeString,
+													ValidateFunc: validation.StringIsNotEmpty,
+													Optional:     true,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

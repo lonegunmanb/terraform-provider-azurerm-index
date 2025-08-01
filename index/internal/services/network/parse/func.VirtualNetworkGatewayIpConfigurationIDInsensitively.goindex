@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+)
+func VirtualNetworkGatewayIpConfigurationIDInsensitively(input string) (*VirtualNetworkGatewayIpConfigurationId, error) {
+	id, err := resourceids.ParseAzureResourceID(input)
+	if err != nil {
+		return nil, err
+	}
+
+	resourceId := VirtualNetworkGatewayIpConfigurationId{
+		SubscriptionId: id.SubscriptionID,
+		ResourceGroup:  id.ResourceGroup,
+	}
+
+	if resourceId.SubscriptionId == "" {
+		return nil, errors.New("ID was missing the 'subscriptions' element")
+	}
+
+	if resourceId.ResourceGroup == "" {
+		return nil, errors.New("ID was missing the 'resourceGroups' element")
+	}
+
+	// find the correct casing for the 'virtualNetworkGateways' segment
+	virtualNetworkGatewaysKey := "virtualNetworkGateways"
+	for key := range id.Path {
+		if strings.EqualFold(key, virtualNetworkGatewaysKey) {
+			virtualNetworkGatewaysKey = key
+			break
+		}
+	}
+	if resourceId.VirtualNetworkGatewayName, err = id.PopSegment(virtualNetworkGatewaysKey); err != nil {
+		return nil, err
+	}
+
+	// find the correct casing for the 'ipConfigurations' segment
+	ipConfigurationsKey := "ipConfigurations"
+	for key := range id.Path {
+		if strings.EqualFold(key, ipConfigurationsKey) {
+			ipConfigurationsKey = key
+			break
+		}
+	}
+	if resourceId.IpConfigurationName, err = id.PopSegment(ipConfigurationsKey); err != nil {
+		return nil, err
+	}
+
+	if err := id.ValidateNoEmptySegments(input); err != nil {
+		return nil, err
+	}
+
+	return &resourceId, nil
+}

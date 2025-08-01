@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func flattenAppCustomPersistentDiskResourceArray(input *[]appplatform.CustomPersistentDiskResource) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	for _, item := range *input {
+		var storageName string
+		if item.StorageID != nil {
+			// The returned value has inconsistent casing
+			// TODO: Remove the normalization codes once the following issue is fixed.
+			// Issue: https://github.com/Azure/azure-rest-api-specs/issues/22205
+			if id, err := parse.SpringCloudStorageIDInsensitively(*item.StorageID); err == nil {
+				storageName = id.StorageName
+			}
+		}
+		var mountPath string
+		var shareName string
+		var readOnly bool
+		var mountOptions *[]string
+		if item.CustomPersistentDiskProperties != nil {
+			if prop, ok := item.CustomPersistentDiskProperties.AsAzureFileVolume(); ok && prop != nil {
+				if prop.MountPath != nil {
+					mountPath = *prop.MountPath
+				}
+				if prop.ShareName != nil {
+					shareName = *prop.ShareName
+				}
+				if prop.ReadOnly != nil {
+					readOnly = *prop.ReadOnly
+				}
+				mountOptions = prop.MountOptions
+			}
+		}
+
+		results = append(results, map[string]interface{}{
+			"storage_name":      storageName,
+			"mount_path":        mountPath,
+			"share_name":        shareName,
+			"mount_options":     set.FromStringSliceNilable(mountOptions),
+			"read_only_enabled": readOnly,
+		})
+	}
+	return results
+}

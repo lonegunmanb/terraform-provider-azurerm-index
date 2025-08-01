@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/streamanalytics
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2021-10-01-preview/outputs"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenStreamAnalyticsOutputSerialization(input outputs.Serialization) []interface{} {
+	var encoding string
+	var outputType string
+	var fieldDelimiter string
+	var format string
+
+	if _, ok := input.(outputs.AvroSerialization); ok {
+		outputType = string(outputs.EventSerializationTypeAvro)
+	}
+
+	if csv, ok := input.(outputs.CsvSerialization); ok {
+		if props := csv.Properties; props != nil {
+			if props.Encoding != nil {
+				encoding = string(*props.Encoding)
+			}
+
+			if props.FieldDelimiter != nil {
+				fieldDelimiter = *props.FieldDelimiter
+			}
+		}
+
+		outputType = string(outputs.EventSerializationTypeCsv)
+	}
+
+	if json, ok := input.(outputs.JsonSerialization); ok {
+		if props := json.Properties; props != nil {
+			if props.Encoding != nil {
+				encoding = string(*props.Encoding)
+			}
+			if props.Format != nil {
+				format = string(*props.Format)
+			}
+		}
+
+		outputType = string(outputs.EventSerializationTypeJson)
+	}
+
+	if _, ok := input.(outputs.ParquetSerialization); ok {
+		outputType = string(outputs.EventSerializationTypeParquet)
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"encoding":        encoding,
+			"type":            outputType,
+			"format":          format,
+			"field_delimiter": fieldDelimiter,
+		},
+	}
+}

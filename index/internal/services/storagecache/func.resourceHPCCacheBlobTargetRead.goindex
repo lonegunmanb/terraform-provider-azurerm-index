@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/storagetargets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceHPCCacheBlobTargetRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).StorageCache.StorageTargets
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := storagetargets.ParseStorageTargetID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] HPC Cache Blob Target %q was not found - removing from state!", id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving HPC Cache Blob Target %q: %+v", id, err)
+	}
+
+	d.Set("name", id.StorageTargetName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+	d.Set("cache_name", id.CacheName)
+
+	if m := resp.Model; m != nil {
+		if props := m.Properties; props != nil {
+			if props.TargetType != storagetargets.StorageTargetTypeClfs {
+				return fmt.Errorf("The type of this HPC Cache Target %q is not a Blob Target", id)
+			}
+
+			storageContainerId := ""
+			if clfs := props.Clfs; clfs != nil && clfs.Target != nil {
+				storageContainerId = *clfs.Target
+			}
+			d.Set("storage_container_id", storageContainerId)
+
+			namespacePath := ""
+			accessPolicy := ""
+			// There is only one namespace path allowed for blob container storage target,
+			// which maps to the root path of it.
+			if props.Junctions != nil && len(*props.Junctions) == 1 && (*props.Junctions)[0].NamespacePath != nil {
+				namespacePath = *(*props.Junctions)[0].NamespacePath
+				accessPolicy = *(*props.Junctions)[0].NfsAccessPolicy
+			}
+			d.Set("namespace_path", namespacePath)
+			d.Set("access_policy_name", accessPolicy)
+		}
+	}
+
+	return nil
+}

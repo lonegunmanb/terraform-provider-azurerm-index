@@ -1,0 +1,272 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"fmt"
+	"log"
+	"math/big"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+	"golang.org/x/crypto/ssh"
+)
+func resourceKeyVaultKey() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceKeyVaultKeyCreate,
+		Read:   resourceKeyVaultKeyRead,
+		Update: resourceKeyVaultKeyUpdate,
+		Delete: resourceKeyVaultKeyDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceIdThen(func(id string) error {
+			_, err := parse.ParseNestedItemID(id)
+			return err
+		}, nestedItemResourceImporter),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			// TODO: Change this back to 5min, once https://github.com/hashicorp/terraform-provider-azurerm/issues/11059 is addressed.
+			Read:   pluginsdk.DefaultTimeout(30 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: keyVaultValidate.NestedItemName,
+			},
+
+			"key_vault_id": commonschema.ResourceIDReferenceRequiredForceNew(&commonids.KeyVaultId{}),
+
+			"key_type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				// turns out Azure's *really* sensitive about the casing of these
+				// issue: https://github.com/Azure/azure-rest-api-specs/issues/1739
+				ValidateFunc: validation.StringInSlice([]string{
+					string(keyvault.JSONWebKeyTypeEC),
+					string(keyvault.JSONWebKeyTypeECHSM),
+					string(keyvault.JSONWebKeyTypeRSA),
+					string(keyvault.JSONWebKeyTypeRSAHSM),
+				}, false),
+			},
+
+			"key_size": {
+				Type:          pluginsdk.TypeInt,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"curve"},
+			},
+
+			"key_opts": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					// turns out Azure's *really* sensitive about the casing of these
+					// issue: https://github.com/Azure/azure-rest-api-specs/issues/1739
+					ValidateFunc: validation.StringInSlice([]string{
+						string(keyvault.JSONWebKeyOperationDecrypt),
+						string(keyvault.JSONWebKeyOperationEncrypt),
+						string(keyvault.JSONWebKeyOperationSign),
+						string(keyvault.JSONWebKeyOperationUnwrapKey),
+						string(keyvault.JSONWebKeyOperationVerify),
+						string(keyvault.JSONWebKeyOperationWrapKey),
+					}, false),
+				},
+			},
+
+			"curve": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				ForceNew: true,
+				DiffSuppressFunc: func(k, old, new string, d *pluginsdk.ResourceData) bool {
+					return old == "SECP256K1" && new == string(keyvault.JSONWebKeyCurveNameP256K)
+				},
+				ValidateFunc: func() pluginsdk.SchemaValidateFunc {
+					out := []string{
+						string(keyvault.JSONWebKeyCurveNameP256),
+						string(keyvault.JSONWebKeyCurveNameP256K),
+						string(keyvault.JSONWebKeyCurveNameP384),
+						string(keyvault.JSONWebKeyCurveNameP521),
+					}
+					return validation.StringInSlice(out, false)
+				}(),
+				// TODO: the curve name should probably be mandatory for EC in the future,
+				// but handle the diff so that we don't break existing configurations and
+				// imported EC keys
+				ConflictsWith: []string{"key_size"},
+			},
+
+			"not_before_date": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.IsRFC3339Time,
+			},
+
+			"expiration_date": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.IsRFC3339Time,
+			},
+
+			"rotation_policy": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"expire_after": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: validate.ISO8601DurationBetween("P28D", "P100Y"),
+							AtLeastOneOf: []string{
+								"rotation_policy.0.expire_after",
+								"rotation_policy.0.automatic",
+							},
+							RequiredWith: []string{
+								"rotation_policy.0.expire_after",
+								"rotation_policy.0.notify_before_expiry",
+							},
+						},
+
+						// <= expiry_time - 7, >=7
+						"notify_before_expiry": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: validate.ISO8601DurationBetween("P7D", "P36493D"),
+							RequiredWith: []string{
+								"rotation_policy.0.expire_after",
+								"rotation_policy.0.notify_before_expiry",
+							},
+						},
+
+						"automatic": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MaxItems: 1,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"time_after_creation": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: validate.ISO8601Duration,
+										AtLeastOneOf: []string{
+											"rotation_policy.0.automatic.0.time_after_creation",
+											"rotation_policy.0.automatic.0.time_before_expiry",
+										},
+									},
+									"time_before_expiry": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: validate.ISO8601Duration,
+										AtLeastOneOf: []string{
+											"rotation_policy.0.automatic.0.time_after_creation",
+											"rotation_policy.0.automatic.0.time_before_expiry",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			// Computed
+			"version": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"versionless_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"n": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"e": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"x": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"y": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"public_key_pem": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"public_key_openssh": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"resource_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"resource_versionless_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"tags": tags.Schema(),
+		},
+
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			pluginsdk.ForceNewIfChange("expiration_date", func(ctx context.Context, old, new, meta interface{}) bool {
+				oldDateStr, ok1 := old.(string)
+				newDateStr, ok2 := new.(string)
+				if !ok1 || !ok2 {
+					return false // If old or new values are not strings, don't force new
+				}
+
+				// There isn't a way to remove the expiration date from a key so we'll recreate the resource when it's removed from config
+				if oldDateStr != "" && newDateStr == "" {
+					return true
+				}
+
+				return false
+			}),
+		),
+	}
+}

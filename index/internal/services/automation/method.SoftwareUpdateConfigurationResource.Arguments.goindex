@@ -1,0 +1,463 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2019-06-01/softwareupdateconfiguration"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/automationaccount"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	validate4 "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	validate2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (m SoftwareUpdateConfigurationResource) Arguments() map[string]*pluginsdk.Schema {
+	linux := pluginsdk.Resource{
+		Schema: map[string]*pluginsdk.Schema{
+			"reboot": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  RebootSettingIfRequired,
+				ValidateFunc: validation.StringInSlice([]string{
+					RebootSettingAlways,
+					RebootSettingIfRequired,
+					RebootSettingNever,
+					RebootSettingRebootOnly,
+				}, false),
+			},
+
+			"classifications_included": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice(softwareupdateconfiguration.PossibleValuesForLinuxUpdateClasses(), false),
+				},
+			},
+
+			"excluded_packages": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.StringIsNotEmpty,
+				},
+			},
+
+			"included_packages": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.StringIsNotEmpty,
+				},
+			},
+		},
+	}
+
+	windows := pluginsdk.Resource{
+		Schema: map[string]*pluginsdk.Schema{
+			"classifications_included": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice(
+						softwareupdateconfiguration.PossibleValuesForWindowsUpdateClasses(),
+						false),
+				},
+			},
+
+			"excluded_knowledge_base_numbers": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.StringIsNotEmpty,
+				},
+			},
+
+			"included_knowledge_base_numbers": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.StringIsNotEmpty,
+				},
+			},
+
+			"reboot": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  RebootSettingIfRequired,
+				ValidateFunc: validation.StringInSlice([]string{
+					RebootSettingAlways,
+					RebootSettingIfRequired,
+					RebootSettingNever,
+					RebootSettingRebootOnly,
+				}, false),
+			},
+		},
+	}
+
+	r := map[string]*pluginsdk.Schema{
+		"automation_account_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: softwareupdateconfiguration.ValidateAutomationAccountID,
+		},
+
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"linux": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem:     &linux,
+			ExactlyOneOf: []string{
+				"windows",
+				"linux",
+			},
+		},
+
+		"windows": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem:     &windows,
+			ExactlyOneOf: []string{
+				"windows",
+				"linux",
+			},
+		},
+
+		"duration": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      "PT2H",
+			ValidateFunc: validate4.ISO8601Duration,
+		},
+
+		"virtual_machine_ids": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: commonids.ValidateVirtualMachineID,
+			},
+		},
+
+		"non_azure_computer_names": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+		},
+
+		"target": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"azure_query": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"scope": {
+									Type:     pluginsdk.TypeList,
+									Optional: true,
+									Elem: &pluginsdk.Schema{
+										Type: pluginsdk.TypeString,
+										// Subscription or Resource Group ARM Id
+										ValidateFunc: func(i interface{}, s string) ([]string, []error) {
+											w, e := validate2.ResourceGroupID(i, s)
+											if len(e) == 0 {
+												return w, e
+											}
+											w, e = commonids.ValidateSubscriptionID(i, s)
+											return w, e
+										},
+									},
+								},
+
+								"locations": {
+									Type:     pluginsdk.TypeList,
+									Optional: true,
+									Elem: &pluginsdk.Schema{
+										Type: pluginsdk.TypeString,
+									},
+								},
+
+								"tags": {
+									Type:     schema.TypeList,
+									Optional: true,
+									Elem: &schema.Resource{
+										Schema: map[string]*schema.Schema{
+											"tag": {
+												Type:     pluginsdk.TypeString,
+												Required: true,
+											},
+											"values": {
+												Type:     pluginsdk.TypeList,
+												Required: true,
+												Elem: &schema.Schema{
+													Type:         pluginsdk.TypeString,
+													ValidateFunc: validation.StringIsNotEmpty,
+												},
+											},
+										},
+									},
+								},
+
+								"tag_filter": {
+									Type:     pluginsdk.TypeString,
+									Optional: true,
+									ValidateFunc: validation.StringInSlice([]string{
+										string(softwareupdateconfiguration.TagOperatorsAny),
+										string(softwareupdateconfiguration.TagOperatorsAll),
+									}, false),
+								},
+							},
+						},
+					},
+
+					"non_azure_query": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"function_alias": {
+									Type:         pluginsdk.TypeString,
+									Optional:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+
+								"workspace_id": {
+									Type:         pluginsdk.TypeString,
+									Optional:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+
+		"schedule": {
+			Type:     pluginsdk.TypeList,
+			Required: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"description": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+
+					"start_time": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						// NOTE: O+C API returns a default if omitted which can be updated without issue so this can remain
+						Computed:         true,
+						DiffSuppressFunc: suppress.RFC3339MinuteTime,
+						ValidateFunc:     validation.IsRFC3339Time,
+					},
+
+					"start_time_offset_minutes": {
+						Type:     pluginsdk.TypeFloat,
+						Optional: true,
+					},
+
+					"expiry_time": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						// NOTE: O+C API returns a default if omitted which can be updated without issue so this can remain
+						Computed:         true,
+						DiffSuppressFunc: suppress.RFC3339MinuteTime,
+						ValidateFunc:     validation.IsRFC3339Time,
+					},
+
+					"expiry_time_offset_minutes": {
+						Type:     pluginsdk.TypeFloat,
+						Optional: true,
+					},
+
+					"is_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						Default:  true,
+					},
+
+					"next_run": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						// NOTE: O+C API returns a default if omitted which  can be updated without issue so this can remain
+						Computed:         true,
+						DiffSuppressFunc: suppress.RFC3339MinuteTime,
+						ValidateFunc:     validation.IsRFC3339Time,
+					},
+
+					"next_run_offset_minutes": {
+						Type:     pluginsdk.TypeFloat,
+						Optional: true,
+					},
+
+					"interval": {
+						Type:     pluginsdk.TypeInt,
+						Optional: true,
+					},
+
+					"frequency": {
+						Type:     pluginsdk.TypeString,
+						Required: true,
+						ValidateFunc: validation.StringInSlice([]string{
+							FrequencyOneTime,
+							FrequencyHour,
+							FrequencyDay,
+							FrequencyWeek,
+							FrequencyMonth,
+						}, false),
+					},
+
+					"creation_time": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+
+					"last_modified_time": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+
+					"time_zone": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Default:      "Etc/UTC",
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+
+					"advanced_week_days": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						Elem: &pluginsdk.Schema{
+							Type: pluginsdk.TypeString,
+							ValidateFunc: validation.StringInSlice([]string{
+								DaysOfWeekMonday,
+								DaysOfWeekTuesday,
+								DaysOfWeekWednesday,
+								DaysOfWeekThursday,
+								DaysOfWeekFriday,
+								DaysOfWeekSaturday,
+								DaysOfWeekSunday,
+							}, false),
+						},
+					},
+
+					"advanced_month_days": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeInt,
+							ValidateFunc: validation.IntBetween(1, 31),
+						},
+					},
+
+					"monthly_occurrence": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						MaxItems: 1,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"occurrence": {
+									Type:         pluginsdk.TypeInt,
+									Required:     true,
+									ValidateFunc: validation.IntInSlice([]int{1, 2, 3, 4, -1}), // -1 is last week and 5 is invalid
+								},
+
+								"day": {
+									Type:     pluginsdk.TypeString,
+									Required: true,
+									// not hardcode Enum values
+									ValidateFunc: func(i interface{}, s string) ([]string, []error) {
+										var vs []string
+										vs = append(vs, softwareupdateconfiguration.PossibleValuesForScheduleDay()...)
+										vf := validation.StringInSlice(vs, false)
+										return vf(i, s)
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+
+		"pre_task": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"source": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+
+					"parameters": {
+						Type:     pluginsdk.TypeMap,
+						Optional: true,
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeString,
+							ValidateFunc: nil,
+						},
+					},
+				},
+			},
+		},
+
+		"post_task": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"source": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+
+					"parameters": {
+						Type:     pluginsdk.TypeMap,
+						Optional: true,
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeString,
+							ValidateFunc: nil,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return r
+}

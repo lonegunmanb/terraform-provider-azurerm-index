@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	webtests "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2022-06-15/webtestsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceApplicationInsightsWebTestsCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).AppInsights.WebTestsClient
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	log.Printf("[INFO] preparing arguments for AzureRM Application Insights WebTest creation.")
+
+	appInsightsId, err := components.ParseComponentID(d.Get("application_insights_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := webtests.NewWebTestID(appInsightsId.SubscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+
+	if d.IsNewResource() {
+		existing, err := client.WebTestsGet(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of %s: %+v", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_application_insights_web_test", id.ID())
+		}
+	}
+
+	kind := d.Get("kind").(string)
+	description := d.Get("description").(string)
+	frequency := int32(d.Get("frequency").(int))
+	timeout := int32(d.Get("timeout").(int))
+	isEnabled := d.Get("enabled").(bool)
+	retryEnabled := d.Get("retry_enabled").(bool)
+	geoLocationsRaw := d.Get("geo_locations").([]interface{})
+	geoLocations := expandApplicationInsightsWebTestGeoLocations(geoLocationsRaw)
+	testConf := d.Get("configuration").(string)
+
+	t := d.Get("tags").(map[string]interface{})
+	tagKey := fmt.Sprintf("hidden-link:%s", appInsightsId.ID())
+	t[tagKey] = "Resource"
+
+	webTest := webtests.WebTest{
+		Name:     pointer.To(id.WebTestName),
+		Location: location.Normalize(d.Get("location").(string)),
+		Kind:     pointer.To(webtests.WebTestKind(kind)),
+		Properties: &webtests.WebTestProperties{
+			SyntheticMonitorId: id.WebTestName,
+			Name:               id.WebTestName,
+			Description:        &description,
+			Enabled:            &isEnabled,
+			Frequency:          pointer.To(int64(frequency)),
+			Timeout:            pointer.To(int64(timeout)),
+			Kind:               webtests.WebTestKind(kind),
+			RetryEnabled:       &retryEnabled,
+			Locations:          geoLocations,
+			Configuration: &webtests.WebTestPropertiesConfiguration{
+				WebTest: &testConf,
+			},
+		},
+		Tags: tags.Expand(t),
+	}
+
+	_, err = client.WebTestsCreateOrUpdate(ctx, id, webTest)
+	if err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceApplicationInsightsWebTestsRead(d, meta)
+}

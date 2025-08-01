@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/analysisservices
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/analysisservices/2017-08-01/servers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/analysisservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenAnalysisServicesServerFirewallSettings(serverProperties *servers.AnalysisServicesServerProperties) (*bool, *pluginsdk.Set) {
+	if serverProperties == nil || serverProperties.IPV4FirewallSettings == nil {
+		return pointer.To(false), pluginsdk.NewSet(hashAnalysisServicesServerIPv4FirewallRule, make([]interface{}, 0))
+	}
+
+	firewallSettings := serverProperties.IPV4FirewallSettings
+
+	enablePowerBi := pointer.To(false)
+	if firewallSettings.EnablePowerBIService != nil {
+		enablePowerBi = firewallSettings.EnablePowerBIService
+	}
+
+	fwRules := make([]interface{}, 0)
+	if firewallSettings.FirewallRules != nil {
+		for _, fwRule := range *firewallSettings.FirewallRules {
+			output := make(map[string]interface{})
+			if fwRule.FirewallRuleName != nil {
+				output["name"] = *fwRule.FirewallRuleName
+			}
+
+			if fwRule.RangeStart != nil {
+				output["range_start"] = *fwRule.RangeStart
+			}
+
+			if fwRule.RangeEnd != nil {
+				output["range_end"] = *fwRule.RangeEnd
+			}
+
+			fwRules = append(fwRules, output)
+		}
+	}
+
+	return enablePowerBi, pluginsdk.NewSet(hashAnalysisServicesServerIPv4FirewallRule, fwRules)
+}

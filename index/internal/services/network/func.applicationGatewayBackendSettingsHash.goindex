@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func applicationGatewayBackendSettingsHash(v interface{}) int {
+	var buf bytes.Buffer
+
+	if m, ok := v.(map[string]interface{}); ok {
+		buf.WriteString(m["name"].(string))
+		buf.WriteString(fmt.Sprintf("%d", m["port"].(int)))
+		buf.WriteString(m["protocol"].(string))
+		buf.WriteString(m["cookie_based_affinity"].(string))
+
+		if v, ok := m["path"]; ok {
+			buf.WriteString(v.(string))
+		}
+		if v, ok := m["affinity_cookie_name"]; ok {
+			buf.WriteString(v.(string))
+		}
+		if v, ok := m["host_name"]; ok {
+			buf.WriteString(v.(string))
+		}
+		if v, ok := m["probe_name"]; ok {
+			buf.WriteString(v.(string))
+		}
+		if v, ok := m["pick_host_name_from_backend_address"]; ok {
+			buf.WriteString(fmt.Sprintf("%t", v.(bool)))
+		}
+		if v, ok := m["request_timeout"]; ok {
+			buf.WriteString(fmt.Sprintf("%d", v.(int)))
+		}
+		if authCert, ok := m["authentication_certificate"].([]interface{}); ok {
+			for _, ac := range authCert {
+				config := ac.(map[string]interface{})
+				buf.WriteString(config["name"].(string))
+			}
+		}
+		if connectionDraining, ok := m["connection_draining"].([]interface{}); ok {
+			for _, ac := range connectionDraining {
+				config := ac.(map[string]interface{})
+				buf.WriteString(fmt.Sprintf("%t", config["enabled"].(bool)))
+				buf.WriteString(fmt.Sprintf("%d", config["drain_timeout_sec"].(int)))
+			}
+		}
+		if trustedRootCertificateNames, ok := m["trusted_root_certificate_names"]; ok {
+			buf.WriteString(fmt.Sprintf("%s", trustedRootCertificateNames.([]interface{})))
+		}
+	}
+
+	return pluginsdk.HashString(buf.String())
+}

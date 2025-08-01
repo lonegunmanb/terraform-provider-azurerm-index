@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/schema-api/providerjson
+import (
+	"fmt"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+)
+func ProviderFromRaw(input *ProviderJSON) (*ProviderSchemaJSON, error) {
+	if input == nil {
+		return nil, fmt.Errorf("provider was nil converting from raw")
+	}
+
+	result := &ProviderSchemaJSON{}
+
+	providerSchema := make(map[string]SchemaJSON)
+	resourceSchemas := make(map[string]ResourceJSON)
+	dataSourceSchemas := make(map[string]ResourceJSON)
+
+	for k, v := range input.Schema {
+		providerSchema[k] = schemaFromRaw(v)
+	}
+
+	for k, v := range input.ResourcesMap {
+		resource, err := resourceFromRaw(v)
+		if err != nil {
+			return nil, err
+		}
+		resourceSchemas[k] = *resource
+	}
+
+	for k, v := range input.DataSourcesMap {
+		dataSource, err := resourceFromRaw(v)
+		if err != nil {
+			return nil, err
+		}
+		dataSourceSchemas[k] = *dataSource
+	}
+
+	result.Schema = providerSchema
+	result.ResourcesMap = resourceSchemas
+	result.DataSourcesMap = dataSourceSchemas
+	return result, nil
+}

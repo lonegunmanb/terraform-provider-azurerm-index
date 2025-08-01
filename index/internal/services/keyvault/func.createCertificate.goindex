@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault
+import (
+	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"math"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/google/go-cmp/cmp"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func createCertificate(d *pluginsdk.ResourceData, meta interface{}) (keyvault.CertificateBundle, error) {
+	keyVaultsClient := meta.(*clients.Client).KeyVault
+	client := meta.(*clients.Client).KeyVault.ManagementClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	name := d.Get("name").(string)
+	keyVaultId, err := commonids.ParseKeyVaultID(d.Get("key_vault_id").(string))
+	if err != nil {
+		return keyvault.CertificateBundle{}, err
+	}
+
+	keyVaultBaseUrl, err := keyVaultsClient.BaseUriForKeyVault(ctx, *keyVaultId)
+	if err != nil {
+		return keyvault.CertificateBundle{}, fmt.Errorf("looking up Base URI for Certificate %q in %s: %+v", name, *keyVaultId, err)
+	}
+
+	t := d.Get("tags").(map[string]interface{})
+
+	policy, err := expandKeyVaultCertificatePolicy(d)
+	if err != nil {
+		return keyvault.CertificateBundle{}, fmt.Errorf("expanding certificate policy: %s", err)
+	}
+
+	parameters := keyvault.CertificateCreateParameters{
+		CertificatePolicy: policy,
+		Tags:              tags.Expand(t),
+	}
+
+	result, err := client.CreateCertificate(ctx, *keyVaultBaseUrl, name, parameters)
+	if err != nil {
+		return keyvault.CertificateBundle{
+			Response: result.Response,
+		}, err
+	}
+
+	log.Printf("[DEBUG] Waiting for Key Vault Certificate %q in Vault %q to be provisioned", name, *keyVaultBaseUrl)
+	stateConf := &pluginsdk.StateChangeConf{
+		Pending:    []string{"Provisioning"},
+		Target:     []string{"Ready"},
+		Refresh:    keyVaultCertificateCreationRefreshFunc(ctx, client, *keyVaultBaseUrl, name),
+		MinTimeout: 15 * time.Second,
+		Timeout:    d.Timeout(pluginsdk.TimeoutCreate),
+	}
+	// It has been observed that at least one certificate issuer responds to a request with manual processing by issuer staff. SLA's may differ among issuers.
+	// The total create timeout duration is divided by a modified poll interval of 30s to calculate the number of times to allow not found instead of the default 20.
+	// Using math.Floor, the calculation will err on the lower side of the creation timeout, so as to return before the overall create timeout occurs.
+	if policy != nil && policy.IssuerParameters != nil && policy.IssuerParameters.Name != nil && *policy.IssuerParameters.Name != "Self" {
+		stateConf.PollInterval = 30 * time.Second
+		stateConf.NotFoundChecks = int(math.Floor(float64(stateConf.Timeout) / float64(stateConf.PollInterval)))
+	}
+
+	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+		return keyvault.CertificateBundle{}, fmt.Errorf("waiting for Certificate %q in Vault %q to become available: %s", name, *keyVaultBaseUrl, err)
+	}
+	return client.GetCertificate(ctx, *keyVaultBaseUrl, name, "")
+}

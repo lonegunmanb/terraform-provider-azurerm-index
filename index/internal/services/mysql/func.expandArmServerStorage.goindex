@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2023-12-30/serverfailover"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2023-12-30/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandArmServerStorage(inputs []interface{}) *servers.Storage {
+	if len(inputs) == 0 || inputs[0] == nil {
+		return nil
+	}
+
+	input := inputs[0].(map[string]interface{})
+	autoGrow := servers.EnableStatusEnumDisabled
+	if v := input["auto_grow_enabled"].(bool); v {
+		autoGrow = servers.EnableStatusEnumEnabled
+	}
+
+	autoIoScaling := servers.EnableStatusEnumDisabled
+	if v := input["io_scaling_enabled"].(bool); v {
+		autoIoScaling = servers.EnableStatusEnumEnabled
+	}
+
+	storage := servers.Storage{
+		AutoGrow:      &autoGrow,
+		AutoIoScaling: &autoIoScaling,
+	}
+
+	if v := input["size_gb"].(int); v != 0 {
+		storage.StorageSizeGB = utils.Int64(int64(v))
+	}
+
+	if v := input["iops"].(int); v != 0 {
+		storage.Iops = utils.Int64(int64(v))
+	}
+
+	return &storage
+}

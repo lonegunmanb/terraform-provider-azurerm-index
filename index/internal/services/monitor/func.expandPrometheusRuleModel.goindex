@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/alertsmanagement/2023-03-01/prometheusrulegroups"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandPrometheusRuleModel(inputList []PrometheusRuleModel, d *schema.ResourceData) []prometheusrulegroups.PrometheusRule {
+	outputList := make([]prometheusrulegroups.PrometheusRule, 0)
+
+	for i, v := range inputList {
+		output := prometheusrulegroups.PrometheusRule{
+			Enabled:    pointer.To(v.Enabled),
+			Expression: v.Expression,
+			Labels:     pointer.To(v.Labels),
+		}
+
+		if v.Alert != "" {
+			output.Actions = expandPrometheusRuleGroupActionModel(v.Action)
+			output.Alert = pointer.To(v.Alert)
+			if v, ok := d.GetOk(fmt.Sprintf("rule.%d.severity", i)); ok {
+				output.Severity = pointer.To(int64(v.(int)))
+			}
+			output.Annotations = pointer.To(v.Annotations)
+			output.For = pointer.To(v.For)
+			output.ResolveConfiguration = expandPrometheusRuleAlertResolutionModel(v.AlertResolution)
+		} else {
+			// action, alert, severity, annotations, for, alert_resolution must be empty when type is recording rule
+			output.Record = pointer.To(v.Record)
+		}
+		outputList = append(outputList, output)
+	}
+
+	return outputList
+}

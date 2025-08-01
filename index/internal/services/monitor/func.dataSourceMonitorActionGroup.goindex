@@ -1,0 +1,348 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2023-01-01/actiongroupsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceMonitorActionGroup() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		Read: dataSourceMonitorActionGroupRead,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Read: pluginsdk.DefaultTimeout(5 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupNameForDataSource(),
+
+			"short_name": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"enabled": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"email_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"email_address": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"use_common_alert_schema": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"itsm_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"workspace_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"connection_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"ticket_configuration": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"region": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"azure_app_push_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"email_address": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"sms_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"country_code": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"phone_number": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"webhook_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"service_uri": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"use_common_alert_schema": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+						"aad_auth": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"object_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"identifier_uri": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"tenant_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"automation_runbook_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"automation_account_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"runbook_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"webhook_resource_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"is_global_runbook": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+						"service_uri": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"use_common_alert_schema": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"voice_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"country_code": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"phone_number": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"logic_app_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"resource_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"callback_url": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"use_common_alert_schema": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"azure_function_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"function_app_resource_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"function_name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"http_trigger_url": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"use_common_alert_schema": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"arm_role_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"role_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"use_common_alert_schema": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"event_hub_receiver": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+						"event_hub_name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+						"event_hub_namespace": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+						"tenant_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							Computed:     true,
+							ValidateFunc: validation.IsUUID,
+						},
+						"use_common_alert_schema": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+						},
+						"subscription_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							Computed:     true,
+							ValidateFunc: validation.IsUUID,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return resource
+}

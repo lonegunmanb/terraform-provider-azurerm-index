@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/kermit/sdk/web/2022-09-01/web"
+)
+func flattenAadAuthV2Settings(input *webapps.AzureActiveDirectory) []AadAuthV2Settings {
+	if input == nil || !pointer.From(input.Enabled) {
+		return []AadAuthV2Settings{}
+	}
+
+	result := AadAuthV2Settings{}
+
+	if reg := input.Registration; reg != nil {
+		result.TenantAuthURI = pointer.From(reg.OpenIdIssuer)
+		result.ClientId = pointer.From(reg.ClientId)
+		result.ClientSecretSettingName = pointer.From(reg.ClientSecretSettingName)
+		result.ClientSecretCertificateThumbprint = pointer.From(reg.ClientSecretCertificateThumbprint)
+	}
+
+	if login := input.Login; login != nil {
+		result.DisableWWWAuth = pointer.From(login.DisableWWWAuthenticate)
+		if loginParamsRaw := login.LoginParameters; loginParamsRaw != nil {
+			loginParams := make(map[string]string)
+			for _, v := range *loginParamsRaw {
+				parts := strings.Split(v, "=")
+				if len(parts) == 2 && parts[0] != "" {
+					loginParams[parts[0]] = parts[1]
+				}
+			}
+			result.LoginParameters = loginParams
+		}
+	}
+
+	if validation := input.Validation; validation != nil {
+		if validation.AllowedAudiences != nil {
+			result.AllowedAudiences = *validation.AllowedAudiences
+		}
+		if jwt := validation.JwtClaimChecks; jwt != nil {
+			result.JWTAllowedGroups = pointer.From(jwt.AllowedGroups)
+			result.JWTAllowedClientApps = pointer.From(jwt.AllowedClientApplications)
+		}
+		if defaultPolicy := validation.DefaultAuthorizationPolicy; defaultPolicy != nil {
+			result.AllowedApplications = pointer.From(defaultPolicy.AllowedApplications)
+			if defaultPolicy.AllowedPrincipals != nil {
+				result.AllowedGroups = pointer.From(defaultPolicy.AllowedPrincipals.Groups)
+				result.AllowedIdentities = pointer.From(defaultPolicy.AllowedPrincipals.Identities)
+			}
+		}
+	}
+
+	return []AadAuthV2Settings{result}
+}

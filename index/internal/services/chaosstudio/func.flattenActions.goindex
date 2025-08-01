@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/chaosstudio
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/chaosstudio/2023-11-01/experiments"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/chaosstudio/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenActions(input []experiments.Action) (*[]ActionSchema, error) {
+	output := make([]ActionSchema, 0)
+
+	if len(input) == 0 {
+		return &output, nil
+	}
+
+	for _, action := range input {
+		actionOutput := ActionSchema{}
+
+		switch a := action.(type) {
+		case experiments.ContinuousAction:
+			parameters := make(map[string]string)
+			for _, p := range a.Parameters {
+				parameters[p.Key] = p.Value
+			}
+			actionOutput.Parameters = parameters
+			actionOutput.SelectorName = a.SelectorId
+			actionOutput.Urn = a.Name
+			actionOutput.Duration = a.Duration
+			actionOutput.ActionType = continuousActionType
+		case experiments.DelayAction:
+			actionOutput.Duration = a.Duration
+			actionOutput.ActionType = delayActionType
+		case experiments.DiscreteAction:
+			parameters := make(map[string]string)
+			for _, p := range a.Parameters {
+				parameters[p.Key] = p.Value
+			}
+			actionOutput.Parameters = parameters
+			actionOutput.SelectorName = a.SelectorId
+			actionOutput.Urn = a.Name
+			actionOutput.ActionType = discreteActionType
+		default:
+			return nil, fmt.Errorf("action is not of type `continuous`, `delay` or `discrete`")
+		}
+
+		output = append(output, actionOutput)
+	}
+
+	return &output, nil
+}

@@ -1,0 +1,90 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	lbvalidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandNetworkInterfaceIPConfigurations(input []interface{}) (*[]networkinterfaces.NetworkInterfaceIPConfiguration, error) {
+	ipConfigs := make([]networkinterfaces.NetworkInterfaceIPConfiguration, 0)
+
+	for _, configRaw := range input {
+		data := configRaw.(map[string]interface{})
+
+		subnetId := data["subnet_id"].(string)
+		privateIpAllocationMethod := data["private_ip_address_allocation"].(string)
+		privateIpAddressVersion := networkinterfaces.IPVersion(data["private_ip_address_version"].(string))
+
+		allocationMethod := networkinterfaces.IPAllocationMethod(privateIpAllocationMethod)
+		properties := networkinterfaces.NetworkInterfaceIPConfigurationPropertiesFormat{
+			PrivateIPAllocationMethod: &allocationMethod,
+			PrivateIPAddressVersion:   &privateIpAddressVersion,
+		}
+
+		if privateIpAddressVersion == networkinterfaces.IPVersionIPvFour && subnetId == "" {
+			return nil, fmt.Errorf("A Subnet ID must be specified for an IPv4 Network Interface.")
+		}
+
+		if subnetId != "" {
+			properties.Subnet = &networkinterfaces.Subnet{
+				Id: &subnetId,
+			}
+		}
+
+		if v := data["private_ip_address"].(string); v != "" {
+			properties.PrivateIPAddress = &v
+		}
+
+		if v := data["public_ip_address_id"].(string); v != "" {
+			properties.PublicIPAddress = &networkinterfaces.PublicIPAddress{
+				Id: &v,
+			}
+		}
+
+		if v, ok := data["primary"]; ok {
+			properties.Primary = pointer.To(v.(bool))
+		}
+
+		if v := data["gateway_load_balancer_frontend_ip_configuration_id"].(string); v != "" {
+			properties.GatewayLoadBalancer = &networkinterfaces.SubResource{Id: &v}
+		}
+
+		name := data["name"].(string)
+		ipConfigs = append(ipConfigs, networkinterfaces.NetworkInterfaceIPConfiguration{
+			Name:       &name,
+			Properties: &properties,
+		})
+	}
+
+	// if we've got multiple IP Configurations - one must be designated Primary
+	if len(ipConfigs) > 1 {
+		hasPrimary := false
+		for _, config := range ipConfigs {
+			if config.Properties != nil && config.Properties.Primary != nil && *config.Properties.Primary {
+				hasPrimary = true
+				break
+			}
+		}
+
+		if !hasPrimary {
+			return nil, fmt.Errorf("If multiple `ip_configurations` are specified - one must be designated as `primary`.")
+		}
+	}
+
+	return &ipConfigs, nil
+}

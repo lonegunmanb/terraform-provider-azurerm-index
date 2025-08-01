@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/storage"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func dataSourceStorageAccountSasRead(d *pluginsdk.ResourceData, _ interface{}) error {
+	connString := d.Get("connection_string").(string)
+	httpsOnly := d.Get("https_only").(bool)
+	ipAddresses := d.Get("ip_addresses").(string)
+	signedVersion := d.Get("signed_version").(string)
+	resourceTypesIface := d.Get("resource_types").([]interface{})
+	servicesIface := d.Get("services").([]interface{})
+	start := d.Get("start").(string)
+	expiry := d.Get("expiry").(string)
+	permissionsIface := d.Get("permissions").([]interface{})
+
+	resourceTypes := BuildResourceTypesString(resourceTypesIface[0].(map[string]interface{}))
+	services := BuildServicesString(servicesIface[0].(map[string]interface{}))
+	permissions := BuildPermissionsString(permissionsIface[0].(map[string]interface{}))
+
+	// Parse the connection string
+	kvp, err := storage.ParseAccountSASConnectionString(connString)
+	if err != nil {
+		return err
+	}
+
+	// Create the string to sign with the key...
+
+	// Details on how to do this are here:
+	// https://docs.microsoft.com/en-us/rest/api/storageservices/Constructing-an-Account-SAS
+	accountName := kvp[connStringAccountNameKey]
+	accountKey := kvp[connStringAccountKeyKey]
+	signedProtocol := "https,http"
+	if httpsOnly {
+		signedProtocol = "https"
+	}
+
+	// TODO: implement support for signedEncryptionScope
+	signedEncryptionScope := ""
+
+	sasToken, err := storage.ComputeAccountSASToken(accountName, accountKey, permissions, services, resourceTypes,
+		start, expiry, signedProtocol, ipAddresses, signedVersion, signedEncryptionScope)
+	if err != nil {
+		return err
+	}
+
+	d.Set("sas", sasToken)
+	tokenHash := sha256.Sum256([]byte(sasToken))
+	d.SetId(hex.EncodeToString(tokenHash[:]))
+
+	return nil
+}

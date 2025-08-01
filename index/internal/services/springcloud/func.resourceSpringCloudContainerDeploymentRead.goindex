@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	appplatform2 "github.com/hashicorp/go-azure-sdk/resource-manager/appplatform/2024-01-01-preview/appplatform"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func resourceSpringCloudContainerDeploymentRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).AppPlatform.DeploymentsClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.SpringCloudDeploymentID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, id.ResourceGroup, id.SpringName, id.AppName, id.DeploymentName)
+	if err != nil {
+		if utils.ResponseWasNotFound(resp.Response) {
+			log.Printf("[INFO] Spring Cloud deployment %q does not exist - removing from state", d.Id())
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("reading %s: %+v", id, err)
+	}
+
+	d.Set("name", id.DeploymentName)
+	d.Set("spring_cloud_app_id", parse.NewSpringCloudAppID(id.SubscriptionId, id.ResourceGroup, id.SpringName, id.AppName).ID())
+	if resp.Sku != nil {
+		d.Set("instance_count", resp.Sku.Capacity)
+	}
+	if resp.Properties != nil {
+		if settings := resp.Properties.DeploymentSettings; settings != nil {
+			d.Set("environment_variables", flattenSpringCloudDeploymentEnvironmentVariables(settings.EnvironmentVariables))
+			if err := d.Set("quota", flattenSpringCloudDeploymentResourceRequests(settings.ResourceRequests)); err != nil {
+				return fmt.Errorf("setting `quota`: %+v", err)
+			}
+			if err := d.Set("addon_json", flattenSpringCloudAppAddon(settings.AddonConfigs)); err != nil {
+				return fmt.Errorf("setting `addon_json`: %s", err)
+			}
+			apmIds, err := flattenSpringCloudDeploymentApms(settings.Apms)
+			if err != nil {
+				return fmt.Errorf("setting `application_performance_monitoring_ids`: %+v", err)
+			}
+			d.Set("application_performance_monitoring_ids", apmIds)
+		}
+		if source, ok := resp.Properties.Source.AsCustomContainerUserSourceInfo(); ok && source != nil {
+			if container := source.CustomContainer; container != nil {
+				d.Set("server", container.Server)
+				d.Set("image", container.ContainerImage)
+				d.Set("arguments", utils.FlattenStringSlice(container.Args))
+				d.Set("commands", utils.FlattenStringSlice(container.Command))
+				d.Set("language_framework", container.LanguageFramework)
+			}
+		}
+	}
+
+	return nil
+}

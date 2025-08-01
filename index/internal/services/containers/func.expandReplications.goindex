@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"log"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/operation"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/replications"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandReplications(p []interface{}) []replications.Replication {
+	reps := make([]replications.Replication, 0)
+	if p == nil {
+		return reps
+	}
+	for _, v := range p {
+		value := v.(map[string]interface{})
+		location := azure.NormalizeLocation(value["location"])
+		tags := tags.Expand(value["tags"].(map[string]interface{}))
+		zoneRedundancy := replications.ZoneRedundancyDisabled
+		if value["zone_redundancy_enabled"].(bool) {
+			zoneRedundancy = replications.ZoneRedundancyEnabled
+		}
+		reps = append(reps, replications.Replication{
+			Location: location,
+			Name:     &location,
+			Tags:     tags,
+			Properties: &replications.ReplicationProperties{
+				ZoneRedundancy:        &zoneRedundancy,
+				RegionEndpointEnabled: pointer.To(value["regional_endpoint_enabled"].(bool)),
+			},
+		})
+	}
+	return reps
+}

@@ -1,0 +1,95 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cosmos-db/mgmt/2021-10-15/documentdb" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cosmosdb/2024-08-15/cosmosdb"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/customermanagedkeys"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
+	keyVaultSuppress "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/suppress"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandCosmosdbAccountBackup(input []interface{}, backupHasChange bool, createMode string) (cosmosdb.BackupPolicy, error) {
+	if len(input) == 0 || input[0] == nil {
+		return nil, nil
+	}
+	attr := input[0].(map[string]interface{})
+
+	switch attr["type"].(string) {
+	case string(cosmosdb.BackupPolicyTypeContinuous):
+		if v := attr["interval_in_minutes"].(int); v != 0 && !backupHasChange {
+			return nil, fmt.Errorf("`interval_in_minutes` cannot be defined when the `backup.type` is set to %q", cosmosdb.BackupPolicyTypeContinuous)
+		}
+
+		if v := attr["retention_in_hours"].(int); v != 0 && !backupHasChange {
+			return nil, fmt.Errorf("`retention_in_hours` cannot be defined when the `backup.type` is set to %q", cosmosdb.BackupPolicyTypeContinuous)
+		}
+
+		if v := attr["storage_redundancy"].(string); v != "" && !backupHasChange {
+			return nil, fmt.Errorf("`storage_redundancy` cannot be defined when the `backup.type` is set to %q", cosmosdb.BackupPolicyTypeContinuous)
+		}
+
+		result := cosmosdb.ContinuousModeBackupPolicy{}
+
+		if v := attr["tier"].(string); v != "" {
+			result.ContinuousModeProperties = &cosmosdb.ContinuousModeProperties{
+				Tier: pointer.To(cosmosdb.ContinuousTier(v)),
+			}
+		}
+
+		return result, nil
+
+	case string(cosmosdb.BackupPolicyTypePeriodic):
+		if createMode != "" {
+			return nil, fmt.Errorf("`create_mode` can only be defined when the `backup.type` is set to %q, got %q", cosmosdb.BackupPolicyTypeContinuous, cosmosdb.BackupPolicyTypePeriodic)
+		}
+
+		if v := attr["tier"].(string); v != "" && !backupHasChange {
+			return nil, fmt.Errorf("`tier` can not be set when `type` in `backup` is `Periodic`")
+		}
+
+		// Mirror the behavior of the old SDK...
+		periodicModeBackupPolicy := cosmosdb.PeriodicModeBackupPolicy{
+			PeriodicModeProperties: &cosmosdb.PeriodicModeProperties{
+				BackupIntervalInMinutes:        utils.Int64(int64(attr["interval_in_minutes"].(int))),
+				BackupRetentionIntervalInHours: utils.Int64(int64(attr["retention_in_hours"].(int))),
+			},
+		}
+
+		if v := attr["storage_redundancy"].(string); v != "" {
+			periodicModeBackupPolicy.PeriodicModeProperties.BackupStorageRedundancy = pointer.To(cosmosdb.BackupStorageRedundancy(attr["storage_redundancy"].(string)))
+		}
+
+		return periodicModeBackupPolicy, nil
+
+	default:
+		return nil, fmt.Errorf("unknown `type` in `backup`:%+v", attr["type"].(string))
+	}
+}

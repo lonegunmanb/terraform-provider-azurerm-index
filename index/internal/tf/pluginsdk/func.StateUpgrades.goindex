@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk
+import (
+	"context"
+	"fmt"
+	"sort"
+)
+func StateUpgrades(upgrades map[int]StateUpgrade) []StateUpgrader {
+	versions := make([]int, 0)
+	for version := range upgrades {
+		versions = append(versions, version)
+	}
+	sort.Ints(versions)
+
+	out := make([]StateUpgrader, 0)
+	expectedVersion := 0
+	for _, version := range versions {
+		// sanity check that there's no missing versions
+		if expectedVersion != version {
+			panic(fmt.Sprintf("missing state upgrade for version %d", expectedVersion))
+		}
+		expectedVersion++
+
+		upgrade := upgrades[version]
+		resource := Resource{
+			Schema: upgrade.Schema(),
+		}
+		out = append(out, StateUpgrader{
+			Type: resource.CoreConfigSchema().ImpliedType(),
+			Upgrade: func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+				return upgrade.UpgradeFunc()(ctx, rawState, meta)
+			},
+			Version: version,
+		})
+	}
+	return out
+}

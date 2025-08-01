@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	// import time/tzdata to embed timezone information in the program
+	// add this to resolve https://github.com/hashicorp/terraform-provider-azurerm/issues/20690
+	_ "time/tzdata"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/schedule"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azvalidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/automation/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandArmAutomationScheduleAdvanced(d *pluginsdk.ResourceData, isUpdate bool) *schedule.AdvancedSchedule {
+	expandedAdvancedSchedule := schedule.AdvancedSchedule{}
+
+	// If frequency is set to `Month` the `week_days` array cannot be set (even empty), otherwise the API returns an error.
+	// During update it can be set and it will not return an error. Workaround for the APIs behaviour
+	if v, ok := d.GetOk("week_days"); ok {
+		weekDays := v.(*pluginsdk.Set).List()
+		expandedWeekDays := make([]string, len(weekDays))
+		for i := range weekDays {
+			expandedWeekDays[i] = weekDays[i].(string)
+		}
+		expandedAdvancedSchedule.WeekDays = &expandedWeekDays
+	} else if isUpdate {
+		expandedAdvancedSchedule.WeekDays = &[]string{}
+	}
+
+	// Same as above with `week_days`
+	if v, ok := d.GetOk("month_days"); ok {
+		monthDays := v.(*pluginsdk.Set).List()
+		expandedMonthDays := make([]int64, len(monthDays))
+		for i := range monthDays {
+			expandedMonthDays[i] = int64(monthDays[i].(int))
+		}
+		expandedAdvancedSchedule.MonthDays = &expandedMonthDays
+	} else if isUpdate {
+		expandedAdvancedSchedule.MonthDays = &[]int64{}
+	}
+
+	monthlyOccurrences := d.Get("monthly_occurrence").([]interface{})
+	expandedMonthlyOccurrences := make([]schedule.AdvancedScheduleMonthlyOccurrence, len(monthlyOccurrences))
+	for i := range monthlyOccurrences {
+		m := monthlyOccurrences[i].(map[string]interface{})
+		occurrence := int64(m["occurrence"].(int))
+
+		day := schedule.ScheduleDay(m["day"].(string))
+
+		expandedMonthlyOccurrences[i] = schedule.AdvancedScheduleMonthlyOccurrence{
+			Occurrence: &occurrence,
+			Day:        &day,
+		}
+	}
+	expandedAdvancedSchedule.MonthlyOccurrences = &expandedMonthlyOccurrences
+
+	return &expandedAdvancedSchedule
+}

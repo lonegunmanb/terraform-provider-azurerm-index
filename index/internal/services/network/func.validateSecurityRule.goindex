@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networksecuritygroups"
+	"github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func validateSecurityRule(sgRule map[string]interface{}) error {
+	var err *multierror.Error
+
+	sourcePortRange := sgRule["source_port_range"].(string)
+	sourcePortRanges := sgRule["source_port_ranges"].(*pluginsdk.Set)
+	destinationPortRange := sgRule["destination_port_range"].(string)
+	destinationPortRanges := sgRule["destination_port_ranges"].(*pluginsdk.Set)
+	sourceAddressPrefix := sgRule["source_address_prefix"].(string)
+	sourceAddressPrefixes := sgRule["source_address_prefixes"].(*pluginsdk.Set)
+	destinationAddressPrefix := sgRule["destination_address_prefix"].(string)
+	destinationAddressPrefixes := sgRule["destination_address_prefixes"].(*pluginsdk.Set)
+
+	if sourcePortRange != "" && sourcePortRanges.Len() > 0 {
+		err = multierror.Append(err, fmt.Errorf(
+			"only one of \"source_port_range\" and \"source_port_ranges\" can be used per security rule"))
+	}
+	if destinationPortRange != "" && destinationPortRanges.Len() > 0 {
+		err = multierror.Append(err, fmt.Errorf(
+			"only one of \"destination_port_range\" and \"destination_port_ranges\" can be used per security rule"))
+	}
+	if sourceAddressPrefix != "" && sourceAddressPrefixes.Len() > 0 {
+		err = multierror.Append(err, fmt.Errorf(
+			"only one of \"source_address_prefix\" and \"source_address_prefixes\" can be used per security rule"))
+	}
+	if destinationAddressPrefix != "" && destinationAddressPrefixes.Len() > 0 {
+		err = multierror.Append(err, fmt.Errorf(
+			"only one of \"destination_address_prefix\" and \"destination_address_prefixes\" can be used per security rule"))
+	}
+
+	return err.ErrorOrNil()
+}

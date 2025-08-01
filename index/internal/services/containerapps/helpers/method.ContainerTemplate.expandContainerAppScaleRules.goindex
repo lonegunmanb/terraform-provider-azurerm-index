@@ -1,0 +1,118 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/daprcomponents"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/containerapps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (c *ContainerTemplate) expandContainerAppScaleRules() []containerapps.ScaleRule {
+	if len(c.AzureQueueScaleRules) == 0 && len(c.CustomScaleRules) == 0 && len(c.HTTPScaleRules) == 0 && len(c.TCPScaleRules) == 0 {
+		return nil
+	}
+	result := make([]containerapps.ScaleRule, 0)
+	for _, v := range c.AzureQueueScaleRules {
+		r := containerapps.ScaleRule{
+			Name: pointer.To(v.Name),
+			AzureQueue: &containerapps.QueueScaleRule{
+				QueueLength: pointer.To(v.QueueLength),
+				QueueName:   pointer.To(v.QueueName),
+			},
+		}
+
+		auths := make([]containerapps.ScaleRuleAuth, 0)
+		for _, a := range v.Authentications {
+			auth := containerapps.ScaleRuleAuth{
+				TriggerParameter: pointer.To(a.TriggerParam),
+				SecretRef:        pointer.To(a.SecretRef),
+			}
+			auths = append(auths, auth)
+		}
+
+		r.AzureQueue.Auth = pointer.To(auths)
+
+		result = append(result, r)
+	}
+
+	for _, v := range c.CustomScaleRules {
+		r := containerapps.ScaleRule{
+			Name: pointer.To(v.Name),
+			Custom: &containerapps.CustomScaleRule{
+				Metadata: pointer.To(v.Metadata),
+				Type:     pointer.To(v.CustomRuleType),
+			},
+		}
+
+		auths := make([]containerapps.ScaleRuleAuth, 0)
+		for _, a := range v.Authentications {
+			auth := containerapps.ScaleRuleAuth{
+				TriggerParameter: pointer.To(a.TriggerParam),
+				SecretRef:        pointer.To(a.SecretRef),
+			}
+			auths = append(auths, auth)
+		}
+
+		r.Custom.Auth = pointer.To(auths)
+
+		result = append(result, r)
+	}
+
+	for _, v := range c.HTTPScaleRules {
+		metaData := make(map[string]string, 0)
+		metaData["concurrentRequests"] = v.ConcurrentRequests
+		r := containerapps.ScaleRule{
+			Name: pointer.To(v.Name),
+			HTTP: &containerapps.HTTPScaleRule{
+				Metadata: pointer.To(metaData),
+			},
+		}
+
+		auths := make([]containerapps.ScaleRuleAuth, 0)
+		for _, a := range v.Authentications {
+			auth := containerapps.ScaleRuleAuth{
+				TriggerParameter: pointer.To(a.TriggerParam),
+				SecretRef:        pointer.To(a.SecretRef),
+			}
+			auths = append(auths, auth)
+		}
+
+		r.HTTP.Auth = pointer.To(auths)
+
+		result = append(result, r)
+	}
+
+	for _, v := range c.TCPScaleRules {
+		metaData := make(map[string]string, 0)
+		metaData["concurrentRequests"] = v.ConcurrentRequests
+		r := containerapps.ScaleRule{
+			Name: pointer.To(v.Name),
+			Tcp: &containerapps.TcpScaleRule{
+				Metadata: pointer.To(metaData),
+			},
+		}
+
+		auths := make([]containerapps.ScaleRuleAuth, 0)
+		for _, a := range v.Authentications {
+			auth := containerapps.ScaleRuleAuth{
+				TriggerParameter: pointer.To(a.TriggerParam),
+				SecretRef:        pointer.To(a.SecretRef),
+			}
+			auths = append(auths, auth)
+		}
+
+		r.Tcp.Auth = pointer.To(auths)
+
+		result = append(result, r)
+	}
+
+	return result
+}

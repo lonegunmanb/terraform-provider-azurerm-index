@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ContainerAppEnvironmentResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ContainerApps.ManagedEnvironmentClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var containerAppEnvironment ContainerAppEnvironmentModel
+
+			if err := metadata.Decode(&containerAppEnvironment); err != nil {
+				return err
+			}
+
+			id := managedenvironments.NewManagedEnvironmentID(subscriptionId, containerAppEnvironment.ResourceGroup, containerAppEnvironment.Name)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			managedEnvironment := managedenvironments.ManagedEnvironment{
+				Location: containerAppEnvironment.Location,
+				Name:     pointer.To(containerAppEnvironment.Name),
+				Properties: &managedenvironments.ManagedEnvironmentProperties{
+					AppLogsConfiguration: &managedenvironments.AppLogsConfiguration{
+						Destination: pointer.To(containerAppEnvironment.LogsDestination),
+					},
+					VnetConfiguration: &managedenvironments.VnetConfiguration{},
+					ZoneRedundant:     pointer.To(containerAppEnvironment.ZoneRedundant),
+					PeerAuthentication: &managedenvironments.ManagedEnvironmentPropertiesPeerAuthentication{
+						Mtls: &managedenvironments.Mtls{
+							Enabled: pointer.To(containerAppEnvironment.Mtls),
+						},
+					},
+					PeerTrafficConfiguration: &managedenvironments.ManagedEnvironmentPropertiesPeerTrafficConfiguration{
+						Encryption: &managedenvironments.ManagedEnvironmentPropertiesPeerTrafficConfigurationEncryption{
+							Enabled: pointer.To(containerAppEnvironment.Mtls),
+						},
+					},
+				},
+				Tags: tags.Expand(containerAppEnvironment.Tags),
+			}
+
+			if containerAppEnvironment.DaprApplicationInsightsConnectionString != "" {
+				managedEnvironment.Properties.DaprAIConnectionString = pointer.To(containerAppEnvironment.DaprApplicationInsightsConnectionString)
+			}
+
+			if containerAppEnvironment.InfrastructureResourceGroup != "" {
+				managedEnvironment.Properties.InfrastructureResourceGroup = pointer.To(containerAppEnvironment.InfrastructureResourceGroup)
+			}
+
+			if containerAppEnvironment.LogAnalyticsWorkspaceId != "" {
+				customerId, sharedKey, err := getSharedKeyForWorkspace(ctx, metadata, containerAppEnvironment.LogAnalyticsWorkspaceId)
+				if err != nil {
+					return fmt.Errorf("retrieving access keys to Log Analytics Workspace for %s: %+v", id, err)
+				}
+
+				managedEnvironment.Properties.AppLogsConfiguration.Destination = pointer.To(LogsDestinationLogAnalytics)
+
+				managedEnvironment.Properties.AppLogsConfiguration.LogAnalyticsConfiguration = &managedenvironments.LogAnalyticsConfiguration{
+					CustomerId: customerId,
+					SharedKey:  sharedKey,
+				}
+			}
+
+			if containerAppEnvironment.InfrastructureSubnetId != "" {
+				managedEnvironment.Properties.VnetConfiguration.InfrastructureSubnetId = pointer.To(containerAppEnvironment.InfrastructureSubnetId)
+				managedEnvironment.Properties.VnetConfiguration.Internal = pointer.To(containerAppEnvironment.InternalLoadBalancerEnabled)
+			}
+
+			managedEnvironment.Properties.WorkloadProfiles = helpers.ExpandWorkloadProfiles(containerAppEnvironment.WorkloadProfiles)
+
+			if err := client.CreateOrUpdateThenPoll(ctx, id, managedEnvironment); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

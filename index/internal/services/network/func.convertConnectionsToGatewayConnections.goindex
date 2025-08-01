@@ -1,0 +1,95 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/virtualwans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/expressrouteconnections"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/expressroutegateways"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func convertConnectionsToGatewayConnections(input *[]expressrouteconnections.ExpressRouteConnection) *[]expressroutegateways.ExpressRouteConnection {
+	output := make([]expressroutegateways.ExpressRouteConnection, 0)
+
+	if input == nil || len(*input) == 0 {
+		return &output
+	}
+	for _, i := range *input {
+		o := expressroutegateways.ExpressRouteConnection{
+			Id:   i.Id,
+			Name: i.Name,
+		}
+
+		if props := i.Properties; props != nil {
+			o.Properties = &expressroutegateways.ExpressRouteConnectionProperties{
+				AuthorizationKey:          props.AuthorizationKey,
+				EnableInternetSecurity:    props.EnableInternetSecurity,
+				EnablePrivateLinkFastPath: props.EnablePrivateLinkFastPath,
+				ExpressRouteCircuitPeering: expressroutegateways.ExpressRouteCircuitPeeringId{
+					Id: props.ExpressRouteCircuitPeering.Id,
+				},
+				ExpressRouteGatewayBypass: props.ExpressRouteGatewayBypass,
+				ProvisioningState:         (*expressroutegateways.ProvisioningState)(props.ProvisioningState),
+				RoutingWeight:             props.RoutingWeight,
+			}
+
+			if routingConfiguration := props.RoutingConfiguration; routingConfiguration != nil {
+				rc := &expressroutegateways.RoutingConfiguration{}
+
+				if routingConfiguration.AssociatedRouteTable != nil {
+					rc.AssociatedRouteTable = &expressroutegateways.SubResource{
+						Id: routingConfiguration.AssociatedRouteTable.Id,
+					}
+				}
+
+				if routingConfiguration.InboundRouteMap != nil {
+					rc.InboundRouteMap = &expressroutegateways.SubResource{
+						Id: routingConfiguration.InboundRouteMap.Id,
+					}
+				}
+
+				if routingConfiguration.OutboundRouteMap != nil {
+					rc.OutboundRouteMap = &expressroutegateways.SubResource{
+						Id: routingConfiguration.OutboundRouteMap.Id,
+					}
+				}
+
+				if routingConfiguration.PropagatedRouteTables != nil {
+					rc.PropagatedRouteTables = &expressroutegateways.PropagatedRouteTable{
+						Ids:    convertConnectionsSubresourceToGatewaySubResource(props.RoutingConfiguration.PropagatedRouteTables.Ids),
+						Labels: routingConfiguration.PropagatedRouteTables.Labels,
+					}
+				}
+
+				if vnet := routingConfiguration.VnetRoutes; vnet != nil {
+					rc.VnetRoutes = &expressroutegateways.VnetRoute{
+						BgpConnections: convertConnectionsSubresourceToGatewaySubResource(vnet.BgpConnections),
+						StaticRoutes:   convertConnectionsStaticRouteToGatewayStaticRoute(vnet.StaticRoutes),
+					}
+
+					if src := vnet.StaticRoutesConfig; src != nil {
+						rc.VnetRoutes.StaticRoutesConfig = &expressroutegateways.StaticRoutesConfig{
+							PropagateStaticRoutes:          src.PropagateStaticRoutes,
+							VnetLocalRouteOverrideCriteria: (*expressroutegateways.VnetLocalRouteOverrideCriteria)(src.VnetLocalRouteOverrideCriteria),
+						}
+					}
+				}
+
+				o.Properties.RoutingConfiguration = rc
+			}
+		}
+		output = append(output, o)
+	}
+
+	return &output
+}

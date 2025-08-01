@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/subnets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceAppServiceSlotVirtualNetworkSwiftConnectionRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Web.AppServicesClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.SlotVirtualNetworkSwiftConnectionID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	slot, err := client.GetSlot(ctx, id.ResourceGroup, id.SiteName, id.SlotName)
+	if err != nil {
+		if utils.ResponseWasNotFound(slot.Response) {
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving existing App Service Slot %q (App Service %q / Resource Group %q): %s", id.SlotName, id.SiteName, id.ResourceGroup, err)
+	}
+	appService, err := client.Get(ctx, id.ResourceGroup, id.SiteName)
+	if err != nil {
+		if utils.ResponseWasNotFound(appService.Response) {
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving existing App Service %q (Resource Group %q): %s", id.SiteName, id.ResourceGroup, err)
+	}
+	swiftVnet, err := client.GetSwiftVirtualNetworkConnectionSlot(ctx, id.ResourceGroup, id.SiteName, id.SlotName)
+	if err != nil {
+		if utils.ResponseWasNotFound(swiftVnet.Response) {
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving App Service Slot VNet association for %q (App Service %q / Resource Group %q): %s", id.SlotName, id.SiteName, id.ResourceGroup, err)
+	}
+
+	if swiftVnet.SwiftVirtualNetworkProperties == nil {
+		return fmt.Errorf("retrieving virtual network properties (Slot Name %q / App Service %q / Resource Group %q): `properties` was nil", id.SlotName, id.SiteName, id.ResourceGroup)
+	}
+	props := *swiftVnet.SwiftVirtualNetworkProperties
+	subnetID := props.SubnetResourceID
+	if subnetID == nil || *subnetID == "" {
+		d.SetId("")
+		return nil
+	}
+	d.Set("subnet_id", subnetID)
+	d.Set("app_service_id", appService.ID)
+	d.Set("slot_name", id.SlotName)
+	return nil
+}

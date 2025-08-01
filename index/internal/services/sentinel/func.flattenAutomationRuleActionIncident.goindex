@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflows"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2022-10-01-preview/automationrules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAutomationRuleActionIncident(input automationrules.AutomationRuleModifyPropertiesAction) map[string]interface{} {
+	var (
+		status      string
+		clsf        string
+		clsfComment string
+		clsfReason  string
+		labels      []interface{}
+		owner       string
+		severity    string
+	)
+
+	if cfg := input.ActionConfiguration; cfg != nil {
+		if cfg.Status != nil {
+			status = string(*cfg.Status)
+		}
+		if cfg.Classification != nil {
+			clsf = string(*cfg.Classification)
+		}
+		if cfg.ClassificationComment != nil {
+			clsfComment = *cfg.ClassificationComment
+		}
+		if cfg.ClassificationReason != nil {
+			clsfReason = string(*cfg.ClassificationReason)
+		}
+
+		if cfg.Labels != nil {
+			for _, label := range *cfg.Labels {
+				labels = append(labels, label.LabelName)
+			}
+		}
+
+		if cfg.Owner != nil && cfg.Owner.ObjectId != nil {
+			owner = *cfg.Owner.ObjectId
+		}
+
+		if cfg.Severity != nil {
+			severity = string(*cfg.Severity)
+		}
+	}
+
+	classification := clsf
+	if clsfReason != "" {
+		classification = classification + "_" + clsfReason
+	}
+
+	return map[string]interface{}{
+		"order":                  input.Order,
+		"status":                 status,
+		"classification":         classification,
+		"classification_comment": clsfComment,
+		"labels":                 labels,
+		"owner_id":               owner,
+		"severity":               severity,
+	}
+}

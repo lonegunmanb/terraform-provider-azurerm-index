@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/expressrouteports"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenExpressRoutePortLink(link expressrouteports.ExpressRouteLink) []interface{} {
+	var id string
+	if link.Id != nil {
+		id = *link.Id
+	}
+
+	var (
+		routerName    string
+		interfaceName string
+		patchPanelId  string
+		rackId        string
+		connectorType string
+		adminState    bool
+		cknSecretId   string
+		cakSecretId   string
+		cipher        string
+		sciState      bool
+	)
+
+	if props := link.Properties; props != nil {
+		if props.RouterName != nil {
+			routerName = *props.RouterName
+		}
+		if props.InterfaceName != nil {
+			interfaceName = *props.InterfaceName
+		}
+		if props.PatchPanelId != nil {
+			patchPanelId = *props.PatchPanelId
+		}
+		if props.RackId != nil {
+			rackId = *props.RackId
+		}
+		connectorType = string(pointer.From(props.ConnectorType))
+		adminState = pointer.From(props.AdminState) == expressrouteports.ExpressRouteLinkAdminStateEnabled
+		sciState = pointer.From(props.MacSecConfig.SciState) == expressrouteports.ExpressRouteLinkMacSecSciStateEnabled
+		if cfg := props.MacSecConfig; cfg != nil {
+			if cfg.CknSecretIdentifier != nil {
+				cknSecretId = *cfg.CknSecretIdentifier
+			}
+			if cfg.CakSecretIdentifier != nil {
+				cakSecretId = *cfg.CakSecretIdentifier
+			}
+			cipher = string(pointer.From(cfg.Cipher))
+		}
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"id":                            id,
+			"router_name":                   routerName,
+			"interface_name":                interfaceName,
+			"patch_panel_id":                patchPanelId,
+			"rack_id":                       rackId,
+			"connector_type":                connectorType,
+			"admin_enabled":                 adminState,
+			"macsec_ckn_keyvault_secret_id": cknSecretId,
+			"macsec_cak_keyvault_secret_id": cakSecretId,
+			"macsec_cipher":                 cipher,
+			"macsec_sci_enabled":            sciState,
+		},
+	}
+}

@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/arckubernetes
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	arckubernetes "github.com/hashicorp/go-azure-sdk/resource-manager/hybridkubernetes/2024-01-01/connectedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/kubernetesconfiguration/2023-05-01/fluxconfiguration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/containers"
+)
+func flattenGitRepositoryDefinitionModel(input *fluxconfiguration.GitRepositoryDefinition, gitRepository []GitRepositoryDefinitionModel) ([]GitRepositoryDefinitionModel, error) {
+	outputList := make([]GitRepositoryDefinitionModel, 0)
+	if input == nil {
+		return outputList, nil
+	}
+
+	output := GitRepositoryDefinitionModel{
+		HttpsCACert:           pointer.From(input.HTTPSCACert),
+		HttpsUser:             pointer.From(input.HTTPSUser),
+		LocalAuthRef:          pointer.From(input.LocalAuthRef),
+		SshKnownHosts:         pointer.From(input.SshKnownHosts),
+		SyncIntervalInSeconds: pointer.From(input.SyncIntervalInSeconds),
+		TimeoutInSeconds:      pointer.From(input.TimeoutInSeconds),
+		Url:                   pointer.From(input.Url),
+	}
+
+	referenceType, referenceValue, err := flattenRepositoryRefDefinitionModel(input.RepositoryRef)
+	if err != nil {
+		return nil, err
+	}
+
+	output.ReferenceType = referenceType
+	output.ReferenceValue = referenceValue
+
+	if len(gitRepository) > 0 {
+		output.HttpsKey = gitRepository[0].HttpsKey
+		output.SshPrivateKey = gitRepository[0].SshPrivateKey
+	}
+
+	return append(outputList, output), nil
+}

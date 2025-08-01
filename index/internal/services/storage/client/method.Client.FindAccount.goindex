@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
+)
+func (c Client) FindAccount(ctx context.Context, subscriptionIdRaw, accountName string) (*AccountDetails, error) {
+	cacheAccountsLock.Lock()
+	defer cacheAccountsLock.Unlock()
+
+	if existing, ok := storageAccountsCache[accountName]; ok {
+		return &existing, nil
+	}
+
+	subscriptionId := commonids.NewSubscriptionID(subscriptionIdRaw)
+	listResult, err := c.ResourceManager.StorageAccounts.ListComplete(ctx, subscriptionId)
+	if err != nil {
+		return nil, fmt.Errorf("listing Storage Accounts within %s: %+v", subscriptionId, err)
+	}
+	for _, item := range listResult.Items {
+		if item.Id == nil || item.Name == nil {
+			continue
+		}
+
+		storageAccountId, err := commonids.ParseStorageAccountIDInsensitively(*item.Id)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %q: %+v", *item.Id, err)
+		}
+
+		account, err := populateAccountDetails(*storageAccountId, item)
+		if err != nil {
+			return nil, fmt.Errorf("populating details for %s: %+v", *storageAccountId, err)
+		}
+
+		storageAccountsCache[storageAccountId.StorageAccountName] = *account
+	}
+
+	if existing, ok := storageAccountsCache[accountName]; ok {
+		return &existing, nil
+	}
+
+	return nil, nil
+}

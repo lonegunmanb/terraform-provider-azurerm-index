@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/kermit/sdk/web/2022-09-01/web"
+)
+func expandCustomOIDCAuthV2Settings(input []CustomOIDCAuthV2Settings) map[string]webapps.CustomOpenIdConnectProvider {
+	if len(input) == 0 {
+		return nil
+	}
+	result := make(map[string]webapps.CustomOpenIdConnectProvider)
+	for _, v := range input {
+		if v.Name == "" {
+			continue
+		}
+		provider := webapps.CustomOpenIdConnectProvider{
+			Enabled: pointer.To(true),
+			Registration: &webapps.OpenIdConnectRegistration{
+				ClientId: pointer.To(v.ClientId),
+				ClientCredential: &webapps.OpenIdConnectClientCredential{
+					Method:                  pointer.To(webapps.ClientCredentialMethodClientSecretPost),
+					ClientSecretSettingName: pointer.To(fmt.Sprintf("%s_PROVIDER_AUTHENTICATION_SECRET", strings.ToUpper(v.Name))),
+				},
+				OpenIdConnectConfiguration: &webapps.OpenIdConnectConfig{
+					WellKnownOpenIdConfiguration: pointer.To(v.OpenIDConfigurationEndpoint),
+				},
+			},
+			Login: &webapps.OpenIdConnectLogin{
+				Scopes: pointer.To(v.Scopes),
+			},
+		}
+
+		if v.NameClaimType != "" {
+			provider.Login.NameClaimType = pointer.To(v.NameClaimType)
+		}
+
+		result[v.Name] = provider
+	}
+
+	return result
+}

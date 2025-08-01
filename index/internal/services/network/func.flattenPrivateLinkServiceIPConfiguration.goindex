@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privatelinkservices"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenPrivateLinkServiceIPConfiguration(input *[]privatelinkservices.PrivateLinkServiceIPConfiguration) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	for _, item := range *input {
+		name := ""
+		if item.Name != nil {
+			name = *item.Name
+		}
+
+		privateIpAddress := ""
+		privateIpVersion := ""
+		subnetId := ""
+		primary := false
+
+		if props := item.Properties; props != nil {
+			if props.PrivateIPAddress != nil {
+				privateIpAddress = *props.PrivateIPAddress
+			}
+
+			privateIpVersion = string(pointer.From(props.PrivateIPAddressVersion))
+
+			if props.Subnet != nil && props.Subnet.Id != nil {
+				subnetId = *props.Subnet.Id
+			}
+
+			if props.Primary != nil {
+				primary = *props.Primary
+			}
+		}
+
+		results = append(results, map[string]interface{}{
+			"name":                       name,
+			"primary":                    primary,
+			"private_ip_address":         privateIpAddress,
+			"private_ip_address_version": privateIpVersion,
+			"subnet_id":                  subnetId,
+		})
+	}
+
+	return results
+}

@@ -1,0 +1,103 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/images"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryimageversions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSharedImageVersionRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Compute.GalleryImageVersionsClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := galleryimageversions.ParseImageVersionID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id, galleryimageversions.DefaultGetOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found - removing from state", id)
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	d.Set("name", id.VersionName)
+	d.Set("image_name", id.ImageName)
+	d.Set("gallery_name", id.GalleryName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.Normalize(model.Location))
+
+		if props := model.Properties; props != nil {
+			if profile := props.PublishingProfile; profile != nil {
+				if v := profile.EndOfLifeDate; v != nil {
+					d.Set("end_of_life_date", profile.EndOfLifeDate)
+				}
+
+				d.Set("exclude_from_latest", profile.ExcludeFromLatest)
+
+				replicationMode := string(galleryimageversions.ReplicationModeFull)
+				if profile.ReplicationMode != nil {
+					replicationMode = string(*profile.ReplicationMode)
+				}
+				d.Set("replication_mode", replicationMode)
+
+				if err := d.Set("target_region", flattenSharedImageVersionTargetRegions(profile.TargetRegions)); err != nil {
+					return fmt.Errorf("setting `target_region`: %+v", err)
+				}
+			}
+
+			if source := props.StorageProfile.Source; source != nil {
+				d.Set("managed_image_id", source.Id)
+			}
+
+			blobURI := ""
+			if props.StorageProfile.OsDiskImage != nil && props.StorageProfile.OsDiskImage.Source != nil && props.StorageProfile.OsDiskImage.Source.Uri != nil {
+				blobURI = *props.StorageProfile.OsDiskImage.Source.Uri
+			}
+			d.Set("blob_uri", blobURI)
+
+			osDiskSnapShotID := ""
+			storageAccountID := ""
+			if props.StorageProfile.OsDiskImage != nil && props.StorageProfile.OsDiskImage.Source != nil && props.StorageProfile.OsDiskImage.Source.Id != nil {
+				sourceID := *props.StorageProfile.OsDiskImage.Source.Id
+				if blobURI == "" {
+					osDiskSnapShotID = sourceID
+				} else {
+					storageAccountID = sourceID
+				}
+			}
+			d.Set("os_disk_snapshot_id", osDiskSnapShotID)
+			d.Set("storage_account_id", storageAccountID)
+
+			if safetyProfile := props.SafetyProfile; safetyProfile != nil {
+				d.Set("deletion_of_replicated_locations_enabled", pointer.From(safetyProfile.AllowDeletionOfReplicatedLocations))
+			}
+		}
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+	return nil
+}

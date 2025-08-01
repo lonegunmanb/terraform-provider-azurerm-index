@@ -1,0 +1,119 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/api"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apimanagementservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/delegationsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/deletedservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/policy"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/product"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signinsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signupsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	apimValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenApiManagementHostnameConfigurations(input *[]apimanagementservice.HostnameConfiguration, d *pluginsdk.ResourceData) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	managementResults := make([]interface{}, 0)
+	portalResults := make([]interface{}, 0)
+	developerPortalResults := make([]interface{}, 0)
+	proxyResults := make([]interface{}, 0)
+	scmResults := make([]interface{}, 0)
+
+	for _, config := range *input {
+		output := make(map[string]interface{})
+
+		output["host_name"] = config.HostName
+		output["negotiate_client_certificate"] = pointer.From(config.NegotiateClientCertificate)
+		output["key_vault_id"] = pointer.From(config.KeyVaultId)
+		output["ssl_keyvault_identity_client_id"] = pointer.From(config.IdentityClientId)
+
+		if config.Certificate != nil {
+			if config.Certificate.Expiry != "" {
+				output["expiry"] = config.Certificate.Expiry
+			}
+			output["thumbprint"] = config.Certificate.Thumbprint
+			output["subject"] = config.Certificate.Subject
+		}
+
+		output["certificate_source"] = pointer.From(config.CertificateSource)
+		output["certificate_status"] = pointer.From(config.CertificateStatus)
+
+		var configType string
+		switch strings.ToLower(string(config.Type)) {
+		case strings.ToLower(string(apimanagementservice.HostnameTypeProxy)):
+			// only set SSL binding for proxy types
+			output["default_ssl_binding"] = pointer.From(config.DefaultSslBinding)
+			proxyResults = append(proxyResults, output)
+			configType = "proxy"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeManagement)):
+			managementResults = append(managementResults, output)
+			configType = "management"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypePortal)):
+			portalResults = append(portalResults, output)
+			configType = "portal"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeDeveloperPortal)):
+			developerPortalResults = append(developerPortalResults, output)
+			configType = "developer_portal"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeScm)):
+			scmResults = append(scmResults, output)
+			configType = "scm"
+		}
+
+		existingHostnames := d.Get("hostname_configuration").([]interface{})
+		if len(existingHostnames) > 0 && configType != "" {
+			v := existingHostnames[0].(map[string]interface{})
+
+			if valsRaw, ok := v[configType]; ok {
+				vals := valsRaw.([]interface{})
+				schemaz.CopyCertificateAndPassword(vals, config.HostName, output)
+			}
+		}
+	}
+
+	if len(managementResults) == 0 && len(portalResults) == 0 && len(developerPortalResults) == 0 && len(proxyResults) == 0 && len(scmResults) == 0 {
+		return []interface{}{}
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"management":       managementResults,
+			"portal":           portalResults,
+			"developer_portal": developerPortalResults,
+			"proxy":            proxyResults,
+			"scm":              scmResults,
+		},
+	}
+}

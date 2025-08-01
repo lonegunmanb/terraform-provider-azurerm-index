@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/workspaces"
+	sentinelmetadata "github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2022-10-01-preview/metadata"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandMetadataDependencies(input interface{}) (dependencies *sentinelmetadata.MetadataDependencies, err error) {
+	if j, ok := input.(map[string]interface{}); ok {
+		dependencies = &sentinelmetadata.MetadataDependencies{}
+		// "name" is not returned in response, so it's not supported for now.
+		if v, ok := j["contentId"]; ok {
+			dependencies.ContentId = utils.String(v.(string))
+		}
+		if v, ok := j["kind"]; ok {
+			kind := sentinelmetadata.Kind(v.(string))
+			dependencies.Kind = &kind
+		}
+		if v, ok := j["version"]; ok {
+			dependencies.Version = utils.String(v.(string))
+		}
+		if v, ok := j["operator"]; ok {
+			op := sentinelmetadata.Operator(v.(string))
+			dependencies.Operator = &op
+		}
+		if v, ok := j["criteria"]; ok {
+			if array, ok := v.([]interface{}); ok {
+				var deps []sentinelmetadata.MetadataDependencies
+				for _, item := range array {
+					i, ok := item.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					if len(i) == 0 {
+						continue
+					}
+					dep, err := expandMetadataDependencies(i)
+					if err != nil {
+						return nil, err
+					}
+					deps = append(deps, *dep)
+				}
+				dependencies.Criteria = &deps
+			} else {
+				dep, err := expandMetadataDependencies(v)
+				if err != nil {
+					return nil, err
+				}
+				dependencies.Criteria = &[]sentinelmetadata.MetadataDependencies{*dep}
+			}
+		}
+		return dependencies, nil
+	}
+
+	return nil, fmt.Errorf("unable to parse metadata dependencies: %v", input)
+}

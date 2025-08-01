@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicefabric
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicefabric/2021-06-01/cluster"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	serviceFabricValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicefabric/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandServiceFabricClusterReverseProxyCertificateCommonNames(d *pluginsdk.ResourceData) *cluster.ServerCertificateCommonNames {
+	i := d.Get("reverse_proxy_certificate_common_names").([]interface{})
+	if len(i) == 0 || i[0] == nil {
+		return nil
+	}
+	input := i[0].(map[string]interface{})
+
+	commonNamesRaw := input["common_names"].(*pluginsdk.Set).List()
+	commonNames := make([]cluster.ServerCertificateCommonName, 0)
+
+	for _, commonName := range commonNamesRaw {
+		commonNameDetails := commonName.(map[string]interface{})
+
+		commonName := cluster.ServerCertificateCommonName{
+			CertificateCommonName:       commonNameDetails["certificate_common_name"].(string),
+			CertificateIssuerThumbprint: commonNameDetails["certificate_issuer_thumbprint"].(string),
+		}
+
+		commonNames = append(commonNames, commonName)
+	}
+
+	x509StoreName := cluster.X509StoreName(input["x509_store_name"].(string))
+
+	output := cluster.ServerCertificateCommonNames{
+		CommonNames:   &commonNames,
+		X509StoreName: &x509StoreName,
+	}
+
+	return &output
+}

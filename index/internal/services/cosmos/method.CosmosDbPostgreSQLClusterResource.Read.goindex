@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresqlhsc/2022-11-08/clusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r CosmosDbPostgreSQLClusterResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Cosmos.ClustersClient
+
+			id, err := clusters.ParseServerGroupsv2ID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			model := resp.Model
+			if model == nil {
+				return fmt.Errorf("retrieving %s: model was nil", id)
+			}
+
+			state := CosmosDbPostgreSQLClusterModel{
+				Name:              id.ServerGroupsv2Name,
+				ResourceGroupName: id.ResourceGroupName,
+				Location:          location.Normalize(model.Location),
+			}
+
+			if props := model.Properties; props != nil {
+				state.AdministratorLoginPassword = metadata.ResourceData.Get("administrator_login_password").(string)
+				state.SourceResourceId = metadata.ResourceData.Get("source_resource_id").(string)
+				state.SourceLocation = metadata.ResourceData.Get("source_location").(string)
+				state.PointInTimeInUTC = metadata.ResourceData.Get("point_in_time_in_utc").(string)
+				state.CoordinatorPublicIPAccessEnabled = pointer.From(props.CoordinatorEnablePublicIPAccess)
+				state.CoordinatorServerEdition = pointer.From(props.CoordinatorServerEdition)
+				state.CoordinatorStorageQuotaInMb = pointer.From(props.CoordinatorStorageQuotaInMb)
+				state.CoordinatorVCoreCount = pointer.From(props.CoordinatorVCores)
+				state.ServerNames = flattenServerNames(props.ServerNames)
+				state.HaEnabled = pointer.From(props.EnableHa)
+				state.NodeCount = pointer.From(props.NodeCount)
+				state.NodePublicIPAccessEnabled = pointer.From(props.NodeEnablePublicIPAccess)
+				state.NodeServerEdition = pointer.From(props.NodeServerEdition)
+				state.NodeStorageQuotaInMb = pointer.From(props.NodeStorageQuotaInMb)
+				state.NodeVCores = pointer.From(props.NodeVCores)
+				state.ShardsOnCoordinatorEnabled = pointer.From(props.EnableShardsOnCoordinator)
+				state.CitusVersion = pointer.From(props.CitusVersion)
+				state.PreferredPrimaryZone = pointer.From(props.PreferredPrimaryZone)
+				state.SqlVersion = pointer.From(props.PostgresqlVersion)
+				state.EarliestRestoreTime = pointer.From(props.EarliestRestoreTime)
+
+				if v := props.MaintenanceWindow; v != nil {
+					state.MaintenanceWindow = flattenMaintenanceWindow(v)
+				}
+			}
+
+			if model.Tags != nil {
+				state.Tags = *model.Tags
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

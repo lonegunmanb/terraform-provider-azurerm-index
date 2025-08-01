@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflows"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2022-10-01-preview/automationrules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAutomationRuleActions(d *pluginsdk.ResourceData, defaultTenantId string) ([]automationrules.AutomationRuleAction, error) {
+	actionIncident, err := expandAutomationRuleActionIncident(d.Get("action_incident").([]interface{}))
+	if err != nil {
+		return nil, err
+	}
+	actionPlaybook := expandAutomationRuleActionPlaybook(d.Get("action_playbook").([]interface{}), defaultTenantId)
+
+	if len(actionIncident)+len(actionPlaybook) == 0 {
+		return nil, nil
+	}
+
+	out := make([]automationrules.AutomationRuleAction, 0, len(actionIncident)+len(actionPlaybook))
+	out = append(out, actionIncident...)
+	out = append(out, actionPlaybook...)
+	return out, nil
+}

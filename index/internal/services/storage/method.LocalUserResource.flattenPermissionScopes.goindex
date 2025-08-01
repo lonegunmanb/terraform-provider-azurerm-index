@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/localusers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computevalidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r LocalUserResource) flattenPermissionScopes(input *[]localusers.PermissionScope) []PermissionScopeModel {
+	if input == nil {
+		return nil
+	}
+
+	output := make([]PermissionScopeModel, 0, len(*input))
+	for _, v := range *input {
+		permissions := PermissionsModel{}
+		// The Storage API's have a history of being case-insensitive, so we case-insensitively check the permission here.
+		np := strings.ToLower(v.Permissions)
+		if strings.Contains(np, "r") {
+			permissions.Read = true
+		}
+		if strings.Contains(np, "w") {
+			permissions.Write = true
+		}
+		if strings.Contains(np, "d") {
+			permissions.Delete = true
+		}
+		if strings.Contains(np, "l") {
+			permissions.List = true
+		}
+		if strings.Contains(np, "c") {
+			permissions.Create = true
+		}
+
+		output = append(output, PermissionScopeModel{
+			Permissions:  []PermissionsModel{permissions},
+			Service:      v.Service,
+			ResourceName: v.ResourceName,
+		})
+	}
+
+	return output
+}

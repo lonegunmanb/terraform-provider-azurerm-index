@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/privateendpoints"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceDatabricksWorkspacePrivateEndpointConnectionRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).DataBricks.WorkspacesClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+	workspace := d.Get("workspace_id").(string)
+	endpointId := d.Get("private_endpoint_id").(string)
+
+	id, err := workspaces.ParseWorkspaceID(workspace)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return fmt.Errorf("%s was not found", *id)
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	d.SetId(id.ID())
+
+	d.Set("workspace_id", workspace)
+	d.Set("private_endpoint_id", endpointId)
+
+	if model := resp.Model; model != nil {
+		if err := d.Set("connections", flattenPrivateEndpointConnections(model.Properties.PrivateEndpointConnections)); err != nil {
+			return fmt.Errorf("setting `connections`: %+v", err)
+		}
+	}
+
+	return nil
+}

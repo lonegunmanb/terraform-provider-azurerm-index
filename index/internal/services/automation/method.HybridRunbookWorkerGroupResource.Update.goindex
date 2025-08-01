@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/hybridrunbookworkergroup"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (m HybridRunbookWorkerGroupResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 10 * time.Minute,
+		Func: func(ctx context.Context, meta sdk.ResourceMetaData) (err error) {
+			client := meta.Client.Automation.HybridRunbookWorkerGroup
+			id, err := hybridrunbookworkergroup.ParseHybridRunbookWorkerGroupID(meta.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var model HybridRunbookWorkerGroupModel
+			if err = meta.Decode(&model); err != nil {
+				return fmt.Errorf("decoding err: %+v", err)
+			}
+
+			var upd hybridrunbookworkergroup.HybridRunbookWorkerGroupCreateOrUpdateParameters
+			if meta.ResourceData.HasChange("credential_name") {
+				upd.Properties = &hybridrunbookworkergroup.HybridRunbookWorkerGroupCreateOrUpdateProperties{}
+				upd.Properties.Credential = &hybridrunbookworkergroup.RunAsCredentialAssociationProperty{
+					Name: utils.String(model.CredentialName),
+				}
+			}
+			if _, err = client.Update(ctx, *id, upd); err != nil {
+				return fmt.Errorf("updating %s: %v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

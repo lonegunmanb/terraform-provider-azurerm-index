@@ -1,0 +1,129 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenAutoHealSettingsWindows(autoHealRules *webapps.AutoHealRules) []AutoHealSettingWindows {
+	if autoHealRules == nil {
+		return []AutoHealSettingWindows{}
+	}
+
+	result := AutoHealSettingWindows{}
+	// Triggers
+	if autoHealRules.Triggers != nil {
+		resultTrigger := AutoHealTriggerWindows{}
+		triggers := *autoHealRules.Triggers
+		if triggers.Requests != nil {
+			resultTrigger.Requests = []AutoHealRequestTrigger{{
+				Count:    pointer.From(triggers.Requests.Count),
+				Interval: pointer.From(triggers.Requests.TimeInterval),
+			}}
+		}
+
+		if privateBytes := triggers.PrivateBytesInKB; privateBytes != nil && *privateBytes != 0 {
+			resultTrigger.PrivateMemoryKB = *triggers.PrivateBytesInKB
+		}
+
+		statusCodeTriggers := make([]AutoHealStatusCodeTrigger, 0)
+		if triggers.StatusCodes != nil {
+			for _, s := range *triggers.StatusCodes {
+				t := AutoHealStatusCodeTrigger{
+					Interval: pointer.From(s.TimeInterval),
+					Path:     pointer.From(s.Path),
+				}
+
+				if s.Status != nil {
+					t.StatusCodeRange = strconv.FormatInt(*s.Status, 10)
+				}
+
+				if s.Count != nil {
+					t.Count = *s.Count
+				}
+
+				if s.SubStatus != nil {
+					t.SubStatus = *s.SubStatus
+				}
+
+				if s.Win32Status != nil {
+					t.Win32Status = pointer.From(s.Win32Status)
+				}
+				statusCodeTriggers = append(statusCodeTriggers, t)
+			}
+		}
+		if triggers.StatusCodesRange != nil {
+			for _, s := range *triggers.StatusCodesRange {
+				t := AutoHealStatusCodeTrigger{
+					Interval: pointer.From(s.TimeInterval),
+					Path:     pointer.From(s.Path),
+				}
+				if s.Count != nil {
+					t.Count = *s.Count
+				}
+
+				if s.StatusCodes != nil {
+					t.StatusCodeRange = *s.StatusCodes
+				}
+				statusCodeTriggers = append(statusCodeTriggers, t)
+			}
+		}
+		resultTrigger.StatusCodes = statusCodeTriggers
+
+		slowRequestTriggers := make([]AutoHealSlowRequest, 0)
+		if triggers.SlowRequests != nil {
+			slowRequestTriggers = append(slowRequestTriggers, AutoHealSlowRequest{
+				TimeTaken: pointer.From(triggers.SlowRequests.TimeTaken),
+				Interval:  pointer.From(triggers.SlowRequests.TimeInterval),
+				Count:     pointer.From(triggers.SlowRequests.Count),
+				Path:      pointer.From(triggers.SlowRequests.Path),
+			})
+		}
+
+		slowRequestTriggersWithPaths := make([]AutoHealSlowRequestWithPath, 0)
+		if triggers.SlowRequestsWithPath != nil {
+			for _, v := range *triggers.SlowRequestsWithPath {
+				sr := AutoHealSlowRequestWithPath{
+					TimeTaken: pointer.From(v.TimeTaken),
+					Interval:  pointer.From(v.TimeInterval),
+					Count:     pointer.From(v.Count),
+					Path:      pointer.From(v.Path),
+				}
+				slowRequestTriggersWithPaths = append(slowRequestTriggersWithPaths, sr)
+			}
+		}
+
+		resultTrigger.SlowRequests = slowRequestTriggers
+		resultTrigger.SlowRequestsWithPath = slowRequestTriggersWithPaths
+		result.Triggers = []AutoHealTriggerWindows{resultTrigger}
+	}
+
+	// Actions
+	if autoHealRules.Actions != nil {
+		actions := *autoHealRules.Actions
+		customActions := make([]AutoHealCustomAction, 0)
+		if actions.CustomAction != nil {
+			customActions = append(customActions, AutoHealCustomAction{
+				Executable: pointer.From(actions.CustomAction.Exe),
+				Parameters: pointer.From(actions.CustomAction.Parameters),
+			})
+		}
+
+		resultActions := AutoHealActionWindows{
+			ActionType:         string(pointer.From(actions.ActionType)),
+			CustomAction:       customActions,
+			MinimumProcessTime: pointer.From(actions.MinProcessExecutionTime),
+		}
+		result.Actions = []AutoHealActionWindows{resultActions}
+	}
+
+	if result.Actions != nil || result.Triggers != nil {
+		return []AutoHealSettingWindows{result}
+	}
+
+	return nil
+}

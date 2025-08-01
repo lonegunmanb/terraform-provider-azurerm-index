@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privatelinkservices"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandPrivateLinkServiceIPConfiguration(input []interface{}) *[]privatelinkservices.PrivateLinkServiceIPConfiguration {
+	if len(input) == 0 {
+		return nil
+	}
+
+	results := make([]privatelinkservices.PrivateLinkServiceIPConfiguration, 0)
+
+	for _, item := range input {
+		v := item.(map[string]interface{})
+		privateIpAddress := v["private_ip_address"].(string)
+		subnetId := v["subnet_id"].(string)
+		privateIpAddressVersion := v["private_ip_address_version"].(string)
+		name := v["name"].(string)
+		primary := v["primary"].(bool)
+
+		result := privatelinkservices.PrivateLinkServiceIPConfiguration{
+			Name: pointer.To(name),
+			Properties: &privatelinkservices.PrivateLinkServiceIPConfigurationProperties{
+				PrivateIPAddress:        pointer.To(privateIpAddress),
+				PrivateIPAddressVersion: pointer.To(privatelinkservices.IPVersion(privateIpAddressVersion)),
+				Subnet: &privatelinkservices.Subnet{
+					Id: pointer.To(subnetId),
+				},
+				Primary: pointer.To(primary),
+			},
+		}
+
+		if privateIpAddress != "" {
+			result.Properties.PrivateIPAllocationMethod = pointer.To(privatelinkservices.IPAllocationMethodStatic)
+		} else {
+			result.Properties.PrivateIPAllocationMethod = pointer.To(privatelinkservices.IPAllocationMethodDynamic)
+		}
+
+		results = append(results, result)
+	}
+
+	return &results
+}

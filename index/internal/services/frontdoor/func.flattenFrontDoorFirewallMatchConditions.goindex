@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFrontDoorFirewallMatchConditions(condition []webapplicationfirewallpolicies.MatchCondition) []interface{} {
+	if condition == nil {
+		return make([]interface{}, 0)
+	}
+
+	results := make([]interface{}, 0)
+	for _, c := range condition {
+		output := make(map[string]interface{})
+
+		output["match_variable"] = string(c.MatchVariable)
+		output["operator"] = string(c.Operator)
+		output["match_values"] = c.MatchValue
+		output["transforms"] = FlattenTransformSlice(c.Transforms)
+
+		if v := c.Selector; v != nil {
+			output["selector"] = *v
+		}
+
+		if v := c.NegateCondition; v != nil {
+			output["negation_condition"] = *v
+		}
+
+		results = append(results, output)
+	}
+
+	return results
+}

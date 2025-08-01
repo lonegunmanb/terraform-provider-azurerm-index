@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2023-02-01/webpubsub"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	eventhubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandEventListener(input []interface{}) (*[]webpubsub.EventListener, error) {
+	result := make([]webpubsub.EventListener, 0)
+	if len(input) == 0 {
+		return &result, nil
+	}
+
+	for _, eventListenerItem := range input {
+		block := eventListenerItem.(map[string]interface{})
+		systemEvents := make([]string, 0)
+		userEventPattern := ""
+		if v, ok := block["user_event_name_filter"]; ok && len(v.([]interface{})) > 0 {
+			userEventPatternList := utils.ExpandStringSlice(v.([]interface{}))
+			userEventPattern = strings.Join(*userEventPatternList, ",")
+		}
+
+		if v, ok := block["system_event_name_filter"]; ok {
+			for _, item := range v.([]interface{}) {
+				systemEvents = append(systemEvents, item.(string))
+			}
+		}
+		filter := webpubsub.EventNameFilter{
+			SystemEvents:     &systemEvents,
+			UserEventPattern: utils.String(userEventPattern),
+		}
+
+		endpointName := block["eventhub_namespace_name"].(string)
+		fullQualifiedName := endpointName + ".servicebus.windows.net"
+		if _, ok := block["eventhub_name"]; !ok {
+			return nil, fmt.Errorf("no event hub is specified")
+		}
+		ehName := block["eventhub_name"].(string)
+		endpoint := webpubsub.EventHubEndpoint{
+			FullyQualifiedNamespace: fullQualifiedName,
+			EventHubName:            ehName,
+		}
+
+		result = append(result, webpubsub.EventListener{
+			Filter:   filter,
+			Endpoint: endpoint,
+		})
+	}
+	return &result, nil
+}

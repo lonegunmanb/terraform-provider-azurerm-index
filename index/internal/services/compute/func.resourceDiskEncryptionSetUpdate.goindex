@@ -1,0 +1,149 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-02/diskencryptionsets"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func resourceDiskEncryptionSetUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Compute.DiskEncryptionSetsClient
+	keyVaultsClient := meta.(*clients.Client).KeyVault
+	keyVaultKeyClient := meta.(*clients.Client).KeyVault.ManagementClient
+	managedkeyBundleClient := meta.(*clients.Client).ManagedHSMs.DataPlaneKeysClient
+	env := meta.(*clients.Client).Account.Environment
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := commonids.ParseDiskEncryptionSetID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	update := diskencryptionsets.DiskEncryptionSetUpdate{}
+
+	if d.HasChange("identity") {
+		expandedIdentity, err := expandDiskEncryptionSetIdentity(d.Get("identity").([]interface{}))
+		if err != nil {
+			return fmt.Errorf("expanding `identity`: %+v", err)
+		}
+
+		update.Identity = expandedIdentity
+	}
+
+	if d.HasChange("tags") {
+		update.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+	}
+
+	rotationToLatestKeyVersionEnabled := d.Get("auto_key_rotation_enabled").(bool)
+
+	if keyVaultKeyId, ok := d.GetOk("key_vault_key_id"); ok && d.HasChange("key_vault_key_id") {
+		keyVaultKey, err := keyVaultParse.ParseOptionallyVersionedNestedItemID(keyVaultKeyId.(string))
+		if err != nil {
+			return err
+		}
+
+		err = validateKeyAndRotationEnabled(rotationToLatestKeyVersionEnabled, keyVaultKey.Version != "", keyVaultKey.ID())
+		if err != nil {
+			return err
+		}
+
+		keyVaultDetails, err := diskEncryptionSetRetrieveKeyVault(ctx, keyVaultsClient, id.SubscriptionId, *keyVaultKey)
+		if err != nil {
+			return fmt.Errorf("validating Key Vault Key %q for Disk Encryption Set: %+v", keyVaultKey.ID(), err)
+		}
+
+		err = validateKeyVaultDetails(keyVaultDetails)
+		if err != nil {
+			return err
+		}
+
+		if update.Properties == nil {
+			update.Properties = &diskencryptionsets.DiskEncryptionSetUpdateProperties{
+				ActiveKey: &diskencryptionsets.KeyForDiskEncryptionSet{},
+			}
+		}
+
+		// NOTE: The API requires a versioned key to be sent however if rotationToLatestKeyVersion is enabled this will cause
+		// terraform to revert the rotated key to the previous version that is defined in the configuration file...
+		// Issue #22864
+		if rotationToLatestKeyVersionEnabled {
+			// Get the latest version of the key...
+			keyBundle, err := keyVaultKeyClient.GetKey(ctx, keyVaultKey.KeyVaultBaseUrl, keyVaultKey.Name, "")
+			if err != nil {
+				return err
+			}
+
+			if keyBundle.Key != nil {
+				update.Properties.ActiveKey.KeyURL = pointer.From(keyBundle.Key.Kid)
+			}
+		} else {
+			// Use the passed version of the key...
+			update.Properties.ActiveKey.KeyURL = keyVaultKey.ID()
+		}
+
+		if keyVaultDetails != nil {
+			update.Properties.ActiveKey.SourceVault = &diskencryptionsets.SourceVault{
+				Id: utils.String(keyVaultDetails.keyVaultId),
+			}
+		}
+	} else if managedHsmKeyId, ok := d.GetOk("managed_hsm_key_id"); ok && d.HasChange("managed_hsm_key_id") {
+		keyUrl, err := getManagedHsmKeyURL(ctx, managedkeyBundleClient, managedHsmKeyId.(string), rotationToLatestKeyVersionEnabled, env)
+		if err != nil {
+			return err
+		}
+		update.Properties.ActiveKey.KeyURL = keyUrl
+	}
+
+	if d.HasChange("auto_key_rotation_enabled") {
+		if update.Properties == nil {
+			update.Properties = &diskencryptionsets.DiskEncryptionSetUpdateProperties{}
+		}
+
+		update.Properties.RotationToLatestKeyVersionEnabled = utils.Bool(rotationToLatestKeyVersionEnabled)
+	}
+
+	if d.HasChange("federated_client_id") {
+		if update.Properties == nil {
+			update.Properties = &diskencryptionsets.DiskEncryptionSetUpdateProperties{}
+		}
+
+		v, ok := d.GetOk("federated_client_id")
+		if ok {
+			update.Properties.FederatedClientId = utils.String(v.(string))
+		} else {
+			update.Properties.FederatedClientId = utils.String("None") // this is the only way to remove the federated client id
+		}
+	}
+
+	err = client.UpdateThenPoll(ctx, *id, update)
+	if err != nil {
+		return fmt.Errorf("updating Disk Encryption Set %q (Resource Group %q): %+v", id.DiskEncryptionSetName, id.ResourceGroupName, err)
+	}
+
+	return resourceDiskEncryptionSetRead(d, meta)
+}

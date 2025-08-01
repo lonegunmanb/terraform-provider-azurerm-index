@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenCdnFrontdoorRouteCacheConfiguration(input *cdn.AfdRouteCacheConfiguration) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	queryParameters := make([]interface{}, 0)
+	if input.QueryParameters != nil {
+		queryParameters = flattenCsvToStringSlice(input.QueryParameters)
+	}
+
+	cachingBehavior := ""
+	if input.QueryStringCachingBehavior != "" {
+		cachingBehavior = string(input.QueryStringCachingBehavior)
+	}
+
+	compressionEnabled := false
+	contentTypesToCompress := make([]interface{}, 0)
+	if v := input.CompressionSettings; v != nil {
+		if v.IsCompressionEnabled != nil {
+			compressionEnabled = *v.IsCompressionEnabled
+		}
+		contentTypesToCompress = utils.FlattenStringSlice(v.ContentTypesToCompress)
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"compression_enabled":           compressionEnabled,
+			"content_types_to_compress":     contentTypesToCompress,
+			"query_string_caching_behavior": cachingBehavior,
+			"query_strings":                 queryParameters,
+		},
+	}
+}

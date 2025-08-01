@@ -1,0 +1,154 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2023-02-01/webpubsub"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	eventhubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceWebPubSubHub() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceWebPubSubHubCreateUpdate,
+		Read:   resourceWebPubSubHubRead,
+		Update: resourceWebPubSubHubCreateUpdate,
+		Delete: resourceWebPubSubHubDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := webpubsub.ParseHubID(id)
+			return err
+		}),
+
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.WebPubsubHubV0ToV1{},
+		}),
+		SchemaVersion: 1,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.WebPubSubHubName(),
+			},
+
+			"web_pubsub_id": commonschema.ResourceIDReferenceRequiredForceNew(&webpubsub.WebPubSubId{}),
+
+			"event_handler": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"url_template": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+
+						"user_event_pattern": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+
+						"system_events": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice([]string{
+									"connect",
+									"connected",
+									"disconnected",
+								}, false),
+							},
+						},
+
+						"auth": {
+							Type:     pluginsdk.TypeList,
+							MaxItems: 1,
+							MinItems: 1,
+							Optional: true,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"managed_identity_id": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.Any(
+											validation.IsUUID,
+											commonids.ValidateUserAssignedIdentityID,
+										),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"event_listener": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"user_event_name_filter": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"system_event_name_filter": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice([]string{
+									"connected",
+									"disconnected",
+								}, false),
+							},
+						},
+
+						"eventhub_namespace_name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: eventhubValidate.ValidateEventHubNamespaceName(),
+						},
+
+						"eventhub_name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: eventhubValidate.ValidateEventHubName(),
+						},
+					},
+				},
+			},
+
+			"anonymous_connections_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+		},
+	}
+}

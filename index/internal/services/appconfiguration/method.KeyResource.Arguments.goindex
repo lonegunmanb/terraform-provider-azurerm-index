@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appconfiguration
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appconfiguration/2024-05-01/configurationstores"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appconfiguration/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appconfiguration/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appconfiguration/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appconfiguration/1.0/appconfiguration"
+)
+func (k KeyResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"configuration_store_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: configurationstores.ValidateConfigurationStoreID,
+		},
+		"key": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validation.StringIsNotWhiteSpace,
+		},
+		"content_type": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			// NOTE: O+C We set some values in this field depending on the `type` so this needs to remain Computed
+			Computed: true,
+		},
+		"etag": {
+			Type: pluginsdk.TypeString,
+			// NOTE: O+C The value of this is updated anytime the resource changes so this should remain Computed
+			Computed: true,
+			Optional: true,
+		},
+		"label": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ForceNew: true,
+		},
+		"value": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ConflictsWith: []string{
+				"vault_key_reference",
+			},
+			// if `type` is set to `vault`, then `value` will be set by `vault_key_reference`
+			DiffSuppressFunc: func(k, old, new string, d *pluginsdk.ResourceData) bool {
+				return d.Get("type").(string) == KeyTypeVault && d.Get("vault_key_reference").(string) != "" && old != "" && new == ""
+			},
+		},
+		"locked": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+		},
+		"type": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      KeyTypeKV,
+			ValidateFunc: validation.StringInSlice([]string{KeyTypeVault, KeyTypeKV}, false),
+		},
+		"vault_key_reference": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.IsURLWithHTTPorHTTPS,
+			ConflictsWith: []string{
+				"value",
+			},
+		},
+		"tags": tags.Schema(),
+	}
+}

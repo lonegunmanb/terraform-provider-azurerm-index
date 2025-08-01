@@ -1,0 +1,178 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"math"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func FlattenAuthSettings(auth *webapps.SiteAuthSettings) []AuthSettings {
+	if auth == nil || auth.Properties == nil || !pointer.From(auth.Properties.Enabled) || strings.ToLower(pointer.From(auth.Properties.ConfigVersion)) != "v1" {
+		return []AuthSettings{}
+	}
+
+	props := *auth.Properties
+
+	result := AuthSettings{
+		DefaultProvider:             string(pointer.From(props.DefaultProvider)),
+		UnauthenticatedClientAction: string(pointer.From(props.UnauthenticatedClientAction)),
+	}
+
+	if props.Enabled != nil {
+		result.Enabled = *props.Enabled
+	}
+
+	if props.AdditionalLoginParams != nil {
+		params := make(map[string]string)
+		for _, v := range *props.AdditionalLoginParams {
+			parts := strings.Split(v, "=")
+			if len(parts) != 2 {
+				continue
+			}
+			params[parts[0]] = parts[1]
+		}
+		result.AdditionalLoginParameters = params
+	}
+
+	var allowedRedirectUrls []string
+	if props.AllowedExternalRedirectURLs != nil {
+		allowedRedirectUrls = *props.AllowedExternalRedirectURLs
+	}
+	result.AllowedExternalRedirectURLs = allowedRedirectUrls
+
+	if props.Issuer != nil {
+		result.Issuer = *props.Issuer
+	}
+
+	if props.RuntimeVersion != nil {
+		result.RuntimeVersion = *props.RuntimeVersion
+	}
+
+	if props.TokenRefreshExtensionHours != nil {
+		result.TokenRefreshExtensionHours = *props.TokenRefreshExtensionHours
+	}
+
+	if props.TokenStoreEnabled != nil {
+		result.TokenStoreEnabled = *props.TokenStoreEnabled
+	}
+
+	// AAD Auth
+	if props.ClientId != nil {
+		aadAuthSettings := AadAuthSettings{
+			ClientId: *props.ClientId,
+		}
+
+		if props.ClientSecret != nil {
+			aadAuthSettings.ClientSecret = *props.ClientSecret
+		}
+
+		if props.ClientSecretSettingName != nil {
+			aadAuthSettings.ClientSecretSettingName = *props.ClientSecretSettingName
+		}
+
+		if props.AllowedAudiences != nil {
+			aadAuthSettings.AllowedAudiences = *props.AllowedAudiences
+		}
+
+		result.AzureActiveDirectoryAuth = []AadAuthSettings{aadAuthSettings}
+	}
+
+	if props.FacebookAppId != nil {
+		facebookAuthSettings := FacebookAuthSettings{
+			AppId: *props.FacebookAppId,
+		}
+
+		if props.FacebookAppSecret != nil {
+			facebookAuthSettings.AppSecret = *props.FacebookAppSecret
+		}
+
+		if props.FacebookAppSecretSettingName != nil {
+			facebookAuthSettings.AppSecretSettingName = *props.FacebookAppSecretSettingName
+		}
+
+		if props.FacebookOAuthScopes != nil {
+			facebookAuthSettings.OauthScopes = *props.FacebookOAuthScopes
+		}
+
+		result.FacebookAuth = []FacebookAuthSettings{facebookAuthSettings}
+	}
+
+	if props.GitHubClientId != nil {
+		githubAuthSetting := GithubAuthSettings{
+			ClientId: *props.GitHubClientId,
+		}
+
+		if props.GitHubClientSecret != nil {
+			githubAuthSetting.ClientSecret = *props.GitHubClientSecret
+		}
+
+		if props.GitHubClientSecretSettingName != nil {
+			githubAuthSetting.ClientSecretSettingName = *props.GitHubClientSecretSettingName
+		}
+
+		result.GithubAuth = []GithubAuthSettings{githubAuthSetting}
+	}
+
+	if props.GoogleClientId != nil {
+		googleAuthSettings := GoogleAuthSettings{
+			ClientId: *props.GoogleClientId,
+		}
+
+		if props.GoogleClientSecret != nil {
+			googleAuthSettings.ClientSecret = *props.GoogleClientSecret
+		}
+
+		if props.GoogleClientSecretSettingName != nil {
+			googleAuthSettings.ClientSecretSettingName = *props.GoogleClientSecretSettingName
+		}
+
+		if props.GoogleOAuthScopes != nil {
+			googleAuthSettings.OauthScopes = *props.GoogleOAuthScopes
+		}
+
+		result.GoogleAuth = []GoogleAuthSettings{googleAuthSettings}
+	}
+
+	if props.MicrosoftAccountClientId != nil {
+		microsoftAuthSettings := MicrosoftAuthSettings{
+			ClientId: *props.MicrosoftAccountClientId,
+		}
+
+		if props.MicrosoftAccountClientSecret != nil {
+			microsoftAuthSettings.ClientSecret = *props.MicrosoftAccountClientSecret
+		}
+
+		if props.MicrosoftAccountClientSecretSettingName != nil {
+			microsoftAuthSettings.ClientSecretSettingName = *props.MicrosoftAccountClientSecretSettingName
+		}
+
+		if props.MicrosoftAccountOAuthScopes != nil {
+			microsoftAuthSettings.OauthScopes = *props.MicrosoftAccountOAuthScopes
+		}
+
+		result.MicrosoftAuth = []MicrosoftAuthSettings{microsoftAuthSettings}
+	}
+
+	if props.TwitterConsumerKey != nil {
+		twitterAuthSetting := TwitterAuthSettings{
+			ConsumerKey: *props.TwitterConsumerKey,
+		}
+		if props.TwitterConsumerSecret != nil {
+			twitterAuthSetting.ConsumerSecret = *props.TwitterConsumerSecret
+		}
+		if props.TwitterConsumerSecretSettingName != nil {
+			twitterAuthSetting.ConsumerSecretSettingName = *props.TwitterConsumerSecretSettingName
+		}
+
+		result.TwitterAuth = []TwitterAuthSettings{twitterAuthSetting}
+	}
+
+	return []AuthSettings{result}
+}

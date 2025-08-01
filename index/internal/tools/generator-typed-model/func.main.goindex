@@ -1,0 +1,33 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"sort"
+	"strings"
+
+	. "github.com/dave/jennifer/jen"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+)
+func main() {
+	flag.Parse()
+	if len(flag.Args()) != 1 {
+		fmt.Fprintln(os.Stderr, "Usage: generator-typed-model <resource_type>")
+		os.Exit(1)
+	}
+	rt := flag.Args()[0]
+	resource, ok := provider.AzureProvider().ResourcesMap[rt]
+	if !ok {
+		log.Fatalf("unknown resource type: %s", rt)
+	}
+
+	f := NewFile("main")
+	modelStmts := modelForSchemaMap(snake2Camel(strings.TrimPrefix(rt, "azurerm_"))+"Model", resource.Schema)
+	for _, stmt := range modelStmts {
+		stmt := stmt
+		f.Add(&stmt)
+	}
+	fmt.Printf("%#v", f)
+}

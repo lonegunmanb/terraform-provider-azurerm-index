@@ -1,0 +1,30 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func NewNestedItemID(keyVaultBaseUrl string, nestedItemType NestedItemObjectType, name, version string) (*NestedItemId, error) {
+	keyVaultUrl, err := url.Parse(keyVaultBaseUrl)
+	if err != nil || keyVaultBaseUrl == "" {
+		return nil, fmt.Errorf("parsing %q: %+v", keyVaultBaseUrl, err)
+	}
+	// (@jackofallops) - Log Analytics service adds the port number to the API returns, so we strip it here
+	if hostParts := strings.Split(keyVaultUrl.Host, ":"); len(hostParts) > 1 {
+		keyVaultUrl.Host = hostParts[0]
+	}
+
+	if strings.Contains(strings.ToLower(keyVaultBaseUrl), ".managedhsm.") {
+		return nil, fmt.Errorf("internal-error: Managed HSM IDs are not supported as Key Vault Nested Items")
+	}
+
+	return &NestedItemId{
+		KeyVaultBaseUrl: keyVaultUrl.String(),
+		NestedItemType:  nestedItemType,
+		Name:            name,
+		Version:         version,
+	}, nil
+}

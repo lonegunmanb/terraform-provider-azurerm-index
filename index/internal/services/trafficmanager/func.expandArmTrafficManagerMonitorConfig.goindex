@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/trafficmanager
+import (
+	"errors"
+	"fmt"
+	"log"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/trafficmanager/2022-04-01/profiles"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/trafficmanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandArmTrafficManagerMonitorConfig(d *pluginsdk.ResourceData) *profiles.MonitorConfig {
+	monitorSets := d.Get("monitor_config").([]interface{})
+	monitor := monitorSets[0].(map[string]interface{})
+
+	customHeaders := expandArmTrafficManagerCustomHeadersConfig(monitor["custom_header"].([]interface{}))
+
+	protocol := profiles.MonitorProtocol(monitor["protocol"].(string))
+	cfg := profiles.MonitorConfig{
+		Protocol:                  &protocol,
+		CustomHeaders:             customHeaders,
+		Port:                      utils.Int64(int64(monitor["port"].(int))),
+		Path:                      utils.String(monitor["path"].(string)),
+		IntervalInSeconds:         utils.Int64(int64(monitor["interval_in_seconds"].(int))),
+		TimeoutInSeconds:          utils.Int64(int64(monitor["timeout_in_seconds"].(int))),
+		ToleratedNumberOfFailures: utils.Int64(int64(monitor["tolerated_number_of_failures"].(int))),
+	}
+
+	if v, ok := monitor["expected_status_code_ranges"].([]interface{}); ok {
+		ranges := make([]profiles.MonitorConfigExpectedStatusCodeRangesInlined, 0)
+		for _, r := range v {
+			parts := strings.Split(r.(string), "-")
+			min, _ := strconv.Atoi(parts[0])
+			max, _ := strconv.Atoi(parts[1])
+			ranges = append(ranges, profiles.MonitorConfigExpectedStatusCodeRangesInlined{
+				Min: utils.Int64(int64(min)),
+				Max: utils.Int64(int64(max)),
+			})
+		}
+		cfg.ExpectedStatusCodeRanges = &ranges
+	}
+
+	return &cfg
+}

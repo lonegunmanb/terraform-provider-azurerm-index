@@ -1,0 +1,137 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func flattenSpringCloudGitPatternRepository(input *[]appplatform.GitPatternRepository, d *pluginsdk.ResourceData) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	// prepare old state to find sensitive props not returned by API.
+	oldGitPatternRepositories := map[string]interface{}{}
+	if oldGitSettings := d.Get("config_server_git_setting").([]interface{}); len(oldGitSettings) > 0 {
+		oldGitSetting := oldGitSettings[0].(map[string]interface{})
+		for _, r := range oldGitSetting["repository"].([]interface{}) {
+			repo := r.(map[string]interface{})
+			if name, ok := repo["name"]; ok {
+				oldGitPatternRepositories[name.(string)] = r
+			}
+		}
+	}
+
+	for _, item := range *input {
+		name := ""
+		if item.Name != nil {
+			name = *item.Name
+		}
+
+		uri := ""
+		if item.URI != nil {
+			uri = *item.URI
+		}
+
+		label := ""
+		if item.Label != nil {
+			label = *item.Label
+		}
+
+		// prepare old state to find sensitive props not returned by API.
+		oldGitPatternRepository := make(map[string]interface{})
+		if gpr, ok := oldGitPatternRepositories[name]; ok {
+			oldGitPatternRepository = gpr.(map[string]interface{})
+		}
+
+		pattern := utils.FlattenStringSlice(item.Pattern)
+		searchPaths := utils.FlattenStringSlice(item.SearchPaths)
+
+		httpBasicAuth := []interface{}{}
+		if item.Username != nil && item.Password != nil {
+			// username and password returned by API are *
+			// to avoid state diff, we get the props from old state
+			username := ""
+			password := ""
+			if v, ok := oldGitPatternRepository["http_basic_auth"]; ok {
+				oldHTTPBasicAuth := v.([]interface{})
+				if len(oldHTTPBasicAuth) > 0 {
+					oldItem := oldHTTPBasicAuth[0].(map[string]interface{})
+					username = oldItem["username"].(string)
+					password = oldItem["password"].(string)
+				}
+			}
+
+			httpBasicAuth = []interface{}{
+				map[string]interface{}{
+					"username": username,
+					"password": password,
+				},
+			}
+		}
+
+		sshAuth := []interface{}{}
+		if item.PrivateKey != nil {
+			// private_key, host_key and host_key_algorithm returned by API are *
+			// to avoid state diff, we get the props from old state
+			privateKey := ""
+			hostKey := ""
+			hostKeyAlgorithm := ""
+			if v, ok := oldGitPatternRepository["ssh_auth"]; ok {
+				sshAuth := v.([]interface{})
+				if len(sshAuth) > 0 {
+					oldItem := sshAuth[0].(map[string]interface{})
+					privateKey = oldItem["private_key"].(string)
+					hostKey = oldItem["host_key"].(string)
+					hostKeyAlgorithm = oldItem["host_key_algorithm"].(string)
+				}
+			}
+
+			strictHostKeyChecking := false
+			if item.StrictHostKeyChecking != nil {
+				strictHostKeyChecking = *item.StrictHostKeyChecking
+			}
+
+			sshAuth = []interface{}{
+				map[string]interface{}{
+					"private_key":                      privateKey,
+					"host_key":                         hostKey,
+					"host_key_algorithm":               hostKeyAlgorithm,
+					"strict_host_key_checking_enabled": strictHostKeyChecking,
+				},
+			}
+		}
+
+		results = append(results, map[string]interface{}{
+			"name":            name,
+			"uri":             uri,
+			"label":           label,
+			"pattern":         pattern,
+			"search_paths":    searchPaths,
+			"http_basic_auth": httpBasicAuth,
+			"ssh_auth":        sshAuth,
+		})
+	}
+
+	return results
+}

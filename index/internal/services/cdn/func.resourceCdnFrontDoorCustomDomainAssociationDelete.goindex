@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCdnFrontDoorCustomDomainAssociationDelete(d *pluginsdk.ResourceData, meta interface{}) error {
+	// since you are deleting the resource you cannot grab the value from the config
+	// because it will be empty, you have to get it from the states old value...
+	oCdId, _ := d.GetChange("cdn_frontdoor_custom_domain_id")
+
+	cdId, err := parse.FrontDoorCustomDomainID(oCdId.(string))
+	if err != nil {
+		return err
+	}
+
+	id, err := parse.FrontDoorCustomDomainAssociationID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	oRids, _ := d.GetChange("cdn_frontdoor_route_ids")
+	oR := oRids.([]interface{})
+
+	v, _, err := expandRoutes(oR)
+	if err != nil {
+		return err
+	}
+
+	if len(*v) != 0 {
+		if err := removeCustomDomainAssociationFromRoutes(d, meta, v, cdId); err != nil {
+			return fmt.Errorf("deleting %s: %+v", id, err)
+		}
+	}
+
+	d.SetId("")
+
+	return nil
+}

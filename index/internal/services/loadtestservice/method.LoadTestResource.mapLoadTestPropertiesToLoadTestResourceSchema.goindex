@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadtestservice
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/loadtestservice/2022-12-01/loadtests"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r LoadTestResource) mapLoadTestPropertiesToLoadTestResourceSchema(input loadtests.LoadTestProperties, output *LoadTestResourceSchema) error {
+	output.DataPlaneURI = pointer.From(input.DataPlaneURI)
+	output.Description = pointer.From(input.Description)
+
+	if encryption := input.Encryption; encryption != nil {
+		outputEncryption := make([]LoadTestEncryption, 0)
+		outputEncryptionIdentity := make([]LoadTestEncryptionIdentity, 0)
+		output.Encryption = append(outputEncryption, LoadTestEncryption{
+			KeyURL:   pointer.From(encryption.KeyURL),
+			Identity: outputEncryptionIdentity,
+		})
+		if encryptionIdentity := encryption.Identity; encryptionIdentity != nil {
+			output.Encryption[0].Identity = append(output.Encryption[0].Identity, LoadTestEncryptionIdentity{
+				IdentityID: pointer.From(encryptionIdentity.ResourceId),
+			})
+
+			if encryptionIdentity.Type != nil {
+				output.Encryption[0].Identity[0].Type = string(pointer.From(encryptionIdentity.Type))
+			}
+		}
+	}
+	return nil
+}

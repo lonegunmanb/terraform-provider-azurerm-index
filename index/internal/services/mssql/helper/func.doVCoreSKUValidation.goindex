@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper
+import (
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func doVCoreSKUValidation(s sku) error {
+	if s.MaxAllowedGB == 0 {
+		return errors.New(getVCoreCapacityErrorMsg(s))
+	}
+
+	if s.MaxSizeGb > s.MaxAllowedGB {
+		return fmt.Errorf("service tier '%s' %s with a 'capacity' of %d vCores must have a 'max_size_gb' between 5 GB and %d GB, got %d GB", s.Tier, s.Family, s.Capacity, int(s.MaxAllowedGB), int(s.MaxSizeGb))
+	}
+
+	if s.Tier != "Hyperscale" && int(s.MaxSizeGb) < 5 {
+		return fmt.Errorf("service tier '%s' must have a 'max_size_gb' value equal to or greater than 5 GB, got %d GB", s.Tier, int(s.MaxSizeGb))
+	}
+
+	if s.MaxSizeGb != math.Trunc(s.MaxSizeGb) {
+		return fmt.Errorf("'max_size_gb' must be a whole number, got %f GB", s.MaxSizeGb)
+	}
+
+	if s.MaxCapacity > float64(s.Capacity) {
+		return fmt.Errorf("service tier '%s' perDatabaseSettings 'maxCapacity'(%d) must not be higher than the SKUs 'capacity'(%d) value", s.Tier, int(s.MaxCapacity), s.Capacity)
+	}
+
+	if s.MinCapacity > s.MaxCapacity {
+		return fmt.Errorf("perDatabaseSettings 'maxCapacity'(%d) must be greater than or equal to the perDatabaseSettings 'minCapacity'(%d) value", int(s.MaxCapacity), int(s.MinCapacity))
+	}
+
+	return nil
+}

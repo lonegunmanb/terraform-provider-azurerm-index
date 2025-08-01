@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func (sbu BlobUpload) createEmptyBlockBlob(ctx context.Context) error {
+	if sbu.ContentMD5 != "" {
+		return errors.New("`content_md5` cannot be specified for empty Block blobs")
+	}
+
+	input := blobs.PutBlockBlobInput{
+		ContentType: pointer.To(sbu.ContentType),
+		MetaData:    sbu.MetaData,
+	}
+	if sbu.EncryptionScope != "" {
+		input.EncryptionScope = pointer.To(sbu.EncryptionScope)
+	}
+	if _, err := sbu.Client.PutBlockBlob(ctx, sbu.ContainerName, sbu.BlobName, input); err != nil {
+		return fmt.Errorf("PutBlockBlob: %s", err)
+	}
+
+	return nil
+}

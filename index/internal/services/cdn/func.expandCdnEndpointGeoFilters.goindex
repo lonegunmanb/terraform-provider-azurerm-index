@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandCdnEndpointGeoFilters(d *pluginsdk.ResourceData) *[]cdn.GeoFilter {
+	filters := make([]cdn.GeoFilter, 0)
+
+	inputFilters := d.Get("geo_filter").([]interface{})
+	for _, v := range inputFilters {
+		input := v.(map[string]interface{})
+		action := input["action"].(string)
+		relativePath := input["relative_path"].(string)
+
+		inputCountryCodes := input["country_codes"].([]interface{})
+		countryCodes := make([]string, 0)
+
+		for _, v := range inputCountryCodes {
+			if v != nil {
+				countryCode := v.(string)
+				countryCodes = append(countryCodes, countryCode)
+			}
+		}
+
+		filter := cdn.GeoFilter{
+			Action:       cdn.GeoFilterActions(action),
+			RelativePath: utils.String(relativePath),
+			CountryCodes: &countryCodes,
+		}
+		filters = append(filters, filter)
+	}
+
+	return &filters
+}

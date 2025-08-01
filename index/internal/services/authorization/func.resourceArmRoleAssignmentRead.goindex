@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/authorization/mgmt/2020-04-01-preview/authorization" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2022-05-01-preview/roledefinitions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-12-01/subscriptions"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization/parse"
+	billingValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/billing/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceArmRoleAssignmentRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Authorization.RoleAssignmentsClient
+	roleDefinitionsClient := meta.(*clients.Client).Authorization.ScopedRoleDefinitionsClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.RoleAssignmentID(d.Id())
+	if err != nil {
+		return err
+	}
+	resp, err := client.GetByID(ctx, id.AzureResourceID(), id.TenantId)
+	if err != nil {
+		if utils.ResponseWasNotFound(resp.Response) {
+			log.Printf("[DEBUG] Role Assignment ID %q was not found - removing from state", d.Id())
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("loading Role Assignment %q: %+v", d.Id(), err)
+	}
+
+	d.Set("name", resp.Name)
+
+	if props := resp.RoleAssignmentPropertiesWithScope; props != nil {
+		d.Set("scope", normalizeScopeValue(pointer.From(props.Scope)))
+		d.Set("role_definition_id", props.RoleDefinitionID)
+		d.Set("principal_id", props.PrincipalID)
+		d.Set("principal_type", props.PrincipalType)
+		d.Set("delegated_managed_identity_resource_id", props.DelegatedManagedIdentityResourceID)
+		d.Set("description", props.Description)
+		d.Set("condition", props.Condition)
+		d.Set("condition_version", props.ConditionVersion)
+
+		// allows for import when role name is used (also if the role name changes a plan will show a diff)
+		if roleDefResourceId := props.RoleDefinitionID; roleDefResourceId != nil {
+			// Workaround for https://github.com/hashicorp/pandora/issues/3257
+			// The role definition id returned does not contain scope when the role definition was on tenant level (management group or tenant).
+			// And adding tenant id as scope will cause 404 response, so just adding a slash to parse that.
+			if strings.HasPrefix(*roleDefResourceId, "/providers") {
+				roleDefResourceId = pointer.To(fmt.Sprintf("/%s", *roleDefResourceId))
+			}
+			parsedRoleDefId, err := roledefinitions.ParseScopedRoleDefinitionID(*roleDefResourceId)
+			if err != nil {
+				return fmt.Errorf("parsing %q: %+v", *roleDefResourceId, err)
+			}
+			roleResp, err := roleDefinitionsClient.Get(ctx, *parsedRoleDefId)
+			if err != nil {
+				return fmt.Errorf("loading Role Definition %q: %+v", *roleDefResourceId, err)
+			}
+			if roleResp.Model != nil && roleResp.Model.Properties != nil {
+				d.Set("role_definition_name", pointer.From(roleResp.Model.Properties.RoleName))
+			}
+		}
+	}
+
+	return nil
+}

@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/schema
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/networkvirtualappliances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/virtualwans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2023-09-01/firewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func FlattenNetworkProfileVHub(input firewalls.NetworkProfile) (*NetworkProfileVHub, error) {
+	result := NetworkProfileVHub{}
+
+	publicIPIDs := make([]string, 0)
+	publicIPs := make([]string, 0)
+	for _, v := range input.PublicIPs {
+		if id := pointer.From(v.ResourceId); id != "" {
+			publicIPIDs = append(publicIPIDs, id)
+		}
+		if ip := pointer.From(v.Address); ip != "" {
+			publicIPs = append(publicIPs, ip)
+		}
+	}
+	result.PublicIPIDs = publicIPIDs
+	result.PublicIPs = publicIPs
+
+	egressIds := make([]string, 0)
+	egressIPs := make([]string, 0)
+	if input.EgressNatIP != nil {
+		for _, v := range *input.EgressNatIP {
+			if id := pointer.From(v.ResourceId); id != "" {
+				egressIds = append(egressIds, id)
+			}
+			if ip := pointer.From(v.Address); ip != "" {
+				egressIPs = append(egressIPs, ip)
+			}
+		}
+	}
+	result.EgressNatIPIDs = egressIds
+	result.EgressNatIP = egressIPs
+
+	trustedRanges := make([]string, 0)
+	if v := input.TrustedRanges; v != nil {
+		trustedRanges = pointer.From(v)
+	}
+	result.TrustedRanges = trustedRanges
+
+	if v := input.VwanConfiguration; v != nil {
+		result.VHubID = pointer.From(v.VHub.ResourceId)
+		applianceID, err := networkvirtualappliances.ParseNetworkVirtualApplianceID(pointer.From(v.NetworkVirtualApplianceId))
+		if err != nil {
+			return nil, err
+		}
+		result.ApplianceID = applianceID.ID()
+
+		if v.TrustSubnet != nil {
+			result.TrustedSubnet = pointer.From(v.TrustSubnet.ResourceId)
+		}
+
+		if v.UnTrustSubnet != nil {
+			result.UnTrustedSubnet = pointer.From(v.UnTrustSubnet.ResourceId)
+		}
+
+		if v.IPOfTrustSubnetForUdr != nil {
+			result.IpOfTrust = pointer.From(v.IPOfTrustSubnetForUdr.Address)
+		}
+	}
+
+	return pointer.To(result), nil
+}

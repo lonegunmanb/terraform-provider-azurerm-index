@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/md"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func (d *ResourceDiff) ToString() string {
+	var bs strings.Builder
+
+	bs.WriteString(
+		fmt.Sprintf("%s: %s:1 has %d issue[s]:\n",
+			util.Bold(d.tf.ResourceType),
+			d.tf.FilePathRel(),
+			len(d.Diff),
+		),
+	)
+	file := d.MDFile + ":"
+	if idx := strings.Index(file, "website"); idx > 0 {
+		file = "./" + file[idx:]
+	}
+	// read file lines
+	fileBuf, _ := os.ReadFile(d.MDFile)
+	lines := strings.Split(string(fileBuf), "\n")
+	for _, item := range d.Diffs() {
+		bs.WriteString(file + item.String() + "\n")
+		// print out fixed result
+		if lineNum := item.Line(); lineNum > 0 && len(lines) > lineNum {
+			line := lines[lineNum]
+			if fixed, err := item.Fix(line); err == nil && fixed != "" && fixed != line {
+				bs.WriteString("     " + util.IssueLine(line) + "\n")
+				bs.WriteString("  => " + util.FixedCode(fixed) + "\n")
+			}
+		}
+	}
+	return bs.String()
+}

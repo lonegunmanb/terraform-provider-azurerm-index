@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk" // nolint: typecheck
+)
+func (teamCityServicesListGenerator) run(outputFileName string, packagesToSkip map[string]struct{}) error {
+	template := `// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+// NOTE: this is Generated from the Service Definitions - manual changes will be lost
+//       to re-generate this file, run 'make generate' in the root of the repository
+var services = mapOf(
+%s
+)`
+	items := make([]string, 0)
+
+	services := make(map[string]string)
+	serviceNames := make([]string, 0)
+
+	// combine and unique these
+	for _, service := range provider.SupportedTypedServices() {
+		info := reflect.TypeOf(service)
+		packageSegments := strings.Split(info.PkgPath(), "/")
+		packageName := packageSegments[len(packageSegments)-1]
+		serviceName := service.Name()
+
+		// Service Registrations are reused across Typed and Untyped Services now
+		if _, exists := services[serviceName]; exists {
+			continue
+		}
+
+		services[serviceName] = packageName
+		serviceNames = append(serviceNames, serviceName)
+	}
+	for _, service := range provider.SupportedUntypedServices() {
+		info := reflect.TypeOf(service)
+		packageSegments := strings.Split(info.PkgPath(), "/")
+		packageName := packageSegments[len(packageSegments)-1]
+		serviceName := service.Name()
+
+		// Service Registrations are reused across Typed and Untyped Services now
+		if _, exists := services[serviceName]; exists {
+			continue
+		}
+
+		services[serviceName] = packageName
+		serviceNames = append(serviceNames, serviceName)
+	}
+
+	// then ensure these are sorted so they're alphabetical
+	sort.Strings(serviceNames)
+	for _, serviceName := range serviceNames {
+		packageName := services[serviceName]
+		if _, shouldSkip := packagesToSkip[packageName]; shouldSkip {
+			continue
+		}
+
+		item := fmt.Sprintf("        %q to %q", packageName, serviceName)
+		items = append(items, item)
+	}
+
+	formatted := fmt.Sprintf(template, strings.Join(items, ",\n"))
+	return writeToFile(outputFileName, formatted)
+}

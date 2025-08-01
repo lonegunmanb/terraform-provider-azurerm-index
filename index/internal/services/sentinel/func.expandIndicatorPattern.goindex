@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
+)
+func expandIndicatorPattern(patternType string, pattern string) (string, error) {
+	// possible values get from Portal
+	// [domain-name:value = 'example.com']
+	// [file:hashes.'MD5' = '6b0770e8133eee220333733931610598' ]
+	// although the Portal support multiple hash, the service only accept one, so we ignore this type.
+	// [file:hashes.'MD5' = '6b0770e8133eee220333733931610598' OR file:hashes.'MD5' = '6b0770e8133eee220333733931610591' ]
+	// [ipv4-addr:value = '1.1.1.1']"
+	// [ipv6-addr:value = '::1']
+	// [url:value = 'http://www.example.com']
+	if patternType == string(PatternTypeFile) {
+		reg := regexp.MustCompile(`(MD5|SHA-1|SHA-256|SHA-512|MD6|RIPEMD-160|SHA-224|SHA3-224|SHA3-256|SHA3-384|SHA3-512|SHA-384|SSDEEPWHIRLPOOL):`)
+		hashTypes := reg.FindStringSubmatch(pattern)
+		if len(hashTypes) != 2 {
+			return "", fmt.Errorf("when `pattern_type` set to `file`, `pattern` must combine a hash type with the hash code with a colon, an example is `MD5:78ecc5c05cd8b79af480df2f8fba0b9d`")
+		}
+		hashType := hashTypes[1]
+		return fmt.Sprintf(`[file:hashes.'%s' = '%s']`, hashType, pattern), nil
+	}
+	return fmt.Sprintf(`[%s:value = '%s']`, patternType, pattern), nil
+}

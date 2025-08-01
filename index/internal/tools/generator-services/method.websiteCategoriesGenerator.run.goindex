@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk" // nolint: typecheck
+)
+func (websiteCategoriesGenerator) run(outputFileName string, _ map[string]struct{}) error {
+	websiteCategories := make([]string, 0)
+
+	// get a distinct list
+	for _, service := range provider.SupportedTypedServices() {
+		for _, category := range service.WebsiteCategories() {
+			if contains(websiteCategories, category) {
+				continue
+			}
+
+			websiteCategories = append(websiteCategories, category)
+		}
+	}
+	for _, service := range provider.SupportedUntypedServices() {
+		for _, category := range service.WebsiteCategories() {
+			if contains(websiteCategories, category) {
+				continue
+			}
+
+			websiteCategories = append(websiteCategories, category)
+		}
+	}
+
+	// sort them
+	sort.Strings(websiteCategories)
+
+	// the file needs to start with an empty line to allow documentation without any subcategory e.g. provider function docs
+	fileContents := "\n" + strings.Join(websiteCategories, "\n")
+	return writeToFile(outputFileName, fileContents)
+}

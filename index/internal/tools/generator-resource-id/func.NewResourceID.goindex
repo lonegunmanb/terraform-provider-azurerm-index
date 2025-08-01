@@ -1,0 +1,151 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+)
+func NewResourceID(typeName, servicePackageName, resourceId string) (*ResourceId, error) {
+	// split the string, but remove the prefix of `/` since it's an empty segment
+	split := strings.Split(strings.TrimPrefix(resourceId, "/"), "/")
+	if len(split)%2 != 0 {
+		return nil, fmt.Errorf("segments weren't divisible by 2: %q", resourceId)
+	}
+
+	segments := make([]ResourceIdSegment, 0)
+	for i := 0; i < len(split); i += 2 {
+		key := split[i]
+		value := split[i+1]
+
+		// the RP shouldn't be transformed
+		if key == "providers" {
+			r := regexp.MustCompile(`^Microsoft.[A-Z][A-Za-z]+$`)
+			if !r.MatchString(value) {
+				return nil, fmt.Errorf("the resource provider in the id must begin with upper case got: %s", value)
+			}
+			continue
+		}
+
+		segmentBuilder := func(key, value string, hasSubscriptionId bool) ResourceIdSegment {
+			toCamelCase := func(input string) string {
+				// lazy but it works
+				out := make([]rune, 0)
+				for i, char := range azure.TitleCase(input) {
+					if i == 0 {
+						out = append(out, unicode.ToLower(char))
+						continue
+					}
+
+					out = append(out, char)
+				}
+				return string(out)
+			}
+
+			rewritten := fmt.Sprintf("%sName", key)
+			segment := ResourceIdSegment{
+				FieldName:    azure.TitleCase(rewritten),
+				ArgumentName: toCamelCase(rewritten),
+				SegmentKey:   key,
+				SegmentValue: value,
+			}
+
+			if strings.EqualFold(key, "resourceGroups") {
+				segment.FieldName = "ResourceGroup"
+				segment.ArgumentName = "resourceGroup"
+				return segment
+			}
+
+			if key == "subscriptions" && !hasSubscriptionId {
+				segment.FieldName = "SubscriptionId"
+				segment.ArgumentName = "subscriptionId"
+				return segment
+			}
+
+			if strings.HasSuffix(key, "s") {
+				// TODO: in time this could be worth a series of overrides
+
+				// handles "GallerieName" and `DataFactoriesName`
+				if strings.HasSuffix(key, "ies") {
+					key = strings.TrimSuffix(key, "ies")
+					key = fmt.Sprintf("%sy", key)
+				}
+				switch {
+				case strings.HasSuffix(key, "sses"):
+					// handles `PublicIPAddressesName`
+					key = strings.TrimSuffix(key, "sses")
+					key = fmt.Sprintf("%sss", key)
+				case strings.HasSuffix(key, "xes"):
+					// handles `CustomIPPrefixeName`
+					key = strings.TrimSuffix(key, "xes")
+					key = fmt.Sprintf("%sx", key)
+				default:
+					key = strings.TrimSuffix(key, "s")
+				}
+
+				if strings.EqualFold(key, typeName) {
+					segment.FieldName = "Name"
+					segment.ArgumentName = "name"
+				} else {
+					// remove {Thing}s and make that {Thing}Name
+					rewritten = fmt.Sprintf("%sName", key)
+					segment.FieldName = azure.TitleCase(rewritten)
+					segment.ArgumentName = toCamelCase(rewritten)
+				}
+			}
+
+			return segment
+		}
+
+		// handle multiple 'subscriptions' segments, ala ServiceBus Subscription
+		hasSubscriptionId := false
+		for _, v := range segments {
+			if v.FieldName == "SubscriptionId" {
+				hasSubscriptionId = true
+				break
+			}
+		}
+
+		segment := segmentBuilder(key, value, hasSubscriptionId)
+		segments = append(segments, segment)
+	}
+
+	// finally build up the format string based on this information
+	fmtString := resourceId
+	hasResourceGroup := false
+	hasSubscriptionId := false
+	for _, segment := range segments {
+		if strings.EqualFold(segment.SegmentKey, "subscriptions") {
+			hasSubscriptionId = true
+		}
+		if strings.EqualFold(segment.SegmentKey, "resourceGroups") {
+			hasResourceGroup = true
+		}
+
+		// has to be double-escaped since this is a fmtstring
+		fmtString = strings.Replace(fmtString, segment.SegmentValue, "%s", 1)
+	}
+
+	packageSuffix := ""
+	if _, ok := packagesUsingAlias[servicePackageName]; ok {
+		packageSuffix = "_test"
+	}
+
+	return &ResourceId{
+		IDFmt:              fmtString,
+		IDRaw:              resourceId,
+		HasResourceGroup:   hasResourceGroup,
+		HasSubscriptionId:  hasSubscriptionId,
+		Segments:           segments,
+		ServicePackageName: servicePackageName,
+		TypeName:           typeName,
+		TestPackageSuffix:  packageSuffix,
+	}, nil
+}

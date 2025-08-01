@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachinegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSqlVirtualMachineSQLInstance(input *sqlvirtualmachines.SQLInstanceSettings) []interface{} {
+	if input == nil || input.Collation == nil {
+		return []interface{}{}
+	}
+
+	collation := *input.Collation
+
+	isIfiEnabled := false
+	if input.IsIfiEnabled != nil {
+		isIfiEnabled = *input.IsIfiEnabled
+	}
+
+	isLpimEnabled := false
+	if input.IsLpimEnabled != nil {
+		isLpimEnabled = *input.IsLpimEnabled
+	}
+
+	isOptimizeForAdhocWorkloadsEnabled := false
+	if input.IsOptimizeForAdHocWorkloadsEnabled != nil {
+		isOptimizeForAdhocWorkloadsEnabled = *input.IsOptimizeForAdHocWorkloadsEnabled
+	}
+
+	var maxDop int64 = 0
+	if input.MaxDop != nil {
+		maxDop = *input.MaxDop
+	}
+
+	var maxServerMemoryMB int64 = math.MaxInt32
+	if input.MaxServerMemoryMB != nil {
+		maxServerMemoryMB = *input.MaxServerMemoryMB
+	}
+
+	var minServerMemoryMB int64 = 0
+	if input.MinServerMemoryMB != nil {
+		minServerMemoryMB = *input.MinServerMemoryMB
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"adhoc_workloads_optimization_enabled": isOptimizeForAdhocWorkloadsEnabled,
+			"collation":                            collation,
+			"instant_file_initialization_enabled":  isIfiEnabled,
+			"lock_pages_in_memory_enabled":         isLpimEnabled,
+			"max_dop":                              maxDop,
+			"max_server_memory_mb":                 maxServerMemoryMB,
+			"min_server_memory_mb":                 minServerMemoryMB,
+		},
+	}
+}

@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+)
+func parseDataPlaneEndpoint(input *url.URL, domainSuffix *string) (*ManagedHSMDataPlaneEndpoint, error) {
+	if input.Scheme != "https" {
+		return nil, fmt.Errorf("expected the scheme to be `https` but got %q", input.Scheme)
+	}
+
+	hostname := strings.ToLower(input.Host)
+	if port := input.Port(); port != "" {
+		if port != "443" {
+			return nil, fmt.Errorf("expected port to be '443' but got %q", port)
+		}
+		hostname = strings.TrimSuffix(hostname, fmt.Sprintf(":%s", input.Port()))
+	}
+	hostnameComponents := strings.Split(hostname, ".")
+	if len(hostnameComponents) <= 2 {
+		return nil, fmt.Errorf("expected the hostname to be in the format `{name}.{managedhsm}.{domain}` but got %q - please check this is a Managed HSM ID", hostname)
+	}
+
+	managedHSMName := hostnameComponents[0]
+	if hostnameComponents[1] != "managedhsm" {
+		return nil, fmt.Errorf("expected the hostname to contain `.managedhsm.` but got %q - please check this is a Managed HSM ID", hostname)
+	}
+
+	parsedDomainSuffix := strings.Join(hostnameComponents[1:], ".")
+	if domainSuffix != nil && parsedDomainSuffix != *domainSuffix {
+		// if we know the domain suffix, let's check that's what we're expecting
+		return nil, fmt.Errorf("expected the hostname to end be in the format `{name}.%s` but got %q", *domainSuffix, hostname)
+	}
+
+	return &ManagedHSMDataPlaneEndpoint{
+		ManagedHSMName: managedHSMName,
+		DomainSuffix:   parsedDomainSuffix,
+	}, nil
+}

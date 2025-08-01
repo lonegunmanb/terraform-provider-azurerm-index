@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/orbital
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/orbital/2022-11-01/contact"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/orbital/2022-11-01/contactprofile"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/orbital/2022-11-01/spacecraft"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r ContactResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Orbital.ContactClient
+			id, err := contact.ParseContactID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("reading %s: %+v", *id, err)
+			}
+
+			spacecraftId := contact.NewSpacecraftID(id.SubscriptionId, id.ResourceGroupName, id.SpacecraftName)
+			if model := resp.Model; model != nil {
+				props := model.Properties
+				state := ContactResourceModel{
+					Name:       id.ContactName,
+					Spacecraft: spacecraftId.ID(),
+				}
+
+				state.ReservationStartTime = props.ReservationStartTime
+				state.ReservationEndTime = props.ReservationEndTime
+				state.GroundStationName = props.GroundStationName
+				state.ContactProfileId = props.ContactProfile.Id
+
+				return metadata.Encode(&state)
+			}
+			return nil
+		},
+	}
+}

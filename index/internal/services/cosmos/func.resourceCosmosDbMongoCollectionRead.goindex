@@ -1,0 +1,112 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cosmos-db/mgmt/2021-10-15/documentdb" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCosmosDbMongoCollectionRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Cosmos.MongoDbClient
+	accClient := meta.(*clients.Client).Cosmos.DatabaseClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.MongodbCollectionID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.GetMongoDBCollection(ctx, id.ResourceGroup, id.DatabaseAccountName, id.MongodbDatabaseName, id.CollectionName)
+	if err != nil {
+		if utils.ResponseWasNotFound(resp.Response) {
+			log.Printf("[INFO] Error reading Cosmos Mongo Collection %q (Account: %q, Database: %q)", id.CollectionName, id.DatabaseAccountName, id.MongodbDatabaseName)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("reading Cosmos Mongo Collection %q (Account: %q, Database: %q): %+v", id.CollectionName, id.DatabaseAccountName, id.MongodbDatabaseName, err)
+	}
+
+	d.Set("resource_group_name", id.ResourceGroup)
+	d.Set("account_name", id.DatabaseAccountName)
+	d.Set("database_name", id.MongodbDatabaseName)
+
+	accResp, err := accClient.Get(ctx, id.ResourceGroup, id.DatabaseAccountName)
+	if err != nil {
+		return fmt.Errorf("reading Cosmos Account %q : %+v", id.DatabaseAccountName, err)
+	}
+	if props := resp.MongoDBCollectionGetProperties; props != nil {
+		if res := props.Resource; res != nil {
+			d.Set("name", res.ID)
+
+			// you can only have one
+			if len(res.ShardKey) > 2 {
+				return fmt.Errorf("unexpected number of shard keys: %d", len(res.ShardKey))
+			}
+
+			for k := range res.ShardKey {
+				d.Set("shard_key", k)
+			}
+			accountIsVersion36 := false
+			if accProps := accResp.DatabaseAccountGetProperties; accProps != nil {
+				if capabilities := accProps.Capabilities; capabilities != nil {
+					for _, v := range *capabilities {
+						if v.Name != nil && *v.Name == "EnableMongo" {
+							accountIsVersion36 = true
+						}
+					}
+				}
+			}
+
+			indexes, systemIndexes, ttl := flattenCosmosMongoCollectionIndex(res.Indexes, accountIsVersion36)
+			// In fact, the Azure API does not return `ExpireAfterSeconds` aka `default_ttl_seconds` when `default_ttl_seconds` is not set in tf the config.
+			// When "default_ttl_seconds" is set to nil, it will be set to 0 in state file. 0 is invalid value for `default_ttl_seconds` and could not pass tf validation.
+			// So when `default_ttl_seconds` is not set in tf config, we should not set the value of `default_ttl_seconds` but keep null in the state file.
+			if ttl != nil {
+				if err := d.Set("default_ttl_seconds", ttl); err != nil {
+					return fmt.Errorf("failed to set `default_ttl_seconds`: %+v", err)
+				}
+			}
+			if err := d.Set("index", indexes); err != nil {
+				return fmt.Errorf("failed to set `index`: %+v", err)
+			}
+			if err := d.Set("system_indexes", systemIndexes); err != nil {
+				return fmt.Errorf("failed to set `system_indexes`: %+v", err)
+			}
+
+			d.Set("analytical_storage_ttl", res.AnalyticalStorageTTL)
+		}
+	}
+
+	// if the cosmos account is serverless calling the get throughput api would yield an error
+	if !isServerlessCapacityMode(accResp) {
+		throughputResp, err := client.GetMongoDBCollectionThroughput(ctx, id.ResourceGroup, id.DatabaseAccountName, id.MongodbDatabaseName, id.CollectionName)
+		if err != nil {
+			if !utils.ResponseWasNotFound(throughputResp.Response) {
+				return fmt.Errorf("reading Throughput on Cosmos Mongo Collection %q (Account: %q, Database: %q): %+v", id.CollectionName, id.DatabaseAccountName, id.MongodbDatabaseName, err)
+			} else {
+				d.Set("throughput", nil)
+				d.Set("autoscale_settings", nil)
+			}
+		} else {
+			common.SetResourceDataThroughputFromResponseLegacy(throughputResp, d)
+		}
+	}
+
+	return nil
+}

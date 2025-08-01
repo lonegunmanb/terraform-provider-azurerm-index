@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagemover
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagemover/2023-03-01/storagemovers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r StorageMoverResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.StorageMover.StorageMoversClient
+
+			id, err := storagemovers.ParseStorageMoverID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			model := resp.Model
+			if model == nil {
+				return fmt.Errorf("retrieving %s: model was nil", *id)
+			}
+
+			state := StorageMoverModel{
+				Name:              id.StorageMoverName,
+				ResourceGroupName: id.ResourceGroupName,
+				Location:          location.Normalize(model.Location),
+			}
+
+			description := ""
+			if properties := model.Properties; properties != nil {
+				if properties.Description != nil {
+					description = *properties.Description
+				}
+			}
+			state.Description = description
+
+			if model.Tags != nil {
+				state.Tags = *model.Tags
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

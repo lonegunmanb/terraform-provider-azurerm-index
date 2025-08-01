@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachinescalesetvms"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/vmsspublicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenVirtualMachineScaleSetVM(input virtualmachinescalesetvms.VirtualMachineScaleSetVM, connectionInfo *connectionInfo, vm *virtualmachines.VirtualMachine, mode string) map[string]interface{} {
+	output := make(map[string]interface{})
+	output["name"] = *input.Name
+	output["instance_id"] = *input.InstanceId
+
+	if mode == "Flexible" && vm != nil {
+		if props := vm.Properties; props != nil {
+			if props.VMId != nil {
+				output["virtual_machine_id"] = *props.VMId
+			}
+
+			if profile := props.OsProfile; profile != nil && profile.ComputerName != nil {
+				output["computer_name"] = *profile.ComputerName
+			}
+
+			if instance := props.InstanceView; instance != nil {
+				if statuses := instance.Statuses; statuses != nil {
+					for _, status := range *statuses {
+						if status.Code != nil && strings.HasPrefix(strings.ToLower(*status.Code), "powerstate/") {
+							output["power_state"] = strings.SplitN(*status.Code, "/", 2)[1]
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if mode == "Uniform" {
+		if props := input.Properties; props != nil {
+			if props.LatestModelApplied != nil {
+				output["latest_model_applied"] = *props.LatestModelApplied
+			}
+
+			if props.VMId != nil {
+				output["virtual_machine_id"] = *props.VMId
+			}
+
+			if profile := props.OsProfile; profile != nil && profile.ComputerName != nil {
+				output["computer_name"] = *profile.ComputerName
+			}
+
+			if instance := props.InstanceView; instance != nil {
+				if statuses := instance.Statuses; statuses != nil {
+					for _, status := range *statuses {
+						if status.Code != nil && strings.HasPrefix(strings.ToLower(*status.Code), "powerstate/") {
+							output["power_state"] = strings.SplitN(*status.Code, "/", 2)[1]
+						}
+					}
+				}
+			}
+		}
+	}
+
+	zone := ""
+	if input.Zones != nil {
+		if zones := *input.Zones; len(zones) > 0 {
+			zone = zones[0]
+		}
+	}
+	output["zone"] = zone
+
+	if connectionInfo != nil {
+		output["private_ip_address"] = connectionInfo.primaryPrivateAddress
+		output["private_ip_addresses"] = connectionInfo.privateAddresses
+		output["public_ip_address"] = connectionInfo.primaryPublicAddress
+		output["public_ip_addresses"] = connectionInfo.publicAddresses
+	}
+
+	return output
+}

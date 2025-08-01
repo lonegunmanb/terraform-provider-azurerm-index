@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/migration
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+)
+func parseLegacyV0RoleAssignmentId(input string) (*legacyV0RoleAssignmentId, error) {
+	parsed, err := url.ParseRequestURI(input)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %q: %+v", input, err)
+	}
+
+	endpoint, err := parse.ManagedHSMEndpoint(input, nil)
+	if err != nil {
+		return nil, fmt.Errorf("parsing endpoint from %q: %+v", input, err)
+	}
+
+	path := strings.TrimPrefix(parsed.Path, "/")
+	split := strings.Split(path, "/RoleAssignment/")
+	if len(split) != 2 {
+		return nil, fmt.Errorf("expected a URI in the format `{scope}/RoleAssignment/{name}` but got %q", parsed.Path)
+	}
+	scope := split[0]
+	name := split[1]
+	if scope == "" || name == "" {
+		return nil, fmt.Errorf("expected a URI in the format `{scope}/RoleAssignment/{name}` but got %q", parsed.Path)
+	}
+
+	return &legacyV0RoleAssignmentId{
+		managedHSMName:     endpoint.ManagedHSMName,
+		domainSuffix:       endpoint.DomainSuffix,
+		scope:              scope,
+		roleAssignmentName: name,
+	}, nil
+}

@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"fmt"
+	"log"
+	"math/big"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+	"golang.org/x/crypto/ssh"
+)
+func expandKeyVaultKeyRotationPolicy(v []interface{}) keyvault.KeyRotationPolicy {
+	if len(v) == 0 {
+		return keyvault.KeyRotationPolicy{LifetimeActions: &[]keyvault.LifetimeActions{}}
+	}
+
+	policy := v[0].(map[string]interface{})
+
+	var expiryTime *string = nil // needs to be set to nil if not set
+	if rawExpiryTime := policy["expire_after"]; rawExpiryTime != nil && rawExpiryTime.(string) != "" {
+		expiryTime = utils.String(rawExpiryTime.(string))
+	}
+
+	lifetimeActions := make([]keyvault.LifetimeActions, 0)
+	if rawNotificationTime := policy["notify_before_expiry"]; rawNotificationTime != nil && rawNotificationTime.(string) != "" {
+		lifetimeActionNotify := keyvault.LifetimeActions{
+			Trigger: &keyvault.LifetimeActionsTrigger{
+				TimeBeforeExpiry: utils.String(rawNotificationTime.(string)), // for Type: keyvault.Notify always TimeBeforeExpiry
+			},
+			Action: &keyvault.LifetimeActionsType{
+				Type: keyvault.ActionTypeNotify,
+			},
+		}
+		lifetimeActions = append(lifetimeActions, lifetimeActionNotify)
+	}
+
+	if autoRotationList := policy["automatic"].([]interface{}); len(autoRotationList) == 1 && autoRotationList[0] != nil {
+		lifetimeActionRotate := keyvault.LifetimeActions{
+			Action: &keyvault.LifetimeActionsType{
+				Type: keyvault.ActionTypeRotate,
+			},
+			Trigger: &keyvault.LifetimeActionsTrigger{},
+		}
+		autoRotationRaw := autoRotationList[0].(map[string]interface{})
+
+		if v := autoRotationRaw["time_after_creation"]; v != nil && v.(string) != "" {
+			timeAfterCreate := v.(string)
+			lifetimeActionRotate.Trigger.TimeAfterCreate = &timeAfterCreate
+		}
+
+		if v := autoRotationRaw["time_before_expiry"]; v != nil && v.(string) != "" {
+			timeBeforeExpiry := v.(string)
+			lifetimeActionRotate.Trigger.TimeBeforeExpiry = &timeBeforeExpiry
+		}
+
+		lifetimeActions = append(lifetimeActions, lifetimeActionRotate)
+	}
+
+	return keyvault.KeyRotationPolicy{
+		LifetimeActions: &lifetimeActions,
+		Attributes: &keyvault.KeyRotationPolicyAttributes{
+			ExpiryTime: expiryTime,
+		},
+	}
+}

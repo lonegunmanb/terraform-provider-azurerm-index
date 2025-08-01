@@ -1,0 +1,142 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/securityinsight/mgmt/2021-09-01-preview/securityinsight" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceSentinelAlertRuleTemplate() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Read: dataSourceSentinelAlertRuleTemplateRead,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Read: pluginsdk.DefaultTimeout(5 * time.Minute),
+		},
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.SentinelAlertRuleTemplateV0ToV1{},
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+				ExactlyOneOf: []string{"name", "display_name"},
+			},
+
+			"display_name": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+				ExactlyOneOf: []string{"name", "display_name"},
+			},
+
+			"log_analytics_workspace_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: workspaces.ValidateWorkspaceID,
+			},
+
+			"scheduled_template": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"description": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"tactics": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+						"severity": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"query": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"query_frequency": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"query_period": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"trigger_operator": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"trigger_threshold": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"security_incident_template": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"description": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"product_filter": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"nrt_template": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"description": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"tactics": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+						"severity": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"query": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+		},
+	}
+}

@@ -1,0 +1,132 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/blobcontainers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/containers"
+)
+func resourceStorageContainerRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	containerClient := meta.(*clients.Client).Storage.ResourceManager.BlobContainers
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	if !features.FivePointOh() && !strings.HasPrefix(d.Id(), "/subscriptions/") && d.Get("storage_account_id") == "" {
+		storageClient := meta.(*clients.Client).Storage
+		id, err := containers.ParseContainerID(d.Id(), storageClient.StorageDomainSuffix)
+		if err != nil {
+			return err
+		}
+
+		account, err := storageClient.FindAccount(ctx, subscriptionId, id.AccountId.AccountName)
+		if err != nil {
+			return fmt.Errorf("retrieving Account %q for Container %q: %v", id.AccountId.AccountName, id.ContainerName, err)
+		}
+		if account == nil {
+			log.Printf("[DEBUG] Unable to locate Account %q for Storage Container %q - assuming removed & removing from state", id.AccountId.AccountName, id.ContainerName)
+			d.SetId("")
+			return nil
+		}
+
+		client, err := storageClient.ContainersDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingAnyAuthMethod())
+		if err != nil {
+			return fmt.Errorf("building Containers Client: %v", err)
+		}
+
+		props, err := client.Get(ctx, id.ContainerName)
+		if err != nil {
+			return fmt.Errorf("retrieving %s: %v", id, err)
+		}
+		if props == nil {
+			log.Printf("[DEBUG] Container %q was not found in %s - assuming removed & removing from state", id.ContainerName, id.AccountId)
+			d.SetId("")
+			return nil
+		}
+
+		d.Set("name", id.ContainerName)
+		d.Set("storage_account_name", id.AccountId.AccountName)
+
+		d.Set("container_access_type", flattenStorageContainerAccessLevel(props.AccessLevel))
+
+		d.Set("default_encryption_scope", props.DefaultEncryptionScope)
+		d.Set("encryption_scope_override_enabled", !props.EncryptionScopeOverrideDisabled)
+
+		if err = d.Set("metadata", FlattenMetaData(props.MetaData)); err != nil {
+			return fmt.Errorf("setting `metadata`: %v", err)
+		}
+
+		d.Set("has_immutability_policy", props.HasImmutabilityPolicy)
+		d.Set("has_legal_hold", props.HasLegalHold)
+
+		resourceManagerId := commonids.NewStorageContainerID(account.StorageAccountId.SubscriptionId, account.StorageAccountId.ResourceGroupName, id.AccountId.AccountName, id.ContainerName)
+		d.Set("resource_manager_id", resourceManagerId.ID())
+
+		return nil
+	}
+
+	if !features.FivePointOh() {
+		// Deal with the ID changing if the user changes from `storage_account_name` to `storage_account_id`
+		if !strings.HasPrefix(d.Id(), "/subscriptions/") {
+			accountId, err := commonids.ParseStorageAccountID(d.Get("storage_account_id").(string))
+			if err != nil {
+				return err
+			}
+
+			id := commonids.NewStorageContainerID(subscriptionId, accountId.ResourceGroupName, accountId.StorageAccountName, d.Get("name").(string))
+			d.SetId(id.ID())
+		}
+	}
+
+	id, err := commonids.ParseStorageContainerID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	existing, err := containerClient.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(existing.HttpResponse) {
+			log.Printf("[DEBUG] %q was not found, removing from state", *id)
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving %s: %v", *id, err)
+	}
+
+	if model := existing.Model; model != nil {
+		if props := model.Properties; props != nil {
+			d.Set("name", id.ContainerName)
+			d.Set("storage_account_id", commonids.NewStorageAccountID(id.SubscriptionId, id.ResourceGroupName, id.StorageAccountName).ID())
+			d.Set("container_access_type", containerAccessTypeConversionMap[string(pointer.From(props.PublicAccess))])
+			d.Set("default_encryption_scope", props.DefaultEncryptionScope)
+			d.Set("encryption_scope_override_enabled", !pointer.From(props.DenyEncryptionScopeOverride))
+			d.Set("metadata", FlattenMetaData(pointer.From(props.Metadata)))
+
+			d.Set("has_immutability_policy", props.HasImmutabilityPolicy)
+			d.Set("has_legal_hold", props.HasLegalHold)
+			if !features.FivePointOh() {
+				d.Set("storage_account_name", "")
+				d.Set("resource_manager_id", id.ID())
+			}
+		}
+	}
+
+	return nil
+}

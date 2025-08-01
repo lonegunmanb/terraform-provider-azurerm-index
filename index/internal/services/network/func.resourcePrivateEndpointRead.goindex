@@ -1,0 +1,140 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	mariadbServers "github.com/hashicorp/go-azure-sdk/resource-manager/mariadb/2018-06-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2017-12-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privatednszonegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privateendpoints"
+	postgresqlServers "github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redis/2024-03-01/redis"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/signalr/2023-02-01/signalr"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	cosmosParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePrivateEndpointRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.PrivateEndpoints
+	nicsClient := meta.(*clients.Client).Network.NetworkInterfaces
+	dnsClient := meta.(*clients.Client).Network.PrivateDnsZoneGroups
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := privateendpoints.ParsePrivateEndpointID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id, privateendpoints.DefaultGetOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[INFO] Private Endpoint %q does not exist - removing from state", d.Id())
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("reading %s: %+v", id, err)
+	}
+
+	privateDnsZoneIds, err := retrievePrivateDnsZoneGroupsForPrivateEndpoint(ctx, dnsClient, *id)
+	if err != nil {
+		return err
+	}
+
+	d.Set("name", id.PrivateEndpointName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.NormalizeNilable(model.Location))
+
+		if props := model.Properties; props != nil {
+			if err := d.Set("custom_dns_configs", flattenCustomDnsConfigs(props.CustomDnsConfigs)); err != nil {
+				return fmt.Errorf("setting `custom_dns_configs`: %+v", err)
+			}
+
+			networkInterfaceId := ""
+			privateIpAddress := ""
+			if nics := props.NetworkInterfaces; nics != nil && len(*nics) > 0 {
+				nic := (*nics)[0]
+				if nic.Id != nil && *nic.Id != "" {
+					networkInterfaceId = *nic.Id
+					privateIpAddress = getPrivateIpAddress(ctx, nicsClient, networkInterfaceId)
+				}
+			}
+
+			networkInterface := flattenNetworkInterface(networkInterfaceId)
+			if err := d.Set("network_interface", networkInterface); err != nil {
+				return fmt.Errorf("setting `network_interface`: %+v", err)
+			}
+
+			flattenedConnection := flattenPrivateLinkEndpointServiceConnection(props.PrivateLinkServiceConnections, props.ManualPrivateLinkServiceConnections, privateIpAddress)
+			if err := d.Set("private_service_connection", flattenedConnection); err != nil {
+				return fmt.Errorf("setting `private_service_connection`: %+v", err)
+			}
+
+			flattenedipconfiguration := flattenPrivateEndpointIPConfigurations(props.IPConfigurations)
+			if err := d.Set("ip_configuration", flattenedipconfiguration); err != nil {
+				return fmt.Errorf("setting `ip_configuration`: %+v", err)
+			}
+
+			subnetId := ""
+			if props.Subnet != nil && props.Subnet.Id != nil {
+				subnetId = *props.Subnet.Id
+			}
+			d.Set("subnet_id", subnetId)
+			customNicName := ""
+			if props.CustomNetworkInterfaceName != nil {
+				customNicName = *props.CustomNetworkInterfaceName
+			}
+			d.Set("custom_network_interface_name", customNicName)
+		}
+
+		privateDnsZoneConfigs := make([]interface{}, 0)
+		privateDnsZoneGroups := make([]interface{}, 0)
+		if privateDnsZoneIds != nil {
+			for _, dnsZoneId := range *privateDnsZoneIds {
+				flattened, err := retrieveAndFlattenPrivateDnsZone(ctx, dnsClient, dnsZoneId)
+				if err != nil {
+					return fmt.Errorf("reading %s for %s: %+v", dnsZoneId, id, err)
+				}
+
+				// an exceptional case but no harm in handling
+				if flattened == nil {
+					continue
+				}
+
+				privateDnsZoneConfigs = append(privateDnsZoneConfigs, flattened.DnsZoneConfig...)
+				privateDnsZoneGroups = append(privateDnsZoneGroups, flattened.DnsZoneGroup)
+			}
+		}
+		if err = d.Set("private_dns_zone_configs", privateDnsZoneConfigs); err != nil {
+			return fmt.Errorf("setting `private_dns_zone_configs`: %+v", err)
+		}
+		if err = d.Set("private_dns_zone_group", privateDnsZoneGroups); err != nil {
+			return fmt.Errorf("setting `private_dns_zone_group`: %+v", err)
+		}
+
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+
+	return nil
+}

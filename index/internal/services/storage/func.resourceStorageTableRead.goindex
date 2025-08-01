@@ -1,0 +1,77 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
+)
+func resourceStorageTableRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	storageClient := meta.(*clients.Client).Storage
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := tables.ParseTableID(d.Id(), storageClient.StorageDomainSuffix)
+	if err != nil {
+		return err
+	}
+
+	account, err := storageClient.FindAccount(ctx, subscriptionId, id.AccountId.AccountName)
+	if err != nil {
+		return fmt.Errorf("retrieving Storage Account %q for Table %q: %v", id.AccountId.AccountName, id.TableName, err)
+	}
+	if account == nil {
+		log.Printf("Unable to determine Resource Group for Storage Table %q (Account %s) - assuming removed & removing from state", id.TableName, id.AccountId.AccountName)
+		d.SetId("")
+		return nil
+	}
+
+	client, err := storageClient.TablesDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingAnyAuthMethod())
+	if err != nil {
+		return fmt.Errorf("building Tables Client: %v", err)
+	}
+
+	exists, err := client.Exists(ctx, id.TableName)
+	if err != nil {
+		return fmt.Errorf("retrieving %s: %v", id, err)
+	}
+	if exists == nil || !*exists {
+		log.Printf("[DEBUG] %s not found, removing from state", id)
+		d.SetId("")
+		return nil
+	}
+
+	// Retrieving ACLs only supports shared key authentication (@manicminer, 2024-02-29)
+	aclClient, err := storageClient.TablesDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingOnlySharedKeyAuth())
+	if err != nil {
+		return fmt.Errorf("building Tables Client: %v", err)
+	}
+
+	acls, err := aclClient.GetACLs(ctx, id.TableName)
+	if err != nil {
+		return fmt.Errorf("retrieving ACLs for %s: %v", id, err)
+	}
+
+	d.Set("name", id.TableName)
+	d.Set("storage_account_name", id.AccountId.AccountName)
+	d.Set("resource_manager_id", parse.NewStorageTableResourceManagerID(subscriptionId, account.StorageAccountId.ResourceGroupName, id.AccountId.AccountName, "default", id.TableName).ID())
+
+	if err = d.Set("acl", flattenStorageTableACLs(acls)); err != nil {
+		return fmt.Errorf("setting `acl`: %v", err)
+	}
+
+	return nil
+}

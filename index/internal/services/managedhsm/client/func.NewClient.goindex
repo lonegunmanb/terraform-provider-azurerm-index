@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/client
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2023-07-01/managedhsms"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/common"
+	dataplane "github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func NewClient(o *common.ClientOptions) (*Client, error) {
+	managedHsmClient, err := managedhsms.NewManagedHsmsClientWithBaseURI(o.Environment.ResourceManager)
+	if err != nil {
+		return nil, fmt.Errorf("building ManagedHsms client: %+v", err)
+	}
+	o.Configure(managedHsmClient.Client, o.Authorizers.ResourceManager)
+
+	managementKeysClient := dataplane.New()
+	o.ConfigureClient(&managementKeysClient.Client, o.ManagedHSMAuthorizer)
+
+	securityDomainClient := dataplane.NewHSMSecurityDomainClient()
+	o.ConfigureClient(&securityDomainClient.Client, o.ManagedHSMAuthorizer)
+
+	roleDefinitionsClient := dataplane.NewRoleDefinitionsClient()
+	o.ConfigureClient(&roleDefinitionsClient.Client, o.ManagedHSMAuthorizer)
+
+	roleAssignmentsClient := dataplane.NewRoleAssignmentsClient()
+	o.ConfigureClient(&roleAssignmentsClient.Client, o.ManagedHSMAuthorizer)
+
+	return &Client{
+		// Resource Manger
+		ManagedHsmClient: managedHsmClient,
+
+		// Data Plane
+		DataPlaneKeysClient:            &managementKeysClient,
+		DataPlaneSecurityDomainsClient: &securityDomainClient,
+		DataPlaneRoleDefinitionsClient: &roleDefinitionsClient,
+		DataPlaneRoleAssignmentsClient: &roleAssignmentsClient,
+	}, nil
+}

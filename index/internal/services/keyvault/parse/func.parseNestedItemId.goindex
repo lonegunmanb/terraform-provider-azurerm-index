@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func parseNestedItemId(id string) (*NestedItemId, error) {
+	if strings.Contains(strings.ToLower(id), ".managedhsm.") {
+		return nil, fmt.Errorf("internal-error: Managed HSM IDs are not supported as Key Vault Nested Items")
+	}
+	// versioned example: https://tharvey-keyvault.vault.azure.net/type/bird/fdf067c93bbb4b22bff4d8b7a9a56217
+	// versionless example: https://tharvey-keyvault.vault.azure.net/type/bird/
+	idURL, err := url.ParseRequestURI(id)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse azure key vault child ID: %s", err)
+	}
+
+	path := idURL.Path
+
+	path = strings.TrimPrefix(path, "/")
+	path = strings.TrimSuffix(path, "/")
+
+	components := strings.Split(path, "/")
+
+	if len(components) != 2 && len(components) != 3 {
+		return nil, fmt.Errorf("key vault nested item should contain 2 or 3 segments, found %d segment(s) in %q", len(components), id)
+	}
+
+	version := ""
+	if len(components) == 3 {
+		version = components[2]
+	}
+
+	nestedItemObjectTypes := PossibleNestedItemObjectTypeValues()
+
+	if !utils.SliceContainsValue(nestedItemObjectTypes, components[0]) {
+		return nil, fmt.Errorf("key vault 'NestedItemType' should be one of: %s, got %q", strings.Join(nestedItemObjectTypes, ", "), components[0])
+	}
+
+	nestedItemObjectType := NestedItemObjectType(components[0])
+
+	childId := NestedItemId{
+		KeyVaultBaseUrl: fmt.Sprintf("https://%s/", idURL.Host),
+		NestedItemType:  nestedItemObjectType,
+		Name:            components[1],
+		Version:         version,
+	}
+
+	return &childId, nil
+}

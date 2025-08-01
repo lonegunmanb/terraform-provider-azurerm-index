@@ -1,0 +1,80 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"fmt"
+	"log"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/encryptionprotectors"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serverkeys"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	mhsmParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
+	mssqlValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceMsSqlTransparentDataEncryption() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceMsSqlTransparentDataEncryptionCreateUpdate,
+		Read:   resourceMsSqlTransparentDataEncryptionRead,
+		Update: resourceMsSqlTransparentDataEncryptionCreateUpdate,
+		Delete: resourceMsSqlTransparentDataEncryptionDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.EncryptionProtectorID(id)
+
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.MsSqlTransparentDataEncryptionV0ToV1{},
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"server_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: mssqlValidate.ServerID,
+			},
+
+			"key_vault_key_id": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ValidateFunc:  keyVaultValidate.NestedItemId,
+				ConflictsWith: []string{"managed_hsm_key_id"},
+			},
+
+			"managed_hsm_key_id": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ValidateFunc:  validate.ManagedHSMDataPlaneVersionedKeyID,
+				ConflictsWith: []string{"key_vault_key_id"},
+			},
+
+			"auto_rotation_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+		},
+	}
+}

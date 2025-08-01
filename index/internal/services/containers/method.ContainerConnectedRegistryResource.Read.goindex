@@ -1,0 +1,118 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/connectedregistries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/tokens"
+	tfvalidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r ContainerConnectedRegistryResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Containers.ContainerRegistryClient.ConnectedRegistries
+			id, err := connectedregistries.ParseConnectedRegistryID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			rid := registries.NewRegistryID(id.SubscriptionId, id.ResourceGroupName, id.RegistryName)
+
+			var (
+				mode             string
+				parentRegistryId string
+				syncTokenId      string
+				syncSchedule     string
+				syncMessageTTL   string
+				syncWindow       string
+				notificationList []string
+				clientTokenIds   []string
+				logLevel         string
+				auditLogEnabled  bool
+			)
+
+			if model := existing.Model; model != nil {
+				if props := model.Properties; props != nil {
+					mode = string(props.Mode)
+
+					if props.NotificationsList != nil {
+						notificationList = *props.NotificationsList
+					}
+
+					if props.ClientTokenIds != nil {
+						clientTokenIds = *props.ClientTokenIds
+					}
+
+					if logging := props.Logging; logging != nil {
+						logLevel = string(*logging.LogLevel)
+						auditLogEnabled = *logging.AuditLogStatus == connectedregistries.AuditLogStatusEnabled
+					}
+
+					parent := props.Parent
+					if parent.Id != nil {
+						if pid, err := registries.ParseRegistryIDInsensitively(*parent.Id); err == nil {
+							parentRegistryId = pid.ID()
+						} else if pid, err := connectedregistries.ParseConnectedRegistryID(*parent.Id); err == nil {
+							parentRegistryId = pid.ID()
+						}
+					}
+
+					sync := parent.SyncProperties
+
+					syncTokenId = sync.TokenId
+					syncMessageTTL = sync.MessageTtl
+
+					if sync.Schedule != nil {
+						syncSchedule = *sync.Schedule
+					}
+
+					if sync.SyncWindow != nil {
+						syncWindow = *sync.SyncWindow
+					}
+				}
+			}
+
+			notifications, err := r.flattenRepoNotifications(notificationList)
+			if err != nil {
+				return fmt.Errorf("flattening `notification`: %+v", err)
+			}
+
+			model := ContainerConnectedRegistryModel{
+				Name:                id.ConnectedRegistryName,
+				ContainerRegistryId: rid.ID(),
+				ParentRegistryId:    parentRegistryId,
+				SyncTokenId:         syncTokenId,
+				SyncSchedule:        syncSchedule,
+				SyncMessageTTL:      syncMessageTTL,
+				SyncWindow:          syncWindow,
+				Mode:                mode,
+				RepoNotifications:   notifications,
+				ClientTokenIds:      clientTokenIds,
+				LogLevel:            logLevel,
+				AuditLogEnabled:     auditLogEnabled,
+			}
+
+			return metadata.Encode(&model)
+		},
+	}
+}

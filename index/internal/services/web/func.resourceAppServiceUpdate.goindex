@@ -1,0 +1,254 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceAppServiceUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Web.AppServicesClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.AppServiceID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	location := azure.NormalizeLocation(d.Get("location").(string))
+
+	appServicePlanId := d.Get("app_service_plan_id").(string)
+	enabled := d.Get("enabled").(bool)
+	httpsOnly := d.Get("https_only").(bool)
+	t := d.Get("tags").(map[string]interface{})
+
+	siteConfig, err := expandAppServiceSiteConfig(d.Get("site_config"))
+	if err != nil {
+		return fmt.Errorf("expanding `site_config` for App Service %q (Resource Group %q): %s", id.SiteName, id.ResourceGroup, err)
+	}
+
+	// WEBSITE_VNET_ROUTE_ALL is superseded by a setting in site_config that defaults to false from 2021-02-01
+	appSettings := expandAppServiceAppSettings(d)
+	if vnetRouteAll, ok := appSettings["WEBSITE_VNET_ROUTE_ALL"]; ok {
+		if !d.HasChange("site_config.0.vnet_route_all_enabled") { // Only update the property if it's not set explicitly
+			siteConfig.VnetRouteAllEnabled = utils.Bool(strings.EqualFold(*vnetRouteAll, "true"))
+		}
+	}
+
+	siteEnvelope := web.Site{
+		Location: &location,
+		Tags:     tags.Expand(t),
+		SiteProperties: &web.SiteProperties{
+			ServerFarmID: utils.String(appServicePlanId),
+			Enabled:      utils.Bool(enabled),
+			HTTPSOnly:    utils.Bool(httpsOnly),
+			SiteConfig:   siteConfig,
+		},
+	}
+
+	if v, ok := d.GetOk("key_vault_reference_identity_id"); ok {
+		siteEnvelope.SiteProperties.KeyVaultReferenceIdentity = utils.String(v.(string))
+	}
+
+	siteEnvelope.SiteProperties.ClientCertEnabled = utils.Bool(d.Get("client_cert_enabled").(bool))
+
+	if *siteEnvelope.SiteProperties.ClientCertEnabled {
+		if clientCertMode, ok := d.GetOk("client_cert_mode"); ok {
+			siteEnvelope.SiteProperties.ClientCertMode = web.ClientCertMode(clientCertMode.(string))
+		}
+	}
+
+	future, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.SiteName, siteEnvelope)
+	if err != nil {
+		return err
+	}
+
+	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return err
+	}
+
+	// If `source_control` is defined, we need to set site_config.0.scm_type to "None" or we cannot update it
+	_, hasSourceControl := d.GetOk("source_control.0.repo_url")
+
+	scmType := web.ScmTypeNone
+
+	if d.HasChange("site_config") || hasSourceControl {
+		// update the main configuration
+		siteConfig, err := expandAppServiceSiteConfig(d.Get("site_config"))
+		if err != nil {
+			return fmt.Errorf("expanding `site_config` for App Service %q (Resource Group %q): %s", id.SiteName, id.ResourceGroup, err)
+		}
+		siteConfigResource := web.SiteConfigResource{
+			SiteConfig: siteConfig,
+		}
+
+		scmType = siteConfig.ScmType
+		// ScmType being set blocks the update of source_control in _most_ cases, ADO is an exception
+		if hasSourceControl && scmType != web.ScmTypeVSTSRM {
+			siteConfigResource.SiteConfig.ScmType = web.ScmTypeNone
+		}
+
+		if _, err := client.CreateOrUpdateConfiguration(ctx, id.ResourceGroup, id.SiteName, siteConfigResource); err != nil {
+			return fmt.Errorf("updating Configuration for App Service %q: %+v", id.SiteName, err)
+		}
+	}
+
+	if d.HasChange("auth_settings") {
+		authSettingsRaw := d.Get("auth_settings").([]interface{})
+		authSettingsProperties := expandAppServiceAuthSettings(authSettingsRaw)
+		authSettings := web.SiteAuthSettings{
+			ID:                         utils.String(d.Id()),
+			SiteAuthSettingsProperties: &authSettingsProperties,
+		}
+
+		if _, err := client.UpdateAuthSettings(ctx, id.ResourceGroup, id.SiteName, authSettings); err != nil {
+			return fmt.Errorf("updating Authentication Settings for App Service %q: %+v", id.SiteName, err)
+		}
+	}
+
+	if d.HasChange("backup") {
+		backupRaw := d.Get("backup").([]interface{})
+		if backup := expandAppServiceBackup(backupRaw); backup != nil {
+			if _, err = client.UpdateBackupConfiguration(ctx, id.ResourceGroup, id.SiteName, *backup); err != nil {
+				return fmt.Errorf("updating Backup Settings for App Service %q (Resource Group %q): %s", id.SiteName, id.ResourceGroup, err)
+			}
+		} else {
+			if _, err = client.DeleteBackupConfiguration(ctx, id.ResourceGroup, id.SiteName); err != nil {
+				return fmt.Errorf("removing Backup Settings for App Service %q (Resource Group %q): %s", id.SiteName, id.ResourceGroup, err)
+			}
+		}
+	}
+
+	if d.HasChange("client_affinity_enabled") {
+		affinity := d.Get("client_affinity_enabled").(bool)
+
+		sitePatchResource := web.SitePatchResource{
+			ID: utils.String(d.Id()),
+			SitePatchResourceProperties: &web.SitePatchResourceProperties{
+				ClientAffinityEnabled: &affinity,
+			},
+		}
+
+		if _, err := client.Update(ctx, id.ResourceGroup, id.SiteName, sitePatchResource); err != nil {
+			return fmt.Errorf("updating App Service ARR Affinity setting %q: %+v", id.SiteName, err)
+		}
+	}
+
+	// app settings updates have a side effect on logging settings. See the note below
+	if d.HasChange("app_settings") {
+		// update the AppSettings
+		appSettings = expandAppServiceAppSettings(d)
+
+		settings := web.StringDictionary{
+			Properties: appSettings,
+		}
+
+		if _, err := client.UpdateApplicationSettings(ctx, id.ResourceGroup, id.SiteName, settings); err != nil {
+			return fmt.Errorf("updating Application Settings for App Service %q: %+v", id.SiteName, err)
+		}
+	}
+
+	// Don't send source_control changes for ADO controlled Apps
+	if hasSourceControl && scmType != web.ScmTypeVSTSRM {
+		sourceControlProperties := expandAppServiceSiteSourceControl(d)
+		sourceControl := &web.SiteSourceControl{}
+		sourceControl.SiteSourceControlProperties = sourceControlProperties
+		scFuture, err := client.CreateOrUpdateSourceControl(ctx, id.ResourceGroup, id.SiteName, *sourceControl)
+		if err != nil {
+			return fmt.Errorf("failed to update App Service Source Control for %q (Resource Group %q): %+v", id.SiteName, id.ResourceGroup, err)
+		}
+
+		err = scFuture.WaitForCompletionRef(ctx, client.Client)
+		if err != nil {
+			return fmt.Errorf("failed waiting for App Service Source Control configuration: %+v", err)
+		}
+
+		sc, err := client.GetSourceControl(ctx, id.ResourceGroup, id.SiteName)
+		if err != nil {
+			return fmt.Errorf("failed reading back App Service Source Control for %q", *sc.Name)
+		}
+	}
+
+	// the logging configuration has a dependency on the app settings in Azure
+	// e.g. configuring logging to blob storage will add the DIAGNOSTICS_AZUREBLOBCONTAINERSASURL
+	// and DIAGNOSTICS_AZUREBLOBRETENTIONINDAYS app settings to the app service.
+	// If the app settings are updated, also update the logging configuration if it exists, otherwise
+	// updating the former will clobber the log settings
+	hasLogs := len(d.Get("logs").([]interface{})) > 0
+	if d.HasChange("logs") || (hasLogs && d.HasChange("app_settings")) {
+		logs := expandAppServiceLogs(d.Get("logs"))
+		logsResource := web.SiteLogsConfig{
+			ID:                       utils.String(d.Id()),
+			SiteLogsConfigProperties: &logs,
+		}
+
+		if _, err := client.UpdateDiagnosticLogsConfig(ctx, id.ResourceGroup, id.SiteName, logsResource); err != nil {
+			return fmt.Errorf("updating Diagnostics Logs for App Service %q: %+v", id.SiteName, err)
+		}
+	}
+
+	if d.HasChange("storage_account") {
+		storageAccountsRaw := d.Get("storage_account").(*pluginsdk.Set).List()
+		storageAccounts := expandAppServiceStorageAccounts(storageAccountsRaw)
+		properties := web.AzureStoragePropertyDictionaryResource{
+			Properties: storageAccounts,
+		}
+
+		if _, err := client.UpdateAzureStorageAccounts(ctx, id.ResourceGroup, id.SiteName, properties); err != nil {
+			return fmt.Errorf("updating Storage Accounts for App Service %q: %+v", id.SiteName, err)
+		}
+	}
+
+	if d.HasChange("connection_string") {
+		// update the ConnectionStrings
+		connectionStrings := expandAppServiceConnectionStrings(d)
+		properties := web.ConnectionStringDictionary{
+			Properties: connectionStrings,
+		}
+
+		if _, err := client.UpdateConnectionStrings(ctx, id.ResourceGroup, id.SiteName, properties); err != nil {
+			return fmt.Errorf("updating Connection Strings for App Service %q: %+v", id.SiteName, err)
+		}
+	}
+
+	if d.HasChange("identity") {
+		site, err := client.Get(ctx, id.ResourceGroup, id.SiteName)
+		if err != nil {
+			return fmt.Errorf("getting configuration for App Service %q: %+v", id.SiteName, err)
+		}
+
+		appServiceIdentity, err := expandAppServiceIdentity(d.Get("identity").([]interface{}))
+		if err != nil {
+			return fmt.Errorf("expanding `identity`: %+v", err)
+		}
+		site.Identity = appServiceIdentity
+		site.SiteConfig = siteConfig
+
+		future, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.SiteName, site)
+		if err != nil {
+			return fmt.Errorf("updating Managed Service Identity for App Service %q: %+v", id.SiteName, err)
+		}
+
+		if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+			return fmt.Errorf("updating Managed Service Identity for App Service %q: %+v", id.SiteName, err)
+		}
+	}
+
+	return resourceAppServiceRead(d, meta)
+}

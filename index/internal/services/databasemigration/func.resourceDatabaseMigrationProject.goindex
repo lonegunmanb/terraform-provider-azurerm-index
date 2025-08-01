@@ -1,0 +1,89 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databasemigration
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datamigration/2021-06-30/projectresource"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databasemigration/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceDatabaseMigrationProject() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceDatabaseMigrationProjectCreateUpdate,
+		Read:   resourceDatabaseMigrationProjectRead,
+		Update: resourceDatabaseMigrationProjectCreateUpdate,
+		Delete: resourceDatabaseMigrationProjectDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := projectresource.ParseProjectID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.ProjectName,
+			},
+
+			"service_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.ServiceName,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"location": commonschema.Location(),
+
+			"source_platform": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(projectresource.ProjectSourcePlatformMongoDb),
+					string(projectresource.ProjectSourcePlatformMySQL),
+					string(projectresource.ProjectSourcePlatformPostgreSql),
+					string(projectresource.ProjectSourcePlatformSQL),
+					string(projectresource.ProjectSourcePlatformUnknown),
+				}, false),
+			},
+
+			"target_platform": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(projectresource.ProjectTargetPlatformAzureDbForMySql),
+					string(projectresource.ProjectTargetPlatformAzureDbForPostgreSql),
+					string(projectresource.ProjectTargetPlatformMongoDb),
+					string(projectresource.ProjectTargetPlatformSQLDB),
+					string(projectresource.ProjectTargetPlatformSQLMI),
+					string(projectresource.ProjectTargetPlatformUnknown),
+				}, false),
+			},
+
+			"tags": commonschema.Tags(),
+		},
+	}
+}

@@ -1,0 +1,32 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/publicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func retrievePublicIPAddress(ctx context.Context, client *publicipaddresses.PublicIPAddressesClient, publicIPAddressID string) (*string, error) {
+	id, err := commonids.ParsePublicIPAddressID(publicIPAddressID)
+	if err != nil {
+		return nil, err
+	}
+
+	pip, err := client.Get(ctx, *id, publicipaddresses.DefaultGetOperationOptions())
+	if err != nil {
+		return nil, err
+	}
+
+	if model := pip.Model; model != nil {
+		if props := model.Properties; props != nil {
+			// if it's Static it'll always have an IP Address assigned
+			// however there's a bug here where Dynamic IP's can take some time until it's assigned after attachment
+			// TODO: fix the bug with Dynamic IP's here
+			return props.IPAddress, nil
+		}
+	}
+
+	return nil, nil
+}

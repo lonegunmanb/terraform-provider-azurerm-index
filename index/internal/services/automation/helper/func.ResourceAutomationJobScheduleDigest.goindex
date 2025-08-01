@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation/helper
+import (
+	"bytes"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/gofrs/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/jobschedule"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ResourceAutomationJobScheduleDigest(v interface{}) string {
+	var buf bytes.Buffer
+	var paramString map[string]string
+	var scheduleName, runOn string
+	switch job := v.(type) {
+	case map[string]interface{}:
+		scheduleName = job["schedule_name"].(string)
+		runOn = job["run_on"].(string)
+		switch param := job["parameters"].(type) {
+		case map[string]string:
+			paramString = param
+		case map[string]interface{}:
+			paramString = map[string]string{}
+			for k, v := range param {
+				paramString[k] = fmt.Sprintf("%v", v)
+			}
+		}
+	case jobschedule.JobScheduleCreateProperties:
+		scheduleName = pointer.From(job.Schedule.Name)
+		runOn = pointer.From(job.Runbook.Name)
+		paramString = pointer.From(job.Parameters)
+	case *jobschedule.JobScheduleProperties:
+		scheduleName = pointer.From(pointer.From(job.Schedule).Name)
+		runOn = pointer.From(pointer.From(job.Runbook).Name)
+		paramString = pointer.From(job.Parameters)
+	}
+	buf.WriteString(fmt.Sprintf("%s-%s-", scheduleName, runOn))
+
+	keys := make([]string, 0, len(paramString))
+	for k := range paramString {
+		// params key will be returned as title-cased even created with lower-case
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		buf.WriteString(fmt.Sprintf("%s:%v;", strings.ToLower(k), paramString[k]))
+	}
+	return buf.String()
+}

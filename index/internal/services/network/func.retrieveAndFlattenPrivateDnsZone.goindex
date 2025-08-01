@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	mariadbServers "github.com/hashicorp/go-azure-sdk/resource-manager/mariadb/2018-06-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2017-12-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privatednszonegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privateendpoints"
+	postgresqlServers "github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redis/2024-03-01/redis"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/signalr/2023-02-01/signalr"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	cosmosParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func retrieveAndFlattenPrivateDnsZone(ctx context.Context, client *privatednszonegroups.PrivateDnsZoneGroupsClient, id privatednszonegroups.PrivateDnsZoneGroupId) (*flattenedPrivateDnsZoneGroup, error) {
+	resp, err := client.Get(ctx, id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	privateDnsZoneIds := make([]string, 0)
+	dnsZoneConfigs := make([]interface{}, 0)
+
+	if model := resp.Model; model != nil {
+		if props := model.Properties; props != nil && props.PrivateDnsZoneConfigs != nil {
+			for _, config := range *props.PrivateDnsZoneConfigs {
+				if config.Name == nil {
+					// necessary to build up the ID
+					continue
+				}
+				if config.Properties == nil || config.Properties.PrivateDnsZoneId == nil {
+					// necessary for a bunch of other things
+					continue
+				}
+				configProps := *config.Properties
+				name := *config.Name
+				privateDnsZoneId := *configProps.PrivateDnsZoneId
+
+				privateDnsZoneIds = append(privateDnsZoneIds, privateDnsZoneId)
+
+				recordSets := flattenPrivateDnsZoneGroupRecordSets(configProps.RecordSets)
+				dnsZoneConfigs = append(dnsZoneConfigs, map[string]interface{}{
+					"id":                  parse.NewPrivateDnsZoneConfigID(id.SubscriptionId, id.ResourceGroupName, id.PrivateEndpointName, id.PrivateDnsZoneGroupName, name).ID(),
+					"name":                name,
+					"private_dns_zone_id": privateDnsZoneId,
+					"record_sets":         recordSets,
+				})
+			}
+		}
+	}
+
+	return &flattenedPrivateDnsZoneGroup{
+		DnsZoneConfig: dnsZoneConfigs,
+		DnsZoneGroup: map[string]interface{}{
+			"id":                   id.ID(),
+			"name":                 id.PrivateDnsZoneGroupName,
+			"private_dns_zone_ids": privateDnsZoneIds,
+		},
+	}, nil
+}

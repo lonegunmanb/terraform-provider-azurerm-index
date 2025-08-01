@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/expressroutecircuits"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/localnetworkgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgatewayconnections"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandVirtualNetworkGatewayConnectionIpsecPolicies(schemaIpsecPolicies []interface{}) *[]virtualnetworkgatewayconnections.IPsecPolicy {
+	ipsecPolicies := make([]virtualnetworkgatewayconnections.IPsecPolicy, 0, len(schemaIpsecPolicies))
+
+	for _, d := range schemaIpsecPolicies {
+		schemaIpsecPolicy := d.(map[string]interface{})
+		ipsecPolicy := &virtualnetworkgatewayconnections.IPsecPolicy{}
+
+		if dhGroup, ok := schemaIpsecPolicy["dh_group"].(string); ok && dhGroup != "" {
+			ipsecPolicy.DhGroup = virtualnetworkgatewayconnections.DhGroup(dhGroup)
+		}
+
+		if ikeEncryption, ok := schemaIpsecPolicy["ike_encryption"].(string); ok && ikeEncryption != "" {
+			ipsecPolicy.IkeEncryption = virtualnetworkgatewayconnections.IkeEncryption(ikeEncryption)
+		}
+
+		if ikeIntegrity, ok := schemaIpsecPolicy["ike_integrity"].(string); ok && ikeIntegrity != "" {
+			ipsecPolicy.IkeIntegrity = virtualnetworkgatewayconnections.IkeIntegrity(ikeIntegrity)
+		}
+
+		if ipsecEncryption, ok := schemaIpsecPolicy["ipsec_encryption"].(string); ok && ipsecEncryption != "" {
+			ipsecPolicy.IPsecEncryption = virtualnetworkgatewayconnections.IPsecEncryption(ipsecEncryption)
+		}
+
+		if ipsecIntegrity, ok := schemaIpsecPolicy["ipsec_integrity"].(string); ok && ipsecIntegrity != "" {
+			ipsecPolicy.IPsecIntegrity = virtualnetworkgatewayconnections.IPsecIntegrity(ipsecIntegrity)
+		}
+
+		if pfsGroup, ok := schemaIpsecPolicy["pfs_group"].(string); ok && pfsGroup != "" {
+			ipsecPolicy.PfsGroup = virtualnetworkgatewayconnections.PfsGroup(pfsGroup)
+		}
+
+		if v, ok := schemaIpsecPolicy["sa_datasize"].(int); ok {
+			ipsecPolicy.SaDataSizeKilobytes = int64(v)
+		}
+
+		if v, ok := schemaIpsecPolicy["sa_lifetime"].(int); ok {
+			ipsecPolicy.SaLifeTimeSeconds = int64(v)
+		}
+
+		ipsecPolicies = append(ipsecPolicies, *ipsecPolicy)
+	}
+
+	return &ipsecPolicies
+}

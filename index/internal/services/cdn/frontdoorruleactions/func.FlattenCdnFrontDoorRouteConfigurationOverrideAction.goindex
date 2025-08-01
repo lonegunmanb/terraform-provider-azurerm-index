@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdooractions
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-09-01/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func FlattenCdnFrontDoorRouteConfigurationOverrideAction(input rules.DeliveryRuleRouteConfigurationOverrideAction) (map[string]interface{}, error) {
+	var queryStringCachingBehavior string
+	var cacheBehavior string
+	var compressionEnabled bool
+	var cacheDuration string
+	var forwardingProtocol string
+	var originGroupId string
+	queryParameters := make([]interface{}, 0)
+
+	params := input.Parameters
+
+	if config := params.CacheConfiguration; config != nil {
+		queryStringCachingBehavior = string(pointer.From(config.QueryStringCachingBehavior))
+		cacheBehavior = string(pointer.From(config.CacheBehavior))
+		compressionEnabled = pointer.From(config.IsCompressionEnabled) == rules.RuleIsCompressionEnabledEnabled
+		queryParameters = flattenCsvToStringSlice(config.QueryParameters)
+
+		if config.CacheDuration != nil {
+			cacheDuration = *config.CacheDuration
+		}
+	} else {
+		cacheBehavior = string(rules.RuleIsCompressionEnabledDisabled)
+	}
+
+	if override := params.OriginGroupOverride; override != nil {
+		forwardingProtocol = string(pointer.From(override.ForwardingProtocol))
+
+		// NOTE: Need to parse this ID insensitively to normalize it because if you modified this
+		// resource in the Azure Portal the 'resourceGroup' element comes back as 'resourcegroup'
+		// not 'resourceGroup'.
+		originGroup, err := parse.FrontDoorOriginGroupIDInsensitively(*override.OriginGroup.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		originGroupId = originGroup.ID()
+	}
+
+	return map[string]interface{}{
+		"query_string_caching_behavior": queryStringCachingBehavior,
+		"cache_behavior":                cacheBehavior,
+		"compression_enabled":           compressionEnabled,
+		"cache_duration":                cacheDuration,
+		"query_string_parameters":       queryParameters,
+		"forwarding_protocol":           forwardingProtocol,
+		"cdn_frontdoor_origin_group_id": originGroupId,
+	}, nil
+}

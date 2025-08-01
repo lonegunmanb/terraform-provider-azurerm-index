@@ -1,0 +1,167 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/publicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	compute2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	intStor "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func resourceVirtualMachineRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Compute.VirtualMachinesClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := virtualmachines.ParseVirtualMachineID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id, virtualmachines.DefaultGetOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	d.Set("name", id.VirtualMachineName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("zones", model.Zones)
+		d.Set("location", location.Normalize(model.Location))
+
+		if err := d.Set("plan", flattenAzureRmVirtualMachinePlan(model.Plan)); err != nil {
+			return fmt.Errorf("setting `plan`: %#v", err)
+		}
+
+		identityFlattened, err := identity.FlattenSystemAndUserAssignedMap(model.Identity)
+		if err != nil {
+			return err
+		}
+		if err := d.Set("identity", identityFlattened); err != nil {
+			return fmt.Errorf("setting `identity`: %+v", err)
+		}
+
+		if props := model.Properties; props != nil {
+			if availabilitySet := props.AvailabilitySet; availabilitySet != nil {
+				// Lowercase due to incorrect capitalisation of resource group name in
+				// availability set ID in response from get VM API request
+				// todo can be removed when https://github.com/Azure/azure-sdk-for-go/issues/5699 is fixed
+				d.Set("availability_set_id", strings.ToLower(*availabilitySet.Id))
+			}
+
+			if proximityPlacementGroup := props.ProximityPlacementGroup; proximityPlacementGroup != nil {
+				d.Set("proximity_placement_group_id", proximityPlacementGroup.Id)
+			}
+
+			if profile := props.HardwareProfile; profile != nil {
+				d.Set("vm_size", pointer.From(profile.VMSize))
+			}
+
+			if profile := props.StorageProfile; profile != nil {
+				if err := d.Set("storage_image_reference", pluginsdk.NewSet(resourceVirtualMachineStorageImageReferenceHash, flattenAzureRmVirtualMachineImageReference(profile.ImageReference))); err != nil {
+					return fmt.Errorf("error setting Virtual Machine Storage Image Reference error: %#v", err)
+				}
+
+				if osDisk := profile.OsDisk; osDisk != nil {
+					diskInfo, err := resourceVirtualMachineGetManagedDiskInfo(d, osDisk.ManagedDisk, meta)
+					if err != nil {
+						return fmt.Errorf("flattening `storage_os_disk`: %#v", err)
+					}
+					if err := d.Set("storage_os_disk", flattenAzureRmVirtualMachineOsDisk(osDisk, diskInfo)); err != nil {
+						return fmt.Errorf("setting `storage_os_disk`: %#v", err)
+					}
+				}
+
+				if dataDisks := profile.DataDisks; dataDisks != nil {
+					disksInfo := make([]*disks.Disk, len(*dataDisks))
+					for i, dataDisk := range *dataDisks {
+						diskInfo, err := resourceVirtualMachineGetManagedDiskInfo(d, dataDisk.ManagedDisk, meta)
+						if err != nil {
+							return fmt.Errorf("[DEBUG] Error getting managed data disk detailed information: %#v", err)
+						}
+						disksInfo[i] = diskInfo
+					}
+					if err := d.Set("storage_data_disk", flattenAzureRmVirtualMachineDataDisk(dataDisks, disksInfo)); err != nil {
+						return fmt.Errorf("[DEBUG] Error setting Virtual Machine Storage Data Disks error: %#v", err)
+					}
+				}
+			}
+
+			if profile := props.OsProfile; profile != nil {
+				if err := d.Set("os_profile", pluginsdk.NewSet(resourceVirtualMachineStorageOsProfileHash, flattenAzureRmVirtualMachineOsProfile(profile))); err != nil {
+					return fmt.Errorf("setting `os_profile`: %#v", err)
+				}
+
+				if err := d.Set("os_profile_linux_config", pluginsdk.NewSet(resourceVirtualMachineStorageOsProfileLinuxConfigHash, flattenAzureRmVirtualMachineOsProfileLinuxConfiguration(profile.LinuxConfiguration))); err != nil {
+					return fmt.Errorf("setting `os_profile_linux_config`: %+v", err)
+				}
+
+				if err := d.Set("os_profile_windows_config", pluginsdk.NewSet(resourceVirtualMachineStorageOsProfileWindowsConfigHash, flattenAzureRmVirtualMachineOsProfileWindowsConfiguration(profile.WindowsConfiguration))); err != nil {
+					return fmt.Errorf("setting `os_profile_windows_config`: %+v", err)
+				}
+
+				if err := d.Set("os_profile_secrets", flattenAzureRmVirtualMachineOsProfileSecrets(profile.Secrets)); err != nil {
+					return fmt.Errorf("setting `os_profile_secrets`: %+v", err)
+				}
+			}
+
+			if profile := props.DiagnosticsProfile; profile != nil {
+				if err := d.Set("boot_diagnostics", flattenAzureRmVirtualMachineDiagnosticsProfile(profile.BootDiagnostics)); err != nil {
+					return fmt.Errorf("setting `boot_diagnostics`: %#v", err)
+				}
+			}
+			if err := d.Set("additional_capabilities", flattenAzureRmVirtualMachineAdditionalCapabilities(props.AdditionalCapabilities)); err != nil {
+				return fmt.Errorf("setting `additional_capabilities`: %#v", err)
+			}
+
+			if profile := props.NetworkProfile; profile != nil {
+				if err := d.Set("network_interface_ids", flattenAzureRmVirtualMachineNetworkInterfaces(profile)); err != nil {
+					return fmt.Errorf("flattening `network_interface_ids`: %#v", err)
+				}
+
+				if profile.NetworkInterfaces != nil {
+					for _, nic := range *profile.NetworkInterfaces {
+						if props := nic.Properties; props != nil {
+							if props.Primary != nil && *props.Primary {
+								d.Set("primary_network_interface_id", nic.Id)
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+	return nil
+}

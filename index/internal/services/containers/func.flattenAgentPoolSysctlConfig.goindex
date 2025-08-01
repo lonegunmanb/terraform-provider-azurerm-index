@@ -1,0 +1,197 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/subnets"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/parse"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAgentPoolSysctlConfig(input *agentpools.SysctlConfig) ([]interface{}, error) {
+	if input == nil {
+		return make([]interface{}, 0), nil
+	}
+
+	var fsAioMaxNr int
+	if input.FsAioMaxNr != nil {
+		fsAioMaxNr = int(*input.FsAioMaxNr)
+	}
+	var fsFileMax int
+	if input.FsFileMax != nil {
+		fsFileMax = int(*input.FsFileMax)
+	}
+	var fsInotifyMaxUserWatches int
+	if input.FsInotifyMaxUserWatches != nil {
+		fsInotifyMaxUserWatches = int(*input.FsInotifyMaxUserWatches)
+	}
+	var fsNrOpen int
+	if input.FsNrOpen != nil {
+		fsNrOpen = int(*input.FsNrOpen)
+	}
+	var kernelThreadsMax int
+	if input.KernelThreadsMax != nil {
+		kernelThreadsMax = int(*input.KernelThreadsMax)
+	}
+	var netCoreNetdevMaxBacklog int
+	if input.NetCoreNetdevMaxBacklog != nil {
+		netCoreNetdevMaxBacklog = int(*input.NetCoreNetdevMaxBacklog)
+	}
+	var netCoreOptmemMax int
+	if input.NetCoreOptmemMax != nil {
+		netCoreOptmemMax = int(*input.NetCoreOptmemMax)
+	}
+	var netCoreRmemDefault int
+	if input.NetCoreRmemDefault != nil {
+		netCoreRmemDefault = int(*input.NetCoreRmemDefault)
+	}
+	var netCoreRmemMax int
+	if input.NetCoreRmemMax != nil {
+		netCoreRmemMax = int(*input.NetCoreRmemMax)
+	}
+	var netCoreSomaxconn int
+	if input.NetCoreSomaxconn != nil {
+		netCoreSomaxconn = int(*input.NetCoreSomaxconn)
+	}
+	var netCoreWmemDefault int
+	if input.NetCoreWmemDefault != nil {
+		netCoreWmemDefault = int(*input.NetCoreWmemDefault)
+	}
+	var netCoreWmemMax int
+	if input.NetCoreWmemMax != nil {
+		netCoreWmemMax = int(*input.NetCoreWmemMax)
+	}
+	var netIpv4IpLocalPortRangeMin, netIpv4IpLocalPortRangeMax int
+	if input.NetIPv4IPLocalPortRange != nil {
+		arr := regexp.MustCompile("[ \t]+").Split(*input.NetIPv4IPLocalPortRange, -1)
+		if len(arr) != 2 {
+			return nil, fmt.Errorf("parsing `NetIPv4IPLocalPortRange` %s", *input.NetIPv4IPLocalPortRange)
+		}
+		var err error
+		netIpv4IpLocalPortRangeMin, err = strconv.Atoi(arr[0])
+		if err != nil {
+			return nil, err
+		}
+		netIpv4IpLocalPortRangeMax, err = strconv.Atoi(arr[1])
+		if err != nil {
+			return nil, err
+		}
+	}
+	var netIpv4NeighDefaultGcThresh1 int
+	if input.NetIPv4NeighDefaultGcThresh1 != nil {
+		netIpv4NeighDefaultGcThresh1 = int(*input.NetIPv4NeighDefaultGcThresh1)
+	}
+	var netIpv4NeighDefaultGcThresh2 int
+	if input.NetIPv4NeighDefaultGcThresh2 != nil {
+		netIpv4NeighDefaultGcThresh2 = int(*input.NetIPv4NeighDefaultGcThresh2)
+	}
+	var netIpv4NeighDefaultGcThresh3 int
+	if input.NetIPv4NeighDefaultGcThresh3 != nil {
+		netIpv4NeighDefaultGcThresh3 = int(*input.NetIPv4NeighDefaultGcThresh3)
+	}
+	var netIpv4TcpFinTimeout int
+	if input.NetIPv4TcpFinTimeout != nil {
+		netIpv4TcpFinTimeout = int(*input.NetIPv4TcpFinTimeout)
+	}
+	var netIpv4TcpkeepaliveIntvl int
+	if input.NetIPv4TcpkeepaliveIntvl != nil {
+		netIpv4TcpkeepaliveIntvl = int(*input.NetIPv4TcpkeepaliveIntvl)
+	}
+	var netIpv4TcpKeepaliveProbes int
+	if input.NetIPv4TcpKeepaliveProbes != nil {
+		netIpv4TcpKeepaliveProbes = int(*input.NetIPv4TcpKeepaliveProbes)
+	}
+	var netIpv4TcpKeepaliveTime int
+	if input.NetIPv4TcpKeepaliveTime != nil {
+		netIpv4TcpKeepaliveTime = int(*input.NetIPv4TcpKeepaliveTime)
+	}
+	var netIpv4TcpMaxSynBacklog int
+	if input.NetIPv4TcpMaxSynBacklog != nil {
+		netIpv4TcpMaxSynBacklog = int(*input.NetIPv4TcpMaxSynBacklog)
+	}
+	var netIpv4TcpMaxTwBuckets int
+	if input.NetIPv4TcpMaxTwBuckets != nil {
+		netIpv4TcpMaxTwBuckets = int(*input.NetIPv4TcpMaxTwBuckets)
+	}
+	var netIpv4TcpTwReuse bool
+	if input.NetIPv4TcpTwReuse != nil {
+		netIpv4TcpTwReuse = *input.NetIPv4TcpTwReuse
+	}
+	var netNetfilterNfConntrackBuckets int
+	if input.NetNetfilterNfConntrackBuckets != nil {
+		netNetfilterNfConntrackBuckets = int(*input.NetNetfilterNfConntrackBuckets)
+	}
+	var netNetfilterNfConntrackMax int
+	if input.NetNetfilterNfConntrackMax != nil {
+		netNetfilterNfConntrackMax = int(*input.NetNetfilterNfConntrackMax)
+	}
+	var vmMaxMapCount int
+	if input.VMMaxMapCount != nil {
+		vmMaxMapCount = int(*input.VMMaxMapCount)
+	}
+	var vmSwappiness int
+	if input.VMSwappiness != nil {
+		vmSwappiness = int(*input.VMSwappiness)
+	}
+	var vmVfsCachePressure int
+	if input.VMVfsCachePressure != nil {
+		vmVfsCachePressure = int(*input.VMVfsCachePressure)
+	}
+	return []interface{}{
+		map[string]interface{}{
+			"fs_aio_max_nr":                      fsAioMaxNr,
+			"fs_file_max":                        fsFileMax,
+			"fs_inotify_max_user_watches":        fsInotifyMaxUserWatches,
+			"fs_nr_open":                         fsNrOpen,
+			"kernel_threads_max":                 kernelThreadsMax,
+			"net_core_netdev_max_backlog":        netCoreNetdevMaxBacklog,
+			"net_core_optmem_max":                netCoreOptmemMax,
+			"net_core_rmem_default":              netCoreRmemDefault,
+			"net_core_rmem_max":                  netCoreRmemMax,
+			"net_core_somaxconn":                 netCoreSomaxconn,
+			"net_core_wmem_default":              netCoreWmemDefault,
+			"net_core_wmem_max":                  netCoreWmemMax,
+			"net_ipv4_ip_local_port_range_min":   netIpv4IpLocalPortRangeMin,
+			"net_ipv4_ip_local_port_range_max":   netIpv4IpLocalPortRangeMax,
+			"net_ipv4_neigh_default_gc_thresh1":  netIpv4NeighDefaultGcThresh1,
+			"net_ipv4_neigh_default_gc_thresh2":  netIpv4NeighDefaultGcThresh2,
+			"net_ipv4_neigh_default_gc_thresh3":  netIpv4NeighDefaultGcThresh3,
+			"net_ipv4_tcp_fin_timeout":           netIpv4TcpFinTimeout,
+			"net_ipv4_tcp_keepalive_intvl":       netIpv4TcpkeepaliveIntvl,
+			"net_ipv4_tcp_keepalive_probes":      netIpv4TcpKeepaliveProbes,
+			"net_ipv4_tcp_keepalive_time":        netIpv4TcpKeepaliveTime,
+			"net_ipv4_tcp_max_syn_backlog":       netIpv4TcpMaxSynBacklog,
+			"net_ipv4_tcp_max_tw_buckets":        netIpv4TcpMaxTwBuckets,
+			"net_ipv4_tcp_tw_reuse":              netIpv4TcpTwReuse,
+			"net_netfilter_nf_conntrack_buckets": netNetfilterNfConntrackBuckets,
+			"net_netfilter_nf_conntrack_max":     netNetfilterNfConntrackMax,
+			"vm_max_map_count":                   vmMaxMapCount,
+			"vm_swappiness":                      vmSwappiness,
+			"vm_vfs_cache_pressure":              vmVfsCachePressure,
+		},
+	}, nil
+}

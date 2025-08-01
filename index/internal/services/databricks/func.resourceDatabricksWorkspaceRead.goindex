@@ -1,0 +1,192 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2022-10-01-preview/accessconnector"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	mlworkspace "github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceDatabricksWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).DataBricks.WorkspacesClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := workspaces.ParseWorkspaceID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	var encryptDiskRotationEnabled bool
+	var servicesKeyVaultId string
+	if v, ok := d.GetOk("managed_services_cmk_key_vault_id"); ok {
+		servicesKeyVaultId = v.(string)
+	}
+
+	var diskKeyVaultId string
+	if v, ok := d.GetOk("managed_disk_cmk_key_vault_id"); ok {
+		diskKeyVaultId = v.(string)
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found - removing from state", *id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.WorkspaceName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", azure.NormalizeLocation(model.Location))
+
+		if sku := model.Sku; sku != nil {
+			d.Set("sku", sku.Name)
+		}
+
+		managedResourceGroupID, err := resourcesParse.ResourceGroupIDInsensitively(model.Properties.ManagedResourceGroupId)
+		if err != nil {
+			return err
+		}
+		d.Set("managed_resource_group_id", model.Properties.ManagedResourceGroupId)
+		d.Set("managed_resource_group_name", managedResourceGroupID.ResourceGroup)
+
+		if defaultStorageFirewall := model.Properties.DefaultStorageFirewall; defaultStorageFirewall != nil {
+			d.Set("default_storage_firewall_enabled", *defaultStorageFirewall != workspaces.DefaultStorageFirewallDisabled)
+			if model.Properties.AccessConnector != nil {
+				d.Set("access_connector_id", model.Properties.AccessConnector.Id)
+			}
+		}
+
+		publicNetworkAccess := model.Properties.PublicNetworkAccess
+		if publicNetworkAccess != nil {
+			d.Set("public_network_access_enabled", *publicNetworkAccess != workspaces.PublicNetworkAccessDisabled)
+			if *publicNetworkAccess == workspaces.PublicNetworkAccessDisabled {
+				if model.Properties.RequiredNsgRules != nil {
+					d.Set("network_security_group_rules_required", string(*model.Properties.RequiredNsgRules))
+				}
+			}
+		}
+
+		var cmkEnabled, infraEnabled bool
+		if parameters := model.Properties.Parameters; parameters != nil {
+			if parameters.PrepareEncryption != nil {
+				cmkEnabled = parameters.PrepareEncryption.Value
+			}
+			d.Set("customer_managed_key_enabled", cmkEnabled)
+
+			if parameters.RequireInfrastructureEncryption != nil {
+				infraEnabled = parameters.RequireInfrastructureEncryption.Value
+			}
+			d.Set("infrastructure_encryption_enabled", infraEnabled)
+
+			// The subnet associations only exist in the statefile, so we need to do a Get before we Set
+			// with what has come back from the Azure response...
+			customParamsRaw := d.Get("custom_parameters").([]interface{})
+			_, pubSubAssoc, priSubAssoc := expandWorkspaceCustomParameters(customParamsRaw, cmkEnabled, infraEnabled, "", "")
+
+			custom, backendPoolReadId := flattenWorkspaceCustomParameters(parameters, pubSubAssoc, priSubAssoc)
+			if err := d.Set("custom_parameters", custom); err != nil {
+				return fmt.Errorf("setting `custom_parameters`: %+v", err)
+			}
+
+			d.Set("load_balancer_backend_address_pool_id", backendPoolReadId)
+		}
+
+		if err := d.Set("storage_account_identity", flattenWorkspaceManagedIdentity(model.Properties.StorageAccountIdentity)); err != nil {
+			return fmt.Errorf("setting `storage_account_identity`: %+v", err)
+		}
+
+		if err := d.Set("managed_disk_identity", flattenWorkspaceManagedIdentity(model.Properties.ManagedDiskIdentity)); err != nil {
+			return fmt.Errorf("setting `managed_disk_identity`: %+v", err)
+		}
+
+		var workspaceUrl string
+		if model.Properties.WorkspaceURL != nil {
+			workspaceUrl = *model.Properties.WorkspaceURL
+		}
+		d.Set("workspace_url", workspaceUrl)
+
+		var workspaceId string
+		if model.Properties.WorkspaceId != nil {
+			workspaceId = *model.Properties.WorkspaceId
+		}
+		d.Set("workspace_id", workspaceId)
+
+		// customer managed key for managed services
+		var servicesKeyId string
+		if encryption := model.Properties.Encryption; encryption != nil {
+			if encryptionProps := encryption.Entities.ManagedServices; encryptionProps != nil {
+				if encryptionProps.KeyVaultProperties.KeyVaultUri != "" {
+					key, err := keyVaultParse.NewNestedItemID(encryptionProps.KeyVaultProperties.KeyVaultUri, keyVaultParse.NestedItemTypeKey, encryptionProps.KeyVaultProperties.KeyName, encryptionProps.KeyVaultProperties.KeyVersion)
+					if err == nil {
+						servicesKeyId = key.ID()
+					}
+				}
+			}
+		}
+
+		// customer managed key for managed disk
+		var diskKeyId string
+		if encryption := model.Properties.Encryption; encryption != nil {
+			if encryptionProps := encryption.Entities.ManagedDisk; encryptionProps != nil {
+				if encryptionProps.KeyVaultProperties.KeyVaultUri != "" {
+					key, err := keyVaultParse.NewNestedItemID(encryptionProps.KeyVaultProperties.KeyVaultUri, keyVaultParse.NestedItemTypeKey, encryptionProps.KeyVaultProperties.KeyName, encryptionProps.KeyVaultProperties.KeyVersion)
+					if err == nil {
+						diskKeyId = key.ID()
+					}
+				}
+
+				encryptDiskRotationEnabled = *encryptionProps.RotationToLatestKeyVersionEnabled
+			}
+		}
+
+		d.Set("enhanced_security_compliance", flattenWorkspaceEnhancedSecurity(model.Properties.EnhancedSecurityCompliance))
+
+		var encryptDiskEncryptionSetId string
+		if model.Properties.DiskEncryptionSetId != nil {
+			encryptDiskEncryptionSetId = *model.Properties.DiskEncryptionSetId
+		}
+		d.Set("disk_encryption_set_id", encryptDiskEncryptionSetId)
+
+		// Always set these even if they are empty to keep the state file
+		// consistent with the configuration file...
+		d.Set("managed_services_cmk_key_vault_key_id", servicesKeyId)
+		d.Set("managed_services_cmk_key_vault_id", servicesKeyVaultId)
+		d.Set("managed_disk_cmk_key_vault_key_id", diskKeyId)
+		d.Set("managed_disk_cmk_key_vault_id", diskKeyVaultId)
+		d.Set("managed_disk_cmk_rotation_to_latest_version_enabled", encryptDiskRotationEnabled)
+
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+
+	return nil
+}

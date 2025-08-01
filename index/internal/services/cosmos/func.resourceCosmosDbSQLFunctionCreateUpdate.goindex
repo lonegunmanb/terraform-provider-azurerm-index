@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cosmos-db/mgmt/2021-10-15/documentdb" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCosmosDbSQLFunctionCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	client := meta.(*clients.Client).Cosmos.SqlResourceClient
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	name := d.Get("name").(string)
+	containerId, _ := parse.SqlContainerID(d.Get("container_id").(string))
+	body := d.Get("body").(string)
+
+	id := parse.NewSqlFunctionID(subscriptionId, containerId.ResourceGroup, containerId.DatabaseAccountName, containerId.SqlDatabaseName, containerId.ContainerName, name)
+
+	if d.IsNewResource() {
+		existing, err := client.GetSQLUserDefinedFunction(ctx, id.ResourceGroup, id.DatabaseAccountName, id.SqlDatabaseName, id.ContainerName, id.UserDefinedFunctionName)
+		if err != nil {
+			if !utils.ResponseWasNotFound(existing.Response) {
+				return fmt.Errorf("checking for existing CosmosDb SqlFunction %q: %+v", id, err)
+			}
+		}
+		if !utils.ResponseWasNotFound(existing.Response) {
+			return tf.ImportAsExistsError("azurerm_cosmosdb_sql_function", id.ID())
+		}
+	}
+
+	createUpdateSqlUserDefinedFunctionParameters := documentdb.SQLUserDefinedFunctionCreateUpdateParameters{
+		SQLUserDefinedFunctionCreateUpdateProperties: &documentdb.SQLUserDefinedFunctionCreateUpdateProperties{
+			Resource: &documentdb.SQLUserDefinedFunctionResource{
+				ID:   &name,
+				Body: &body,
+			},
+			Options: &documentdb.CreateUpdateOptions{},
+		},
+	}
+	future, err := client.CreateUpdateSQLUserDefinedFunction(ctx, id.ResourceGroup, id.DatabaseAccountName, id.SqlDatabaseName, id.ContainerName, id.UserDefinedFunctionName, createUpdateSqlUserDefinedFunctionParameters)
+	if err != nil {
+		return fmt.Errorf("creating/updating CosmosDb SqlFunction %q: %+v", id, err)
+	}
+
+	if err := future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("waiting for creation/update of the CosmosDb SqlFunction %q: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceCosmosDbSQLFunctionRead(d, meta)
+}

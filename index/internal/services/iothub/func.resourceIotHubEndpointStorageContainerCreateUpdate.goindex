@@ -1,0 +1,144 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func resourceIotHubEndpointStorageContainerCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).IoTHub.ResourceClient
+	subscriptionId := meta.(*clients.Client).IoTHub.ResourceClient.SubscriptionID
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+	subscriptionID := meta.(*clients.Client).Account.SubscriptionId
+
+	endpointRG := d.Get("resource_group_name").(string)
+
+	iotHubId, err := parse.IotHubID(d.Get("iothub_id").(string))
+	if err != nil {
+		return err
+	}
+	iotHubName := iotHubId.Name
+	iotHubRG := iotHubId.ResourceGroup
+
+	id := parse.NewEndpointStorageContainerID(subscriptionId, iotHubRG, iotHubName, d.Get("name").(string))
+
+	locks.ByName(iotHubName, IothubResourceName)
+	defer locks.UnlockByName(iotHubName, IothubResourceName)
+
+	iothub, err := client.Get(ctx, iotHubRG, iotHubName)
+	if err != nil {
+		if utils.ResponseWasNotFound(iothub.Response) {
+			return fmt.Errorf("IotHub %q (Resource Group %q) was not found", iotHubName, iotHubRG)
+		}
+
+		return fmt.Errorf("loading IotHub %q (Resource Group %q): %+v", iotHubName, iotHubRG, err)
+	}
+
+	authenticationType := devices.AuthenticationType(d.Get("authentication_type").(string))
+	containerName := d.Get("container_name").(string)
+	fileNameFormat := d.Get("file_name_format").(string)
+	batchFrequencyInSeconds := int32(d.Get("batch_frequency_in_seconds").(int))
+	maxChunkSizeInBytes := int32(d.Get("max_chunk_size_in_bytes").(int))
+	encoding := d.Get("encoding").(string)
+
+	storageContainerEndpoint := devices.RoutingStorageContainerProperties{
+		AuthenticationType:      authenticationType,
+		Name:                    &id.EndpointName,
+		SubscriptionID:          &subscriptionID,
+		ResourceGroup:           &endpointRG,
+		ContainerName:           &containerName,
+		FileNameFormat:          &fileNameFormat,
+		BatchFrequencyInSeconds: &batchFrequencyInSeconds,
+		MaxChunkSizeInBytes:     &maxChunkSizeInBytes,
+		Encoding:                devices.Encoding(encoding),
+	}
+
+	if authenticationType == devices.AuthenticationTypeKeyBased {
+		if v, ok := d.GetOk("connection_string"); ok {
+			storageContainerEndpoint.ConnectionString = utils.String(v.(string))
+		} else {
+			return fmt.Errorf("`connection_string` must be specified when `authentication_type` is `keyBased`")
+		}
+	} else {
+		if v, ok := d.GetOk("endpoint_uri"); ok {
+			storageContainerEndpoint.EndpointURI = utils.String(v.(string))
+		} else {
+			return fmt.Errorf("`endpoint_uri` must be specified when `authentication_type` is `identityBased`")
+		}
+
+		if v, ok := d.GetOk("identity_id"); ok {
+			storageContainerEndpoint.Identity = &devices.ManagedIdentity{
+				UserAssignedIdentity: utils.String(v.(string)),
+			}
+		}
+	}
+
+	routing := iothub.Properties.Routing
+
+	if routing == nil {
+		routing = &devices.RoutingProperties{}
+	}
+
+	if routing.Endpoints == nil {
+		routing.Endpoints = &devices.RoutingEndpoints{}
+	}
+
+	if routing.Endpoints.StorageContainers == nil {
+		storageContainers := make([]devices.RoutingStorageContainerProperties, 0)
+		routing.Endpoints.StorageContainers = &storageContainers
+	}
+
+	endpoints := make([]devices.RoutingStorageContainerProperties, 0)
+
+	alreadyExists := false
+	for _, existingEndpoint := range *routing.Endpoints.StorageContainers {
+		if existingEndpointName := existingEndpoint.Name; existingEndpointName != nil {
+			if strings.EqualFold(*existingEndpointName, id.EndpointName) {
+				if d.IsNewResource() {
+					return tf.ImportAsExistsError("azurerm_iothub_endpoint_storage_container", id.ID())
+				}
+				endpoints = append(endpoints, storageContainerEndpoint)
+				alreadyExists = true
+			} else {
+				endpoints = append(endpoints, existingEndpoint)
+			}
+		}
+	}
+
+	if d.IsNewResource() {
+		endpoints = append(endpoints, storageContainerEndpoint)
+	} else if !alreadyExists {
+		return fmt.Errorf("unable to find %s", id)
+	}
+	routing.Endpoints.StorageContainers = &endpoints
+
+	future, err := client.CreateOrUpdate(ctx, iotHubRG, iotHubName, iothub, "")
+	if err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("waiting for the completion of the creating/updating of %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceIotHubEndpointStorageContainerRead(d, meta)
+}

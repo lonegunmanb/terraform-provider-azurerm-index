@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/virtualwans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/azurefirewalls"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFirewallVirtualHubSetting(existing *azurefirewalls.AzureFirewall, input []interface{}) (vhub *azurefirewalls.SubResource, ipAddresses *azurefirewalls.HubIPAddresses, ok bool) {
+	if len(input) == 0 {
+		return nil, nil, false
+	}
+
+	b := input[0].(map[string]interface{})
+
+	// The API requires both "Count" and "Addresses" for the "PublicIPs" setting.
+	// The "Count" means how many PIP to provision.
+	// The "Addresses" means differently in different cases:
+	// - Create: only "Count" is needed, "Addresses" is not necessary
+	// - Update: both "Count" and "Addresses" are needed:
+	//     Scale up: "Addresses" should remain same as before scaling up
+	//     Scale down: "Addresses" should indicate the addresses to be retained (in this case we retain the first new "Count" ones)
+	newCount := b["public_ip_count"].(int)
+	var addresses *[]azurefirewalls.AzureFirewallPublicIPAddress
+	if existing != nil {
+		if prop := existing.Properties; prop != nil {
+			if ipaddress := prop.HubIPAddresses; ipaddress != nil {
+				if pips := ipaddress.PublicIPs; pips != nil {
+					if count := pips.Count; count != nil {
+						oldCount := int(*count)
+						addresses = pips.Addresses
+
+						// In case of scale down, keep the first new "Count" addresses.
+						if oldCount > newCount {
+							keptAddresses := make([]azurefirewalls.AzureFirewallPublicIPAddress, newCount)
+							for i := 0; i < newCount; i++ {
+								keptAddresses[i] = (*addresses)[i]
+							}
+							addresses = &keptAddresses
+						}
+					}
+				}
+			}
+		}
+	}
+
+	vhub = &azurefirewalls.SubResource{Id: utils.String(b["virtual_hub_id"].(string))}
+	ipAddresses = &azurefirewalls.HubIPAddresses{
+		PublicIPs: &azurefirewalls.HubPublicIPAddresses{
+			Count:     utils.Int64(int64(b["public_ip_count"].(int))),
+			Addresses: addresses,
+		},
+	}
+
+	return vhub, ipAddresses, true
+}

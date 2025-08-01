@@ -1,0 +1,121 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"sort"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/images"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceImage() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Read: dataSourceImageRead,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Read: pluginsdk.DefaultTimeout(5 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name_regex": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsValidRegExp,
+				ExactlyOneOf: []string{"name", "name_regex"},
+			},
+			"sort_descending": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ExactlyOneOf: []string{"name", "name_regex"},
+			},
+
+			"resource_group_name": commonschema.ResourceGroupNameForDataSource(),
+
+			"location": commonschema.LocationComputed(),
+
+			"zone_resilient": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"os_disk": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"blob_uri": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"caching": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"managed_disk_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"os_state": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"os_type": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"size_gb": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"data_disk": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"blob_uri": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"caching": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"lun": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+						"managed_disk_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"size_gb": {
+							Type:     pluginsdk.TypeInt,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"tags": commonschema.TagsDataSource(),
+		},
+	}
+}

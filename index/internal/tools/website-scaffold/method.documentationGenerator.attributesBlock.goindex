@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/magodo/terraform-provider-azurerm-example-gen/examplegen"
+)
+func (gen documentationGenerator) attributesBlock() string {
+	documentationForAttributes := func(input map[string]*schema.Schema, onlyComputed bool, blockName string) string {
+		fields := ""
+
+		// now list all of the top-level fields / blocks alphabetically
+		for _, fieldName := range gen.sortFields(input) {
+			field := input[fieldName]
+			// when we're in a nested block there's no need to duplicate the fields
+			if onlyComputed && !field.Computed {
+				continue
+			}
+			if onlyComputed && (field.Optional || field.Required) {
+				continue
+			}
+
+			value := gen.buildDescriptionForAttribute(fieldName, field, blockName)
+			fields += fmt.Sprintf("* `%s` - %s\n\n", fieldName, value)
+		}
+
+		return fields
+	}
+
+	// present in everything
+	fields := fmt.Sprintf("* `id` - The ID of the %s.\n\n", gen.brandName)
+
+	// now list all of the top-level fields / blocks alphabetically
+	fields += documentationForAttributes(gen.resource.Schema, true, "")
+
+	// then we need to collect a list of all block names, everywhere
+	blockNames, blocks := gen.uniqueBlockNamesForAttribute(gen.resource.Schema)
+
+	for _, blockName := range blockNames {
+		block := blocks[blockName]
+
+		fields += "---\n\n"
+		fields += fmt.Sprintf("A `%s` block exports the following:\n\n", blockName)
+		fields += documentationForAttributes(block, false, blockName)
+	}
+
+	fields = strings.TrimSuffix(fields, "\n\n")
+
+	return fmt.Sprintf(`## Attributes Reference
+
+In addition to the Arguments listed above - the following Attributes are exported: 
+
+%s`, fields)
+}

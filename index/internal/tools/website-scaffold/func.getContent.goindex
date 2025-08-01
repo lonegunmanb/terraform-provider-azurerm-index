@@ -1,0 +1,90 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/magodo/terraform-provider-azurerm-example-gen/examplegen"
+)
+func getContent(resourceName, brandName string, resourceId *string, isResource bool, expsrc *examplegen.ExampleSource) (*string, error) {
+	generator := documentationGenerator{
+		resourceName:  resourceName,
+		brandName:     brandName,
+		resourceId:    resourceId,
+		isDataSource:  !isResource,
+		exampleSource: expsrc,
+	}
+
+	if !isResource {
+		for _, service := range provider.SupportedTypedServices() {
+			for _, ds := range service.DataSources() {
+				if ds.ResourceType() == resourceName {
+					wrapper := sdk.NewDataSourceWrapper(ds)
+					dsWrapper, err := wrapper.DataSource()
+					if err != nil {
+						return nil, fmt.Errorf("wrapping Data Source %q: %+v", ds.ResourceType(), err)
+					}
+
+					generator.resource = dsWrapper
+					generator.websiteCategories = service.WebsiteCategories()
+					break
+				}
+			}
+		}
+		for _, service := range provider.SupportedUntypedServices() {
+			for key, ds := range service.SupportedDataSources() {
+				if key == resourceName {
+					generator.resource = ds
+					generator.websiteCategories = service.WebsiteCategories()
+					break
+				}
+			}
+		}
+
+		if generator.resource == nil {
+			return nil, fmt.Errorf("Data Source %q was not registered!", resourceName)
+		}
+	} else {
+		for _, service := range provider.SupportedTypedServices() {
+			for _, rs := range service.Resources() {
+				if rs.ResourceType() == resourceName {
+					wrapper := sdk.NewResourceWrapper(rs)
+					rsWrapper, err := wrapper.Resource()
+					if err != nil {
+						return nil, fmt.Errorf("wrapping Resource %q: %+v", rs.ResourceType(), err)
+					}
+
+					generator.resource = rsWrapper
+					generator.websiteCategories = service.WebsiteCategories()
+					break
+				}
+			}
+		}
+		for _, service := range provider.SupportedUntypedServices() {
+			for key, rs := range service.SupportedResources() {
+				if key == resourceName {
+					generator.resource = rs
+					generator.websiteCategories = service.WebsiteCategories()
+					break
+				}
+			}
+		}
+
+		if generator.resource == nil {
+			return nil, fmt.Errorf("Resource %q was not registered!", resourceName)
+		}
+	}
+
+	docs := generator.generate()
+	return &docs, nil
+}

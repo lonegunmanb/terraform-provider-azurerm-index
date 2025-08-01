@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model
+import (
+	"log"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func (r *ResourceDoc) SetTimeout(lineNum int, line string) {
+	if r.Timeouts == nil {
+		r.Timeouts = &Timeouts{}
+	}
+	start, end := util.TimeoutValueIdx(line)
+	if end <= start {
+		return
+	}
+
+	text := line[start:end]
+	values := strings.Split(strings.TrimSpace(text), " ")
+	if len(values) < 2 {
+		log.Printf("timeout value invalid: %s", line)
+		return
+	}
+
+	// text is xxx hours or xxx minutes
+	num, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		log.Printf("timeout number parse for %s err: %v", line, err)
+		return
+	}
+	if strings.HasPrefix(values[1], "hour") {
+		num *= 60 // all minutes
+	}
+	num *= 60 // set to seconds
+	item := Timeout{
+		Line:  lineNum,
+		Value: num,
+	}
+	switch {
+	case strings.Contains(line, "`create`"):
+		r.Timeouts.Create = item
+	case strings.Contains(line, "`update`"):
+		r.Timeouts.Update = item
+	case strings.Contains(line, "`read`"):
+		r.Timeouts.Read = item
+	case strings.Contains(line, "`delete`"):
+		r.Timeouts.Delete = item
+	default:
+		log.Printf("line has not timeout type: %s", line)
+	}
+}

@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachinegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceMsSqlVirtualMachineAutoPatchingSettingsRefreshFunc(ctx context.Context, client *sqlvirtualmachines.SqlVirtualMachinesClient, d *pluginsdk.ResourceData) pluginsdk.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+		id, err := sqlvirtualmachines.ParseSqlVirtualMachineID(d.Id())
+		if err != nil {
+			return nil, "Error", err
+		}
+
+		resp, err := client.Get(ctx, *id, sqlvirtualmachines.GetOperationOptions{Expand: utils.String("*")})
+		if err != nil {
+			return nil, "Retry", err
+		}
+
+		if model := resp.Model; model != nil {
+			if props := model.Properties; props != nil {
+				autoPatchingSettings := flattenSqlVirtualMachineAutoPatching(props.AutoPatchingSettings)
+
+				if len(autoPatchingSettings) == 0 {
+					if v, ok := d.GetOk("auto_patching"); !ok || len(v.([]interface{})) == 0 {
+						return resp, "Updated", nil
+					}
+					return resp, "Pending", nil
+				}
+
+				if v, ok := d.GetOk("auto_patching"); !ok || len(v.([]interface{})) == 0 {
+					return resp, "Pending", nil
+				}
+
+				for prop, val := range autoPatchingSettings[0].(map[string]interface{}) {
+					v := d.Get(fmt.Sprintf("auto_patching.0.%s", prop))
+					if v != val {
+						return resp, "Pending", nil
+					}
+				}
+
+				return resp, "Updated", nil
+			}
+		}
+
+		return resp, "Retry", nil
+	}
+}

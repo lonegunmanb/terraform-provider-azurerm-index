@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/security/mgmt/v3.0/security" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSecurityCenterAutoProvisioning() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSecurityCenterAutoProvisioningCreateUpdate,
+		Read:   resourceSecurityCenterAutoProvisioningRead,
+		Update: resourceSecurityCenterAutoProvisioningCreateUpdate,
+		Delete: resourceSecurityCenterAutoProvisioningDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.AutoProvisioningSettingID(id)
+			return err
+		}),
+
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.AutoProvisioningV0ToV1{},
+		}),
+		SchemaVersion: 1,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(60 * time.Minute),
+		},
+
+		DeprecationMessage: "The `azurerm_security_center_auto_provisioning` resource has been deprecated and will be removed in v5.0 of the AzureRM Provider",
+
+		Schema: map[string]*pluginsdk.Schema{
+			"auto_provision": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				// NOTE: the API seems case insensitive to this string value, 'ON', 'On', 'on' all work
+				ValidateFunc: validation.StringInSlice([]string{
+					string(security.AutoProvisionOn),
+					string(security.AutoProvisionOff),
+				}, false),
+			},
+		},
+	}
+}

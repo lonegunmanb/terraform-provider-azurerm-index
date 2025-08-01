@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func findDefaultNodePool(input *[]managedclusters.ManagedClusterAgentPoolProfile, d *pluginsdk.ResourceData) (*managedclusters.ManagedClusterAgentPoolProfile, error) {
+	// first try loading this from the Resource Data if possible (e.g. when Created)
+	defaultNodePoolName := d.Get("default_node_pool.0.name")
+	tempNodePoolName := d.Get("default_node_pool.0.temporary_name_for_rotation")
+
+	var agentPool *managedclusters.ManagedClusterAgentPoolProfile
+	if defaultNodePoolName != "" {
+		// find it
+		for _, v := range *input {
+			if v.Name == defaultNodePoolName {
+				agentPool = &v
+				break
+			}
+		}
+	}
+
+	// fallback to the temp node pool or other system node pools that exist for the cluster
+	if agentPool == nil {
+		// otherwise we need to fall back to the name of the first agent pool
+		for _, v := range *input {
+			if v.Name == "" {
+				continue
+			}
+			if *v.Mode != managedclusters.AgentPoolModeSystem {
+				continue
+			}
+
+			if v.Name == tempNodePoolName {
+				defaultNodePoolName = v.Name
+				agentPool = &v
+				break
+			}
+
+			defaultNodePoolName = v.Name
+			agentPool = &v
+			break
+		}
+
+		if defaultNodePoolName == nil {
+			return nil, fmt.Errorf("unable to Determine Default Agent Pool")
+		}
+	}
+
+	if agentPool == nil {
+		return nil, fmt.Errorf("the Default Agent Pool %q was not found", defaultNodePoolName)
+	}
+
+	return agentPool, nil
+}

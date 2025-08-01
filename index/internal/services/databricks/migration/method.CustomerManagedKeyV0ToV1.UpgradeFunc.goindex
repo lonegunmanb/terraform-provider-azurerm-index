@@ -1,0 +1,30 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/migration
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (c CustomerManagedKeyV0ToV1) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		// previously CustomerManagedKey used a virtual Resource ID - however this had a typo in the final segment `Mangaged`
+		// whilst we could look to update this to remove the typo - since other Customer Managed Key resources use the
+		// ID of the Parent resource being changed, we're going to update it to that instead.
+
+		oldIdRaw := rawState["id"].(string)
+		oldId, err := parseLegacyCustomerManagedKeyId(oldIdRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parsing existing Resource ID %q: %+v", oldIdRaw, err)
+		}
+
+		newId := workspaces.NewWorkspaceID(oldId.SubscriptionId, oldId.ResourceGroup, oldId.CustomerMangagedKeyName)
+		log.Printf("[DEBUG] Updating the Resource ID from %q to %q", oldIdRaw, newId.ID())
+		rawState["id"] = newId.ID()
+
+		return rawState, nil
+	}
+}

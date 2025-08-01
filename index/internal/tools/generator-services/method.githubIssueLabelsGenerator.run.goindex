@@ -1,0 +1,131 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk" // nolint: typecheck
+)
+func (githubIssueLabelsGenerator) run(outputFileName string, _ map[string]struct{}) error {
+	labelToNames := make(map[string][]string)
+	label := ""
+
+	for _, service := range provider.SupportedTypedServices() {
+		v, ok := service.(sdk.TypedServiceRegistrationWithAGitHubLabel)
+		// keep a record of resources/datasources that don't have labels so they can be used to check that prefixes generated later don't match resources from those services
+		if ok {
+			label = v.AssociatedGitHubLabel()
+		}
+
+		var names []string
+		for _, resource := range service.Resources() {
+			names = append(names, resource.ResourceType())
+		}
+
+		for _, ds := range service.DataSources() {
+			names = append(names, ds.ResourceType())
+		}
+
+		labelToNames = appendToSliceWithinMap(labelToNames, names, label)
+	}
+	for _, service := range provider.SupportedUntypedServices() {
+		v, ok := service.(sdk.UntypedServiceRegistrationWithAGitHubLabel)
+		service.SupportedResources()
+
+		// keep a record of resources/datasources that don't have labels so they can be used to check that prefixes generated later don't match resources from those services
+		label = ""
+		if ok {
+			label = v.AssociatedGitHubLabel()
+		}
+
+		var names []string
+		for resourceName := range service.SupportedResources() {
+			if resourceName != "" {
+				names = append(names, resourceName)
+			}
+		}
+
+		for dsName := range service.SupportedDataSources() {
+			if dsName != "" {
+				names = append(names, dsName)
+			}
+		}
+
+		names = removeDuplicateNames(names)
+		labelToNames = appendToSliceWithinMap(labelToNames, names, label)
+	}
+
+	sortedLabels := make([]string, 0)
+	for k := range labelToNames {
+		sortedLabels = append(sortedLabels, k)
+	}
+	sort.Strings(sortedLabels)
+
+	output := strings.TrimSpace(githubIssueLabelsTemplate)
+
+	labelToPrefixes := make(map[string][]Prefix)
+
+	// loop through all labels and get a list of prefixes that match each label. And for each prefix, record which resource/datasource names it is derived from - we need to retain these in case there are duplicate prefixes matching resources with a different label
+	for _, labelName := range sortedLabels {
+		longestPrefix := longestCommonPrefix(labelToNames[labelName])
+		var prefixGroups []Prefix
+		// If there is no common prefix for a service, separate it into groups using the next segment of the name (azurerm_xxx) and add multiple possible prefixes for the label
+		// For example, under "service/signalr" we separate names into groups of 2 prefixes.
+		// The prefix azurerm_signalr matches resources `azurerm_signalr_shared_private_link_resource`, `azurerm_signalr_service`, `azurerm_signalr_service_custom_domain` etc.
+		// And web_pubsub matches `azurerm_web_pubsub_hub`, `azurerm_web_pubsub_network_acl` etc.
+		// But both share the "service/signalr" label.
+		if longestPrefix == azurerm {
+			prefixGroups = getPrefixesForNames(labelToNames[labelName])
+		} else {
+			prefixGroups = []Prefix{
+				{
+					Names:        labelToNames[labelName],
+					CommonPrefix: longestPrefix,
+				},
+			}
+		}
+		labelToPrefixes[labelName] = prefixGroups
+	}
+
+	// loop though again, this time compiling prefixes into a regex for each label and separating out duplicates
+	for _, labelName := range sortedLabels {
+		if labelName == "" {
+			continue
+		}
+
+		out := []string{
+			fmt.Sprintf("%[1]s:", labelName),
+		}
+		prefixes := make([]string, 0)
+
+		for _, prefix := range labelToPrefixes[labelName] {
+			// if a prefix matches another prefix, use the whole name for each resource/ds that matches that prefix in the regex
+			if prefixHasMatch(labelName, prefix, labelToPrefixes) {
+				for _, name := range prefix.Names {
+					prefixes = append(prefixes, strings.TrimPrefix(name+"\\W+", azurerm))
+				}
+			} else {
+				prefixes = append(prefixes, strings.TrimPrefix(prefix.CommonPrefix, azurerm))
+			}
+		}
+
+		if len(prefixes) > 0 {
+			if len(prefixes) > 1 {
+				out = append(out, fmt.Sprintf("  - '### (|New or )Affected Resource\\(s\\)\\/Data Source\\(s\\)((.|\\n)*)azurerm_(%s)((.|\\n)*)###'", strings.Join(prefixes, "|")))
+			}
+			if len(prefixes) == 1 {
+				out = append(out, fmt.Sprintf("  - '### (|New or )Affected Resource\\(s\\)\\/Data Source\\(s\\)((.|\\n)*)azurerm_%s((.|\\n)*)###'", prefixes[0]))
+			}
+			out = append(out, "")
+			output += fmt.Sprintf("\n%s", strings.Join(out, "\n"))
+		}
+	}
+
+	return writeToFile(outputFileName, output)
+}

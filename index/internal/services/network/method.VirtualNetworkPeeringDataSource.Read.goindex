@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkpeerings"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (VirtualNetworkPeeringDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Network.VirtualNetworkPeerings
+
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var state VirtualNetworkPeeringDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			virtualNetworkId, err := commonids.ParseVirtualNetworkID(state.VirtualNetworkId)
+			if err != nil {
+				return err
+			}
+
+			id := virtualnetworkpeerings.NewVirtualNetworkPeeringID(subscriptionId, virtualNetworkId.ResourceGroupName, virtualNetworkId.VirtualNetworkName, state.Name)
+
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			if model := resp.Model; model != nil {
+				if props := model.Properties; props != nil {
+					state.AllowVirtualNetworkAccess = pointer.From(props.AllowVirtualNetworkAccess)
+					state.AllowForwardedTraffic = pointer.From(props.AllowForwardedTraffic)
+					state.AllowGatewayTransit = pointer.From(props.AllowGatewayTransit)
+					state.OnlyIPv6PeeringEnabled = pointer.From(props.EnableOnlyIPv6Peering)
+					state.PeerCompleteVnetsEnabled = pointer.From(props.PeerCompleteVnets)
+					state.UseRemoteGateways = pointer.From(props.UseRemoteGateways)
+
+					remoteVirtualNetworkId := ""
+					if network := props.RemoteVirtualNetwork; network != nil {
+						parsed, err := commonids.ParseVirtualNetworkIDInsensitively(*network.Id)
+						if err != nil {
+							return err
+						}
+						remoteVirtualNetworkId = parsed.ID()
+					}
+					state.RemoteVirtualNetworkId = remoteVirtualNetworkId
+				}
+			}
+			return metadata.Encode(&state)
+		},
+	}
+}

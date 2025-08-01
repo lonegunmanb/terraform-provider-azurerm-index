@@ -1,0 +1,126 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventgrid
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2022-06-15/eventsubscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceEventGridSystemTopicEventSubscription() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceEventGridSystemTopicEventSubscriptionCreateUpdate,
+		Read:   resourceEventGridSystemTopicEventSubscriptionRead,
+		Update: resourceEventGridSystemTopicEventSubscriptionCreateUpdate,
+		Delete: resourceEventGridSystemTopicEventSubscriptionDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := eventsubscriptions.ParseSystemTopicEventSubscriptionID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": eventSubscriptionSchemaEventSubscriptionName(),
+
+			"system_topic": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"event_delivery_schema": eventSubscriptionSchemaEventDeliverySchema(),
+
+			"expiration_time_utc": eventSubscriptionSchemaExpirationTimeUTC(),
+
+			// TODO: this can become `function_id` in 4.0?
+			"azure_function_endpoint": eventSubscriptionSchemaAzureFunctionEndpoint(
+				utils.RemoveFromStringArray(
+					possibleSystemTopicEventSubscriptionEndpointTypes(),
+					string(AzureFunctionEndpoint),
+				),
+			),
+
+			// TODO: this can become `eventhub_id` in 4.0
+			"eventhub_endpoint_id": eventSubscriptionSchemaEventHubEndpointID(
+				utils.RemoveFromStringArray(
+					possibleSystemTopicEventSubscriptionEndpointTypes(),
+					string(EventHubEndpointID),
+				),
+			),
+
+			// TODO: this can become `hybrid_connection_id` (or possible `arc_connection_id`?) in 4.0
+			"hybrid_connection_endpoint_id": eventSubscriptionSchemaHybridConnectionEndpointID(
+				utils.RemoveFromStringArray(
+					possibleSystemTopicEventSubscriptionEndpointTypes(),
+					string(HybridConnectionEndpointID),
+				),
+			),
+
+			"service_bus_queue_endpoint_id": eventSubscriptionSchemaServiceBusQueueEndpointID(
+				utils.RemoveFromStringArray(
+					possibleSystemTopicEventSubscriptionEndpointTypes(),
+					string(ServiceBusQueueEndpointID),
+				),
+			),
+
+			"service_bus_topic_endpoint_id": eventSubscriptionSchemaServiceBusTopicEndpointID(
+				utils.RemoveFromStringArray(
+					possibleSystemTopicEventSubscriptionEndpointTypes(),
+					string(ServiceBusTopicEndpointID),
+				),
+			),
+
+			"storage_queue_endpoint": eventSubscriptionSchemaStorageQueueEndpoint(
+				utils.RemoveFromStringArray(
+					possibleSystemTopicEventSubscriptionEndpointTypes(),
+					string(StorageQueueEndpoint),
+				),
+			),
+
+			"webhook_endpoint": eventSubscriptionSchemaWebHookEndpoint(
+				utils.RemoveFromStringArray(
+					possibleSystemTopicEventSubscriptionEndpointTypes(),
+					string(WebHookEndpoint),
+				),
+			),
+
+			"included_event_types": eventSubscriptionSchemaIncludedEventTypes(),
+
+			"subject_filter": eventSubscriptionSchemaSubjectFilter(),
+
+			"advanced_filter": eventSubscriptionSchemaAdvancedFilter(),
+
+			"delivery_identity": eventSubscriptionSchemaIdentity(),
+
+			"dead_letter_identity": eventSubscriptionSchemaIdentity(),
+
+			"storage_blob_dead_letter_destination": eventSubscriptionSchemaStorageBlobDeadletterDestination(),
+
+			"retry_policy": eventSubscriptionSchemaRetryPolicy(),
+
+			"labels": eventSubscriptionSchemaLabels(),
+
+			"advanced_filtering_on_arrays_enabled": eventSubscriptionSchemaEnableAdvancedFilteringOnArrays(),
+
+			"delivery_property": eventSubscriptionSchemaDeliveryProperty(),
+		},
+	}
+}

@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/gofrs/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/jobschedule"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/runbook"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/runbookdraft"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/automation/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/automation/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func updatedLinkedJobSchedules(ctx context.Context, subscriptionID string, client *jobschedule.JobScheduleClient, id *runbook.RunbookId, jsMap map[string]jobschedule.JobScheduleCreateParameters) error {
+	automationAccountId := jobschedule.NewAutomationAccountID(id.SubscriptionId, id.ResourceGroupName, id.AutomationAccountName)
+	filter := fmt.Sprintf("properties/runbook/name eq '%s'", id.RunbookName)
+	jsIterator, err := client.ListByAutomationAccount(ctx, automationAccountId, jobschedule.ListByAutomationAccountOperationOptions{Filter: &filter})
+	if err != nil {
+		return fmt.Errorf("loading Automation Account %q Job Schedule List: %+v", id.AutomationAccountName, err)
+	}
+
+	for _, item := range pointer.From(jsIterator.Model) {
+		prop := item.Properties
+		jobDigest := helper.ResourceAutomationJobScheduleDigest(prop)
+
+		if _, ok := jsMap[jobDigest]; ok {
+			delete(jsMap, jobDigest)
+		} else {
+			if prop == nil || prop.JobScheduleId == nil || *prop.JobScheduleId == "" {
+				return fmt.Errorf("job schedule Id is nil or empty listed by %s Job Schedule List: %+v", id, err)
+			}
+			parsedId := jobschedule.NewJobScheduleID(id.SubscriptionId, id.ResourceGroupName, id.AutomationAccountName, pointer.From(item.Properties.JobScheduleId))
+			if resp, err := client.Delete(ctx, parsedId); err != nil {
+				if !response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("deleting job schedule Id listed by %s Job Schedule List:%v", id, err)
+				}
+			}
+		}
+	}
+
+	// create jobs still in jsMap
+	for _, js := range jsMap {
+		// skip if the schedule name is empty
+		if pointer.From(js.Properties.Schedule.Name) == "" {
+			continue
+		}
+		jsuuid, err := uuid.NewV4()
+		if err != nil {
+			return fmt.Errorf("creating job schedule Id(UUID) for %s: %+v", id, err)
+		}
+
+		jsId := jobschedule.NewJobScheduleID(subscriptionID, id.ResourceGroupName, id.AutomationAccountName, jsuuid.String())
+		if _, err := client.Create(ctx, jsId, js); err != nil {
+			return fmt.Errorf("creating %s: %+v", id, err)
+		}
+	}
+
+	return nil
+}

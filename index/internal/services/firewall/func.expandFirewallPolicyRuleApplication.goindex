@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/firewallpolicyrulecollectiongroups"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFirewallPolicyRuleApplication(input []interface{}) *[]firewallpolicyrulecollectiongroups.FirewallPolicyRule {
+	result := make([]firewallpolicyrulecollectiongroups.FirewallPolicyRule, 0)
+	for _, e := range input {
+		condition := e.(map[string]interface{})
+		var protocols []firewallpolicyrulecollectiongroups.FirewallPolicyRuleApplicationProtocol
+		for _, p := range condition["protocols"].([]interface{}) {
+			proto := p.(map[string]interface{})
+			protocols = append(protocols, firewallpolicyrulecollectiongroups.FirewallPolicyRuleApplicationProtocol{
+				ProtocolType: pointer.To(firewallpolicyrulecollectiongroups.FirewallPolicyRuleApplicationProtocolType(proto["type"].(string))),
+				Port:         utils.Int64(int64(proto["port"].(int))),
+			})
+		}
+
+		var httpHeader []firewallpolicyrulecollectiongroups.FirewallPolicyHTTPHeaderToInsert
+		for _, h := range condition["http_headers"].([]interface{}) {
+			header := h.(map[string]interface{})
+			httpHeader = append(httpHeader, firewallpolicyrulecollectiongroups.FirewallPolicyHTTPHeaderToInsert{
+				HeaderName:  pointer.To(header["name"].(string)),
+				HeaderValue: pointer.To(header["value"].(string)),
+			})
+		}
+
+		output := &firewallpolicyrulecollectiongroups.ApplicationRule{
+			Name:                 utils.String(condition["name"].(string)),
+			Description:          utils.String(condition["description"].(string)),
+			Protocols:            &protocols,
+			HTTPHeadersToInsert:  &httpHeader,
+			SourceAddresses:      utils.ExpandStringSlice(condition["source_addresses"].([]interface{})),
+			SourceIPGroups:       utils.ExpandStringSlice(condition["source_ip_groups"].([]interface{})),
+			DestinationAddresses: utils.ExpandStringSlice(condition["destination_addresses"].([]interface{})),
+			TargetFqdns:          utils.ExpandStringSlice(condition["destination_fqdns"].([]interface{})),
+			TargetURLs:           utils.ExpandStringSlice(condition["destination_urls"].([]interface{})),
+			FqdnTags:             utils.ExpandStringSlice(condition["destination_fqdn_tags"].([]interface{})),
+			TerminateTLS:         utils.Bool(condition["terminate_tls"].(bool)),
+			WebCategories:        utils.ExpandStringSlice(condition["web_categories"].([]interface{})),
+		}
+		result = append(result, output)
+	}
+	return &result
+}

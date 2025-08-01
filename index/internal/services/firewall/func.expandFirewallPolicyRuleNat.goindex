@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/firewallpolicyrulecollectiongroups"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFirewallPolicyRuleNat(input []interface{}) (*[]firewallpolicyrulecollectiongroups.FirewallPolicyRule, error) {
+	result := make([]firewallpolicyrulecollectiongroups.FirewallPolicyRule, 0)
+	for _, e := range input {
+		condition := e.(map[string]interface{})
+		var protocols []firewallpolicyrulecollectiongroups.FirewallPolicyRuleNetworkProtocol
+		for _, p := range condition["protocols"].([]interface{}) {
+			protocols = append(protocols, firewallpolicyrulecollectiongroups.FirewallPolicyRuleNetworkProtocol(p.(string)))
+		}
+		destinationAddresses := []string{condition["destination_address"].(string)}
+
+		// Exactly one of `translated_address` and `translated_fqdn` should be set.
+		if condition["translated_address"].(string) != "" && condition["translated_fqdn"].(string) != "" {
+			return nil, fmt.Errorf("can't specify both `translated_address` and `translated_fqdn` in rule %s", condition["name"].(string))
+		}
+		if condition["translated_address"].(string) == "" && condition["translated_fqdn"].(string) == "" {
+			return nil, fmt.Errorf("should specify either `translated_address` or `translated_fqdn` in rule %s", condition["name"].(string))
+		}
+		output := &firewallpolicyrulecollectiongroups.NatRule{
+			Name:                 utils.String(condition["name"].(string)),
+			IPProtocols:          &protocols,
+			SourceAddresses:      utils.ExpandStringSlice(condition["source_addresses"].([]interface{})),
+			SourceIPGroups:       utils.ExpandStringSlice(condition["source_ip_groups"].([]interface{})),
+			DestinationAddresses: &destinationAddresses,
+			DestinationPorts:     utils.ExpandStringSlice(condition["destination_ports"].([]interface{})),
+			TranslatedPort:       utils.String(strconv.Itoa(condition["translated_port"].(int))),
+			Description:          pointer.To(condition["description"].(string)),
+		}
+		if condition["translated_address"].(string) != "" {
+			output.TranslatedAddress = utils.String(condition["translated_address"].(string))
+		}
+		if condition["translated_fqdn"].(string) != "" {
+			output.TranslatedFqdn = utils.String(condition["translated_fqdn"].(string))
+		}
+		result = append(result, output)
+	}
+	return &result, nil
+}

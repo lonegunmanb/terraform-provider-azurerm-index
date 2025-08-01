@@ -1,0 +1,92 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/eventhubs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2022-06-01/datacollectionendpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2022-06-01/datacollectionrules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r DataCollectionRuleResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Monitor.DataCollectionRulesClient
+			id, err := datacollectionrules.ParseDataCollectionRuleID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			metadata.Logger.Infof("retrieving %s", *id)
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					metadata.Logger.Infof("%s was not found - removing from state!", *id)
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			var dataCollectionEndpointId, description, immutableId, kind, location string
+			var tag map[string]interface{}
+			var dataFlows []DataFlow
+			var dataSources []DataSource
+			var destinations []Destination
+			var streamDeclaration []StreamDeclaration
+
+			if model := resp.Model; model != nil {
+				kind = flattenDataCollectionRuleKind(model.Kind)
+				location = azure.NormalizeLocation(model.Location)
+				tag = tags.Flatten(model.Tags)
+
+				identityValue, err := identity.FlattenLegacySystemAndUserAssignedMap(model.Identity)
+				if err != nil {
+					return fmt.Errorf("flattening `identity`: %+v", err)
+				}
+
+				if err := metadata.ResourceData.Set("identity", identityValue); err != nil {
+					return fmt.Errorf("setting `identity`: %+v", err)
+				}
+
+				if prop := model.Properties; prop != nil {
+					dataCollectionEndpointId = flattenStringPtr(prop.DataCollectionEndpointId)
+					description = flattenStringPtr(prop.Description)
+					dataFlows = flattenDataCollectionRuleDataFlows(prop.DataFlows)
+					dataSources = flattenDataCollectionRuleDataSources(prop.DataSources)
+					destinations = flattenDataCollectionRuleDestinations(prop.Destinations)
+					immutableId = flattenStringPtr(prop.ImmutableId)
+					streamDeclaration = flattenDataCollectionRuleStreamDeclarations(prop.StreamDeclarations)
+				}
+			}
+
+			return metadata.Encode(&DataCollectionRule{
+				Name:                     id.DataCollectionRuleName,
+				ResourceGroupName:        id.ResourceGroupName,
+				DataCollectionEndpointId: dataCollectionEndpointId,
+				DataFlows:                dataFlows,
+				DataSources:              dataSources,
+				Description:              description,
+				Destinations:             destinations,
+				ImmutableId:              immutableId,
+				Kind:                     kind,
+				Location:                 location,
+				StreamDeclaration:        streamDeclaration,
+				Tags:                     tag,
+			})
+		},
+		Timeout: 5 * time.Minute,
+	}
+}

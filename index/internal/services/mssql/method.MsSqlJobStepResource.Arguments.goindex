@@ -1,0 +1,113 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/jobcredentials"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/jobsteps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/jobtargetgroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (MsSqlJobStepResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			ForceNew:     true,
+		},
+		"job_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: jobsteps.ValidateJobID,
+			ForceNew:     true,
+		},
+		"job_credential_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: jobcredentials.ValidateCredentialID,
+		},
+		"job_step_index": {
+			Type:         pluginsdk.TypeInt,
+			Required:     true,
+			ValidateFunc: validation.IntAtLeast(1),
+		},
+		"job_target_group_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: jobtargetgroups.ValidateTargetGroupID,
+		},
+		"sql_script": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+		"initial_retry_interval_seconds": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Default:      1,
+			ValidateFunc: validation.IntBetween(1, 2147483),
+		},
+		"maximum_retry_interval_seconds": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Default:      120,
+			ValidateFunc: validation.IntBetween(1, 2147483),
+		},
+		"output_target": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"job_credential_id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: jobcredentials.ValidateCredentialID,
+					},
+					"mssql_database_id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: commonids.ValidateSqlDatabaseID,
+					},
+					"table_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"schema_name": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Default:      "dbo",
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+				},
+			},
+		},
+		"retry_attempts": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Default:      10,
+			ValidateFunc: validation.IntBetween(1, math.MaxInt32),
+		},
+		"retry_interval_backoff_multiplier": {
+			Type:         pluginsdk.TypeFloat,
+			Optional:     true,
+			Default:      2.0,
+			ValidateFunc: validation.FloatAtLeast(1),
+		},
+		"timeout_seconds": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Default:      43200,
+			ValidateFunc: validation.IntBetween(1, 2147483),
+		},
+	}
+}

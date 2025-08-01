@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/domainservices
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/aad/2021-05-01/domainservices"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/domainservices/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/domainservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenDomainServiceLdaps(d *pluginsdk.ResourceData, input *domainservices.LdapsSettings, dataSource bool) []interface{} {
+	result := map[string]interface{}{
+		"enabled":                 false,
+		"external_access_enabled": false,
+		"certificate_expiry":      "",
+		"certificate_thumbprint":  "",
+		"public_certificate":      "",
+	}
+
+	if !dataSource {
+		// Read pfx_certificate and pfx_certificate_password from existing state since it's not returned
+		result["pfx_certificate"] = ""
+		if v, ok := d.GetOk("secure_ldap.0.pfx_certificate"); ok {
+			result["pfx_certificate"] = v.(string)
+		}
+		result["pfx_certificate_password"] = ""
+		if v, ok := d.GetOk("secure_ldap.0.pfx_certificate_password"); ok {
+			result["pfx_certificate_password"] = v.(string)
+		}
+	}
+
+	if input != nil {
+		if input.ExternalAccess != nil && *input.ExternalAccess == domainservices.ExternalAccessEnabled {
+			result["external_access_enabled"] = true
+		}
+		if input.Ldaps != nil && *input.Ldaps == domainservices.LdapsEnabled {
+			result["enabled"] = true
+		}
+		if v := input.CertificateNotAfter; v != nil {
+			result["certificate_expiry"] = *v
+		}
+		if v := input.CertificateThumbprint; v != nil {
+			result["certificate_thumbprint"] = *v
+		}
+		if v := input.PublicCertificate; v != nil {
+			result["public_certificate"] = *v
+		}
+	}
+
+	return []interface{}{result}
+}

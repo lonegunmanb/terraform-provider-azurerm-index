@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandBackupPolicyPostgreSQLFlexibleServerCriteria(input []BackupPolicyPostgreSQLFlexibleServerCriteria) *[]backuppolicies.BackupCriteria {
+	if len(input) == 0 {
+		return nil
+	}
+
+	results := make([]backuppolicies.BackupCriteria, 0)
+
+	for _, item := range input {
+		var absoluteCriteria []backuppolicies.AbsoluteMarker
+		if absoluteCriteriaRaw := item.AbsoluteCriteria; len(absoluteCriteriaRaw) > 0 {
+			absoluteCriteria = []backuppolicies.AbsoluteMarker{backuppolicies.AbsoluteMarker(absoluteCriteriaRaw)}
+		}
+
+		var daysOfWeek []backuppolicies.DayOfWeek
+		if len(item.DaysOfWeek) > 0 {
+			daysOfWeek = make([]backuppolicies.DayOfWeek, 0)
+			for _, value := range item.DaysOfWeek {
+				daysOfWeek = append(daysOfWeek, backuppolicies.DayOfWeek(value))
+			}
+		}
+
+		var monthsOfYear []backuppolicies.Month
+		if len(item.MonthsOfYear) > 0 {
+			monthsOfYear = make([]backuppolicies.Month, 0)
+			for _, value := range item.MonthsOfYear {
+				monthsOfYear = append(monthsOfYear, backuppolicies.Month(value))
+			}
+		}
+
+		var weeksOfMonth []backuppolicies.WeekNumber
+		if len(item.WeeksOfMonth) > 0 {
+			weeksOfMonth = make([]backuppolicies.WeekNumber, 0)
+			for _, value := range item.WeeksOfMonth {
+				weeksOfMonth = append(weeksOfMonth, backuppolicies.WeekNumber(value))
+			}
+		}
+
+		var scheduleTimes []string
+		if len(item.ScheduledBackupTimes) > 0 {
+			scheduleTimes = item.ScheduledBackupTimes
+		}
+
+		results = append(results, backuppolicies.ScheduleBasedBackupCriteria{
+			AbsoluteCriteria: pointer.To(absoluteCriteria),
+			DaysOfMonth:      nil,
+			DaysOfTheWeek:    pointer.To(daysOfWeek),
+			MonthsOfYear:     pointer.To(monthsOfYear),
+			ScheduleTimes:    pointer.To(scheduleTimes),
+			WeeksOfTheMonth:  pointer.To(weeksOfMonth),
+		})
+	}
+
+	return &results
+}

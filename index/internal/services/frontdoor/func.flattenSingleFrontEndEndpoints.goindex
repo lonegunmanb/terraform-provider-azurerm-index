@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSingleFrontEndEndpoints(input frontdoors.FrontendEndpoint, frontDoorId frontdoors.FrontDoorId) (map[string]interface{}, error) {
+	id := ""
+	name := ""
+	if input.Name != nil {
+		// rewrite the ID to ensure it's consistent
+		id = parse.NewFrontendEndpointID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, *input.Name).ID()
+		name = *input.Name
+	}
+	hostName := ""
+	sessionAffinityEnabled := false
+	sessionAffinityTlsSeconds := 0
+	webApplicationFirewallPolicyLinkId := ""
+	if props := input.Properties; props != nil {
+		if props.HostName != nil {
+			hostName = *props.HostName
+		}
+		if props.SessionAffinityEnabledState != nil && *props.SessionAffinityEnabledState != "" {
+			sessionAffinityEnabled = *props.SessionAffinityEnabledState == frontdoors.SessionAffinityEnabledStateEnabled
+		}
+		if props.SessionAffinityTtlSeconds != nil {
+			sessionAffinityTlsSeconds = int(*props.SessionAffinityTtlSeconds)
+		}
+		if waf := props.WebApplicationFirewallPolicyLink; waf != nil && waf.Id != nil {
+			// rewrite the ID to ensure it's consistent
+			parsed, err := parse.WebApplicationFirewallPolicyIDInsensitively(*waf.Id)
+			if err != nil {
+				return nil, err
+			}
+			webApplicationFirewallPolicyLinkId = parsed.ID()
+		}
+		// flattenedHttpsConfig := flattenCustomHttpsConfiguration(props)
+		// customHTTPSConfiguration = flattenedHttpsConfig.CustomHTTPSConfiguration
+		// customHttpsProvisioningEnabled = flattenedHttpsConfig.CustomHTTPSProvisioningEnabled
+	}
+
+	output := map[string]interface{}{
+		// "custom_https_configuration":        customHTTPSConfiguration,
+		// "custom_https_provisioning_enabled": customHttpsProvisioningEnabled,
+		"host_name":                    hostName,
+		"id":                           id,
+		"name":                         name,
+		"session_affinity_enabled":     sessionAffinityEnabled,
+		"session_affinity_ttl_seconds": sessionAffinityTlsSeconds,
+		"web_application_firewall_policy_link_id": webApplicationFirewallPolicyLinkId,
+	}
+
+	return output, nil
+}

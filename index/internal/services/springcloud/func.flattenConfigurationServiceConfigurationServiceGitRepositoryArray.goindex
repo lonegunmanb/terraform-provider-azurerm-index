@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appplatform/2024-01-01-preview/appplatform"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenConfigurationServiceConfigurationServiceGitRepositoryArray(input *[]appplatform.ConfigurationServiceGitRepository, old []SpringCloudRepositoryModel) []SpringCloudRepositoryModel {
+	results := make([]SpringCloudRepositoryModel, 0)
+	if input == nil {
+		return results
+	}
+
+	oldItems := make(map[string]SpringCloudRepositoryModel)
+	for _, v := range old {
+		oldItems[v.Name] = v
+	}
+
+	for _, item := range *input {
+		var strictHostKeyChecking bool
+		if item.StrictHostKeyChecking != nil {
+			strictHostKeyChecking = *item.StrictHostKeyChecking
+		}
+
+		var hostKey string
+		var hostKeyAlgorithm string
+		var privateKey string
+		var username string
+		var password string
+		if oldItem, ok := oldItems[item.Name]; ok {
+			hostKey = oldItem.HostKey
+			hostKeyAlgorithm = oldItem.HostKeyAlgorithm
+			privateKey = oldItem.PrivateKey
+			username = oldItem.Username
+			password = oldItem.Password
+		}
+
+		var caCertificateId string
+		if item.CaCertResourceId != nil {
+			certificatedId, err := appplatform.ParseCertificateIDInsensitively(*item.CaCertResourceId)
+			if err == nil {
+				caCertificateId = certificatedId.ID()
+			}
+		}
+		results = append(results, SpringCloudRepositoryModel{
+			Name:                  item.Name,
+			Label:                 item.Label,
+			Patterns:              item.Patterns,
+			Uri:                   item.Uri,
+			CaCertificateId:       caCertificateId,
+			HostKey:               hostKey,
+			HostKeyAlgorithm:      hostKeyAlgorithm,
+			Password:              password,
+			PrivateKey:            privateKey,
+			SearchPaths:           pointer.From(item.SearchPaths),
+			StrictHostKeyChecking: strictHostKeyChecking,
+			Username:              username,
+		})
+	}
+	return results
+}

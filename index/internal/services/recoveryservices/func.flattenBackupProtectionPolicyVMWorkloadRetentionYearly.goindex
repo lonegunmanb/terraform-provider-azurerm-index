@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenBackupProtectionPolicyVMWorkloadRetentionYearly(input *protectionpolicies.YearlyRetentionSchedule) []RetentionYearly {
+	if input == nil {
+		return nil
+	}
+
+	retentionYearlyBlock := RetentionYearly{}
+
+	if duration := input.RetentionDuration; duration != nil {
+		if v := duration.Count; v != nil {
+			retentionYearlyBlock.Count = *v
+		}
+	}
+
+	if formatType := pointer.From(input.RetentionScheduleFormatType); formatType != "" {
+		retentionYearlyBlock.FormatType = string(formatType)
+	}
+
+	if weekly := input.RetentionScheduleWeekly; weekly != nil {
+		retentionYearlyBlock.Weekdays, retentionYearlyBlock.Weeks = flattenBackupProtectionPolicyVMWorkloadRetentionWeeklyFormat(weekly)
+	}
+
+	if v := input.MonthsOfYear; v != nil {
+		months := make([]string, 0)
+		for _, d := range *v {
+			months = append(months, string(d))
+		}
+		retentionYearlyBlock.Months = months
+	}
+
+	if daily := input.RetentionScheduleDaily; daily != nil {
+		retentionYearlyBlock.Monthdays = flattenBackupProtectionPolicyVMWorkloadRetentionDailyFormat(daily)
+	}
+
+	return []RetentionYearly{retentionYearlyBlock}
+}

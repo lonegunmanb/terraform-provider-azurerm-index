@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/alertsmanagement/2021-08-08/alertprocessingrules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAlertProcessingRuleRecurrences(input *[]alertprocessingrules.Recurrence) []AlertProcessingRuleRecurrenceModel {
+	if input == nil {
+		return make([]AlertProcessingRuleRecurrenceModel, 0)
+	}
+
+	recurrence := AlertProcessingRuleRecurrenceModel{}
+	for _, item := range *input {
+		switch t := item.(type) {
+		case alertprocessingrules.DailyRecurrence:
+			dailyRecurrence := item.(alertprocessingrules.DailyRecurrence)
+			daily := AlertProcessingRuleDailyModel{
+				StartTime: flattenPtrString(dailyRecurrence.StartTime),
+				EndTime:   flattenPtrString(dailyRecurrence.EndTime),
+			}
+			recurrence.Daily = append(recurrence.Daily, daily)
+
+		case alertprocessingrules.WeeklyRecurrence:
+			weeklyRecurrence := item.(alertprocessingrules.WeeklyRecurrence)
+			weekly := AlertProcessingRuleWeeklyModel{
+				DaysOfWeek: flattenAlertProcessingRuleRecurrenceDaysOfWeek(&weeklyRecurrence.DaysOfWeek),
+				StartTime:  flattenPtrString(weeklyRecurrence.StartTime),
+				EndTime:    flattenPtrString(weeklyRecurrence.EndTime),
+			}
+			recurrence.Weekly = append(recurrence.Weekly, weekly)
+
+		case alertprocessingrules.MonthlyRecurrence:
+			monthlyRecurrence := item.(alertprocessingrules.MonthlyRecurrence)
+			monthly := AlertProcessingRuleMonthlyModel{
+				DaysOfMonth: monthlyRecurrence.DaysOfMonth,
+				StartTime:   flattenPtrString(monthlyRecurrence.StartTime),
+				EndTime:     flattenPtrString(monthlyRecurrence.EndTime),
+			}
+			recurrence.Monthly = append(recurrence.Monthly, monthly)
+
+		default:
+			log.Printf("[WARN] Alert Processing Rule got unsupported recurrence type %v", t)
+		}
+	}
+
+	return []AlertProcessingRuleRecurrenceModel{recurrence}
+}

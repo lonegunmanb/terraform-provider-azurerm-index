@@ -1,0 +1,99 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/applications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenHDInsightEdgeNode(roles []interface{}, props *applications.ApplicationProperties, d *pluginsdk.ResourceData) []interface{} {
+	if len(roles) == 0 || props == nil {
+		return roles
+	}
+
+	role := roles[0].(map[string]interface{})
+
+	edgeNode := make(map[string]interface{})
+	if computeProfile := props.ComputeProfile; computeProfile != nil {
+		if roles := computeProfile.Roles; roles != nil {
+			for _, role := range *roles {
+				if targetInstanceCount := role.TargetInstanceCount; targetInstanceCount != nil {
+					edgeNode["target_instance_count"] = targetInstanceCount
+				}
+				if hardwareProfile := role.HardwareProfile; hardwareProfile != nil && hardwareProfile.VMSize != nil {
+					vmSize := ""
+					// the Azure API is inconsistent here, so rewrite this into the casing we expect
+					for _, v := range validate.NodeDefinitionVMSize {
+						if strings.EqualFold(v, *hardwareProfile.VMSize) {
+							vmSize = v
+						}
+					}
+					edgeNode["vm_size"] = vmSize
+				}
+			}
+		}
+	}
+
+	installScriptActions := make([]interface{}, 0)
+	if props.InstallScriptActions != nil {
+		for _, action := range *props.InstallScriptActions {
+			installScriptActions = append(installScriptActions, map[string]interface{}{
+				"name":       action.Name,
+				"uri":        action.Uri,
+				"parameters": d.Get("roles.0.edge_node.0.install_script_action.0.parameters").(string),
+			})
+		}
+	}
+
+	uninstallScriptActions := make([]interface{}, 0)
+	if props.UninstallScriptActions != nil {
+		for _, uninstallAction := range *props.UninstallScriptActions {
+			uninstallScriptActions = append(uninstallScriptActions, map[string]interface{}{
+				"name":       uninstallAction.Name,
+				"uri":        uninstallAction.Uri,
+				"parameters": d.Get("roles.0.edge_node.0.uninstall_script_actions.0.parameters").(string),
+			})
+		}
+	}
+
+	httpsEndpoints := make([]interface{}, 0)
+	if HTTPSEndpoints := props.HTTPSEndpoints; HTTPSEndpoints != nil && len(*HTTPSEndpoints) != 0 {
+		for _, HTTPSEndpoint := range *HTTPSEndpoints {
+			httpsEndpoints = append(httpsEndpoints, map[string]interface{}{
+				"access_modes":         pointer.From(HTTPSEndpoint.AccessModes),
+				"destination_port":     pointer.From(HTTPSEndpoint.DestinationPort),
+				"disable_gateway_auth": pointer.From(HTTPSEndpoint.DisableGatewayAuth),
+				"private_ip_address":   pointer.From(HTTPSEndpoint.PrivateIPAddress),
+				"sub_domain_suffix":    pointer.From(HTTPSEndpoint.SubDomainSuffix),
+			})
+		}
+	}
+
+	role["edge_node"] = []interface{}{
+		map[string]interface{}{
+			"install_script_action":    installScriptActions,
+			"https_endpoints":          httpsEndpoints,
+			"uninstall_script_actions": uninstallScriptActions,
+		},
+	}
+
+	return []interface{}{role}
+}

@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenCustomDomainActivatedResourceArray(input *[]cdn.ActivatedResourceReference) ([]interface{}, error) {
+	results := make([]interface{}, 0)
+	if input == nil || len(*input) == 0 {
+		return results, nil
+	}
+
+	// Normalize these values in the configuration file we know they are valid because they were set on the
+	// resource... if these are modified in the portal they will all be lowercased...
+	for _, customDomain := range *input {
+		if customDomain.ID == nil {
+			continue
+		}
+		id, err := parse.FrontDoorCustomDomainIDInsensitively(*customDomain.ID)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, id.ID())
+	}
+
+	return results, nil
+}

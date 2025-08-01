@@ -1,0 +1,192 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/flowlogs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkwatchers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceNetworkWatcherFlowLog() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		Create: resourceNetworkWatcherFlowLogCreate,
+		Read:   resourceNetworkWatcherFlowLogRead,
+		Update: resourceNetworkWatcherFlowLogUpdate,
+		Delete: resourceNetworkWatcherFlowLogDelete,
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.NetworkWatcherFlowLogV0ToV1{},
+		}),
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := flowlogs.ParseFlowLogID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"network_watcher_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.NoZeroValues,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			// lintignore: S013
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.NetworkWatcherFlowLogName,
+			},
+
+			"target_resource_id": {
+				Type:     pluginsdk.TypeString,
+				ForceNew: true,
+				Required: true,
+				ValidateFunc: validation.Any(
+					networksecuritygroups.ValidateNetworkSecurityGroupID,
+					commonids.ValidateVirtualNetworkID,
+					commonids.ValidateSubnetID,
+					commonids.ValidateNetworkInterfaceID,
+				),
+			},
+
+			"storage_account_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: commonids.ValidateStorageAccountID,
+			},
+
+			"enabled": {
+				Type:     pluginsdk.TypeBool,
+				Required: true,
+			},
+
+			"retention_policy": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"enabled": {
+							Type:             pluginsdk.TypeBool,
+							Required:         true,
+							DiffSuppressFunc: azureRMSuppressFlowLogRetentionPolicyEnabledDiff,
+						},
+
+						"days": {
+							Type:             pluginsdk.TypeInt,
+							Required:         true,
+							DiffSuppressFunc: azureRMSuppressFlowLogRetentionPolicyDaysDiff,
+						},
+					},
+				},
+			},
+
+			"traffic_analytics": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"enabled": {
+							Type:     pluginsdk.TypeBool,
+							Required: true,
+						},
+
+						"workspace_id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.IsUUID,
+						},
+
+						"workspace_region": {
+							Type:             pluginsdk.TypeString,
+							Required:         true,
+							StateFunc:        location.StateFunc,
+							DiffSuppressFunc: location.DiffSuppressFunc,
+						},
+
+						"workspace_resource_id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: azure.ValidateResourceIDOrEmpty, // nolint: staticcheck
+						},
+
+						"interval_in_minutes": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							ValidateFunc: validation.IntInSlice([]int{10, 60}),
+							Default:      60,
+						},
+					},
+				},
+			},
+
+			"version": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      1,
+				ValidateFunc: validation.IntBetween(1, 2),
+			},
+
+			"location": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				Computed:         true,
+				ForceNew:         true,
+				ValidateFunc:     location.EnhancedValidate,
+				StateFunc:        location.StateFunc,
+				DiffSuppressFunc: location.DiffSuppressFunc,
+			},
+
+			"tags": commonschema.Tags(),
+		},
+	}
+
+	if !features.FivePointOh() {
+		resource.Schema["network_security_group_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: networksecuritygroups.ValidateNetworkSecurityGroupID,
+			Deprecated:   "The property `network_security_group_id` has been superseded by `target_resource_id` and will be removed in version 5.0 of the AzureRM Provider.",
+			ExactlyOneOf: []string{"network_security_group_id", "target_resource_id"},
+		}
+		resource.Schema["target_resource_id"].Required = false
+		resource.Schema["target_resource_id"].Optional = true
+		resource.Schema["target_resource_id"].Computed = true
+		resource.Schema["target_resource_id"].ForceNew = false
+		resource.Schema["target_resource_id"].ExactlyOneOf = []string{"network_security_group_id", "target_resource_id"}
+	}
+
+	return resource
+}

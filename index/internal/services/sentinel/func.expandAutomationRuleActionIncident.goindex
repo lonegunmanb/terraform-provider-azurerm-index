@@ -1,0 +1,95 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflows"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2022-10-01-preview/automationrules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAutomationRuleActionIncident(input []interface{}) ([]automationrules.AutomationRuleAction, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	out := make([]automationrules.AutomationRuleAction, 0, len(input))
+	for _, b := range input {
+		b := b.(map[string]interface{})
+
+		status := automationrules.IncidentStatus(b["status"].(string))
+		l := strings.Split(b["classification"].(string), "_")
+		classification, clr := l[0], ""
+		if len(l) == 2 {
+			clr = l[1]
+		}
+		classificationComment := b["classification_comment"].(string)
+
+		// sanity check on classification
+		if status == automationrules.IncidentStatusClosed && classification == "" {
+			return nil, fmt.Errorf("`classification` is required when `status` is set to `Closed`")
+		}
+		if status != automationrules.IncidentStatusClosed {
+			if classification != "" {
+				return nil, fmt.Errorf("`classification` can't be set when `status` is not set to `Closed`")
+			}
+			if classificationComment != "" {
+				return nil, fmt.Errorf("`classification_comment` can't be set when `status` is not set to `Closed`")
+			}
+		}
+
+		var labelsPtr *[]automationrules.IncidentLabel
+		if labelStrsPtr := utils.ExpandStringSlice(b["labels"].([]interface{})); labelStrsPtr != nil && len(*labelStrsPtr) > 0 {
+			labels := make([]automationrules.IncidentLabel, 0, len(*labelStrsPtr))
+			for _, label := range *labelStrsPtr {
+				labels = append(labels, automationrules.IncidentLabel{
+					LabelName: label,
+				})
+			}
+			labelsPtr = &labels
+		}
+
+		var ownerPtr *automationrules.IncidentOwnerInfo
+		if ownerIdStr := b["owner_id"].(string); ownerIdStr != "" {
+			ownerPtr = &automationrules.IncidentOwnerInfo{
+				ObjectId: utils.String(ownerIdStr),
+			}
+		}
+
+		severity := b["severity"].(string)
+
+		// sanity check on the whole incident action
+		if severity == "" && ownerPtr == nil && labelsPtr == nil && status == "" {
+			return nil, fmt.Errorf("at least one of `severity`, `owner_id`, `labels` or `status` should be specified")
+		}
+
+		classificationPtr := automationrules.IncidentClassification(classification)
+		clrPtr := automationrules.IncidentClassificationReason(clr)
+		severityPtr := automationrules.IncidentSeverity(severity)
+		out = append(out, automationrules.AutomationRuleModifyPropertiesAction{
+			Order: int64(b["order"].(int)),
+			ActionConfiguration: &automationrules.IncidentPropertiesAction{
+				Status:                &status,
+				Classification:        &classificationPtr,
+				ClassificationComment: &classificationComment,
+				ClassificationReason:  &clrPtr,
+				Labels:                labelsPtr,
+				Owner:                 ownerPtr,
+				Severity:              &severityPtr,
+			},
+		})
+	}
+
+	return out, nil
+}

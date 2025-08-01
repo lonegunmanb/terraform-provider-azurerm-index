@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/search
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/services"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/sharedprivatelinkresources"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r SharedPrivateLinkServiceResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			id, err := sharedprivatelinkresources.ParseSharedPrivateLinkResourceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var state SharedPrivateLinkServiceModel
+			if err := metadata.Decode(&state); err != nil {
+				return err
+			}
+
+			client := metadata.Client.Search.SearchSharedPrivateLinkResourceClient
+
+			if metadata.ResourceData.HasChange("request_message") {
+				props := sharedprivatelinkresources.SharedPrivateLinkResource{
+					Properties: &sharedprivatelinkresources.SharedPrivateLinkResourceProperties{
+						RequestMessage: utils.String(state.RequestMessage),
+					},
+				}
+				if err := client.CreateOrUpdateThenPoll(ctx, *id, props, sharedprivatelinkresources.CreateOrUpdateOperationOptions{}); err != nil {
+					return fmt.Errorf("updating %s: %+v", *id, err)
+				}
+			}
+			return nil
+		},
+		Timeout: 60 * time.Minute,
+	}
+}

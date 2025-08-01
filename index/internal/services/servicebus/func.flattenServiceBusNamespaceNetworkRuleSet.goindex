@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/namespacesauthorizationrule"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2022-10-01-preview/namespaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenServiceBusNamespaceNetworkRuleSet(networkRuleSet namespaces.NetworkRuleSetProperties) []interface{} {
+	defaultAction := ""
+	if v := networkRuleSet.DefaultAction; v != nil {
+		defaultAction = string(*v)
+	}
+	publicNetworkAccess := namespaces.PublicNetworkAccessFlagEnabled
+	if v := networkRuleSet.PublicNetworkAccess; v != nil {
+		publicNetworkAccess = *v
+	}
+
+	trustedServiceEnabled := false
+	if networkRuleSet.TrustedServiceAccessEnabled != nil {
+		trustedServiceEnabled = *networkRuleSet.TrustedServiceAccessEnabled
+	}
+
+	networkRules := flattenServiceBusNamespaceVirtualNetworkRules(networkRuleSet.VirtualNetworkRules)
+	ipRules := flattenServiceBusNamespaceIPRules(networkRuleSet.IPRules)
+
+	// only set network rule set if the values are different than what they are defaulted to during namespace creation
+	// this has to wait until 4.0 due to `azurerm_servicebus_namespace_network_rule_set` which forces `network_rule_set` to be Optional/Computed
+
+	if defaultAction == string(namespaces.DefaultActionAllow) &&
+		publicNetworkAccess == namespaces.PublicNetworkAccessFlagEnabled &&
+		!trustedServiceEnabled &&
+		len(networkRules) == 0 &&
+		len(ipRules) == 0 {
+		return []interface{}{}
+	}
+
+	return []interface{}{map[string]interface{}{
+		"default_action":                defaultAction,
+		"trusted_services_allowed":      trustedServiceEnabled,
+		"public_network_access_enabled": publicNetworkAccess == namespaces.PublicNetworkAccessFlagEnabled,
+		"network_rules":                 pluginsdk.NewSet(networkRuleHash, networkRules),
+		"ip_rules":                      ipRules,
+	}}
+}

@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/rulesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-09-01/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	cdnFrontDoorRuleActions "github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdoorruleactions"
+	cdnFrontDoorRuleConditions "github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdoorruleconditions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandFrontdoorDeliveryRuleConditions(input []interface{}) ([]rules.DeliveryRuleCondition, error) {
+	results := make([]rules.DeliveryRuleCondition, 0)
+	if len(input) == 0 || input[0] == nil {
+		return results, nil
+	}
+
+	type expandfunc func(input []interface{}) (*[]rules.DeliveryRuleCondition, error)
+	m := cdnFrontDoorRuleConditions.InitializeCdnFrontDoorConditionMappings()
+
+	conditions := map[string]expandfunc{
+		m.ClientPort.ConfigName:       cdnFrontDoorRuleConditions.ExpandCdnFrontDoorClientPortCondition,
+		m.Cookies.ConfigName:          cdnFrontDoorRuleConditions.ExpandCdnFrontDoorCookiesCondition,
+		m.HostName.ConfigName:         cdnFrontDoorRuleConditions.ExpandCdnFrontDoorHostNameCondition,
+		m.HttpVersion.ConfigName:      cdnFrontDoorRuleConditions.ExpandCdnFrontDoorHttpVersionCondition,
+		m.IsDevice.ConfigName:         cdnFrontDoorRuleConditions.ExpandCdnFrontDoorIsDeviceCondition,
+		m.PostArgs.ConfigName:         cdnFrontDoorRuleConditions.ExpandCdnFrontDoorPostArgsCondition,
+		m.QueryString.ConfigName:      cdnFrontDoorRuleConditions.ExpandCdnFrontDoorQueryStringCondition,
+		m.RemoteAddress.ConfigName:    cdnFrontDoorRuleConditions.ExpandCdnFrontDoorRemoteAddressCondition,
+		m.RequestBody.ConfigName:      cdnFrontDoorRuleConditions.ExpandCdnFrontDoorRequestBodyCondition,
+		m.RequestHeader.ConfigName:    cdnFrontDoorRuleConditions.ExpandCdnFrontDoorRequestHeaderCondition,
+		m.RequestMethod.ConfigName:    cdnFrontDoorRuleConditions.ExpandCdnFrontDoorRequestMethodCondition,
+		m.RequestScheme.ConfigName:    cdnFrontDoorRuleConditions.ExpandCdnFrontDoorRequestSchemeCondition,
+		m.RequestUri.ConfigName:       cdnFrontDoorRuleConditions.ExpandCdnFrontDoorRequestUriCondition,
+		m.ServerPort.ConfigName:       cdnFrontDoorRuleConditions.ExpandCdnFrontDoorServerPortCondition,
+		m.SocketAddress.ConfigName:    cdnFrontDoorRuleConditions.ExpandCdnFrontDoorSocketAddressCondition,
+		m.SslProtocol.ConfigName:      cdnFrontDoorRuleConditions.ExpandCdnFrontDoorSslProtocolCondition,
+		m.UrlFileExtension.ConfigName: cdnFrontDoorRuleConditions.ExpandCdnFrontDoorUrlFileExtensionCondition,
+		m.UrlFilename.ConfigName:      cdnFrontDoorRuleConditions.ExpandCdnFrontDoorUrlFileNameCondition,
+		m.UrlPath.ConfigName:          cdnFrontDoorRuleConditions.ExpandCdnFrontDoorUrlPathCondition,
+	}
+
+	deliveryRuleCondition := input[0].(map[string]interface{})
+
+	for conditionName, expand := range conditions {
+		raw := deliveryRuleCondition[conditionName].([]interface{})
+		if len(raw) > 0 {
+			expanded, err := expand(raw)
+			if err != nil {
+				return nil, err
+			}
+
+			if expanded != nil {
+				results = append(results, *expanded...)
+			}
+		}
+	}
+
+	if len(results) > 10 {
+		return nil, fmt.Errorf("the 'conditions' match block may only contain up to 10 match conditions, got %d", len(results))
+	}
+
+	return results, nil
+}

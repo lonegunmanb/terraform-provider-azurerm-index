@@ -1,0 +1,91 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/sql/mgmt/v5.0/sql" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/maintenance/2023-04-01/publicmaintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/backupshorttermretentionpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/databases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/databasesecurityalertpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/elasticpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/geobackuppolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/longtermretentionpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serversecurityalertpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/transparentdataencryptions"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandMsSqlDatabaseSecurityAlertPolicy(d *pluginsdk.ResourceData) databasesecurityalertpolicies.DatabaseSecurityAlertPolicy {
+	policy := databasesecurityalertpolicies.DatabaseSecurityAlertPolicy{
+		Properties: pointer.To(databasesecurityalertpolicies.SecurityAlertsPolicyProperties{
+			State: databasesecurityalertpolicies.SecurityAlertsPolicyStateDisabled,
+		}),
+	}
+	properties := policy.Properties
+
+	td, ok := d.GetOk("threat_detection_policy")
+	if !ok {
+		return policy
+	}
+
+	if tdl := td.([]interface{}); len(tdl) > 0 {
+		securityAlert := tdl[0].(map[string]interface{})
+
+		properties.State = databasesecurityalertpolicies.SecurityAlertsPolicyState(securityAlert["state"].(string))
+		properties.EmailAccountAdmins = pointer.To(securityAlert["email_account_admins"].(string) == string(EmailAccountAdminsStatusEnabled))
+
+		if v, ok := securityAlert["disabled_alerts"]; ok {
+			alerts := v.(*pluginsdk.Set).List()
+			expandedAlerts := make([]string, len(alerts))
+			for i, a := range alerts {
+				expandedAlerts[i] = a.(string)
+			}
+			properties.DisabledAlerts = &expandedAlerts
+		}
+		if v, ok := securityAlert["email_addresses"]; ok {
+			emails := v.(*pluginsdk.Set).List()
+			expandedEmails := make([]string, len(emails))
+			for i, e := range emails {
+				expandedEmails[i] = e.(string)
+			}
+			properties.EmailAddresses = &expandedEmails
+		}
+		if v, ok := securityAlert["retention_days"]; ok {
+			properties.RetentionDays = pointer.To(int64(v.(int)))
+		}
+		if v, ok := securityAlert["storage_account_access_key"]; ok && v.(string) != "" {
+			properties.StorageAccountAccessKey = pointer.To(v.(string))
+		}
+		if v, ok := securityAlert["storage_endpoint"]; ok && v.(string) != "" {
+			properties.StorageEndpoint = pointer.To(v.(string))
+		}
+
+		return policy
+	}
+
+	return policy
+}

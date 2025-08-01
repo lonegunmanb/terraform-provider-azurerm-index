@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/api"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apimanagementservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/delegationsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/deletedservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/policy"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/product"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signinsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signupsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	apimValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandApiManagementSignUpSettings(input []interface{}) signupsettings.PortalSignupSettings {
+	if len(input) == 0 {
+		return signupsettings.PortalSignupSettings{
+			Properties: &signupsettings.PortalSignupSettingsProperties{
+				Enabled: pointer.To(false),
+				TermsOfService: &signupsettings.TermsOfServiceProperties{
+					ConsentRequired: pointer.To(false),
+					Enabled:         pointer.To(false),
+					Text:            pointer.To(""),
+				},
+			},
+		}
+	}
+
+	vs := input[0].(map[string]interface{})
+
+	props := signupsettings.PortalSignupSettingsProperties{
+		Enabled: pointer.To(vs["enabled"].(bool)),
+	}
+
+	termsOfServiceRaw := vs["terms_of_service"].([]interface{})
+	if len(termsOfServiceRaw) > 0 {
+		termsOfServiceVs := termsOfServiceRaw[0].(map[string]interface{})
+		props.TermsOfService = &signupsettings.TermsOfServiceProperties{
+			Enabled:         pointer.To(termsOfServiceVs["enabled"].(bool)),
+			ConsentRequired: pointer.To(termsOfServiceVs["consent_required"].(bool)),
+			Text:            pointer.To(termsOfServiceVs["text"].(string)),
+		}
+	}
+
+	return signupsettings.PortalSignupSettings{
+		Properties: &props,
+	}
+}

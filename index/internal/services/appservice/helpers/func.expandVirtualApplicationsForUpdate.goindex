@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandVirtualApplicationsForUpdate(virtualApplicationConfig []VirtualApplication) *[]webapps.VirtualApplication {
+	if len(virtualApplicationConfig) == 0 {
+		// to remove this block from the config we need to give the service the original default back, sending an empty struct leaves the previous config in place
+		return &[]webapps.VirtualApplication{
+			{
+				VirtualPath:    pointer.To("/"),
+				PhysicalPath:   pointer.To("site\\wwwroot"),
+				PreloadEnabled: pointer.To(true),
+			},
+		}
+	}
+
+	result := make([]webapps.VirtualApplication, 0)
+
+	for _, v := range virtualApplicationConfig {
+		virtualApp := webapps.VirtualApplication{
+			VirtualPath:    pointer.To(v.VirtualPath),
+			PhysicalPath:   pointer.To(v.PhysicalPath),
+			PreloadEnabled: pointer.To(v.Preload),
+		}
+		if len(v.VirtualDirectories) > 0 {
+			virtualDirs := make([]webapps.VirtualDirectory, 0)
+			for _, d := range v.VirtualDirectories {
+				virtualDirs = append(virtualDirs, webapps.VirtualDirectory{
+					VirtualPath:  pointer.To(d.VirtualPath),
+					PhysicalPath: pointer.To(d.PhysicalPath),
+				})
+			}
+			virtualApp.VirtualDirectories = &virtualDirs
+		}
+
+		result = append(result, virtualApp)
+	}
+	return &result
+}

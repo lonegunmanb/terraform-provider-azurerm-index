@@ -1,0 +1,216 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/images"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceImage() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceImageCreateUpdate,
+		Read:   resourceImageRead,
+		Update: resourceImageCreateUpdate,
+		Delete: resourceImageDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := images.ParseImageID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(90 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(90 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(90 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"location": commonschema.Location(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"zone_resilient": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+				ForceNew: true,
+			},
+
+			"hyper_v_generation": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(images.HyperVGenerationTypesVOne),
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(images.HyperVGenerationTypesVOne),
+					string(images.HyperVGenerationTypesVTwo),
+				}, false),
+			},
+
+			"source_virtual_machine_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: commonids.ValidateVirtualMachineID,
+			},
+
+			"os_disk": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				ForceNew: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"os_type": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(images.OperatingSystemTypesLinux),
+								string(images.OperatingSystemTypesWindows),
+							}, false),
+						},
+
+						"os_state": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(images.OperatingSystemStateTypesGeneralized),
+								string(images.OperatingSystemStateTypesSpecialized),
+							}, false),
+						},
+
+						"managed_disk_id": {
+							Type:             pluginsdk.TypeString,
+							Computed:         true,
+							Optional:         true,
+							DiffSuppressFunc: suppress.CaseDifference,
+							ValidateFunc:     commonids.ValidateManagedDiskID,
+						},
+
+						"blob_uri": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							Computed:     true,
+							ForceNew:     true,
+							ValidateFunc: validation.IsURLWithScheme([]string{"http", "https"}),
+						},
+
+						"caching": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+							Default:  string(images.CachingTypesNone),
+							ValidateFunc: validation.StringInSlice([]string{
+								string(images.CachingTypesNone),
+								string(images.CachingTypesReadOnly),
+								string(images.CachingTypesReadWrite),
+							}, false),
+						},
+
+						"size_gb": {
+							Type:         pluginsdk.TypeInt,
+							Computed:     true,
+							Optional:     true,
+							ForceNew:     true,
+							ValidateFunc: validation.NoZeroValues,
+						},
+
+						"disk_encryption_set_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ForceNew:     true,
+							ValidateFunc: validate.DiskEncryptionSetID,
+						},
+
+						"storage_type": {
+							Type:         pluginsdk.TypeString,
+							Description:  "The type of storage disk",
+							Required:     true,
+							ForceNew:     true,
+							ValidateFunc: validation.StringInSlice(images.PossibleValuesForStorageAccountTypes(), false),
+						},
+					},
+				},
+			},
+
+			"data_disk": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"lun": {
+							Type:     pluginsdk.TypeInt,
+							Optional: true,
+						},
+
+						"managed_disk_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ForceNew:     true,
+							ValidateFunc: commonids.ValidateManagedDiskID,
+						},
+
+						"blob_uri": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							Computed:     true,
+							ValidateFunc: validation.IsURLWithScheme([]string{"http", "https"}),
+						},
+
+						"caching": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+							Default:  string(images.CachingTypesNone),
+							ValidateFunc: validation.StringInSlice([]string{
+								string(images.CachingTypesNone),
+								string(images.CachingTypesReadOnly),
+								string(images.CachingTypesReadWrite),
+							}, false),
+						},
+
+						"size_gb": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Computed:     true,
+							ValidateFunc: validation.NoZeroValues,
+						},
+
+						"disk_encryption_set_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ForceNew:     true,
+							ValidateFunc: validate.DiskEncryptionSetID,
+						},
+
+						"storage_type": {
+							Type:         pluginsdk.TypeString,
+							Description:  "The type of storage disk",
+							Required:     true,
+							ForceNew:     true,
+							ValidateFunc: validation.StringInSlice(images.PossibleValuesForStorageAccountTypes(), false),
+						},
+					},
+				},
+			},
+
+			"tags": commonschema.Tags(),
+		},
+	}
+}

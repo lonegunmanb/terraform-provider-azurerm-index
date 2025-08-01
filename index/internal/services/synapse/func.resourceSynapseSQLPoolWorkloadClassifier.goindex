@@ -1,0 +1,100 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/synapse/mgmt/v2.0/synapse" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSynapseSQLPoolWorkloadClassifier() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSynapseSQLPoolWorkloadClassifierCreateUpdate,
+		Read:   resourceSynapseSQLPoolWorkloadClassifierRead,
+		Update: resourceSynapseSQLPoolWorkloadClassifierCreateUpdate,
+		Delete: resourceSynapseSQLPoolWorkloadClassifierDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.SqlPoolWorkloadClassifierID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"workload_group_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.SqlPoolWorkloadGroupID,
+			},
+
+			"member_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"context": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"end_time": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringMatch(
+					regexp.MustCompile(`^\d{2}:\d{2}$`),
+					"The `end_time` is of the `HH:MM` format in UTC time zone",
+				),
+			},
+
+			"importance": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"low",
+					"below_normal",
+					"normal",
+					"above_normal",
+					"high",
+				}, false),
+			},
+
+			"label": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"start_time": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringMatch(
+					regexp.MustCompile(`^\d{2}:\d{2}$`),
+					"The `start_time` is of the `HH:MM` format in UTC time zone",
+				),
+			},
+		},
+	}
+}

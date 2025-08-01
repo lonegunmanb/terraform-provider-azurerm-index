@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func mergeMisspelling(checks []Checker) (res []Checker) {
+	var missInDoc, missInCode []*propertyMissDiff
+	for _, c := range checks {
+		if p, ok := c.(*propertyMissDiff); ok {
+			if p.MissType == MissInDoc {
+				missInDoc = append(missInDoc, p)
+			} else if p.MissType == MissInCode {
+				missInCode = append(missInCode, p)
+			}
+		}
+	}
+	// check if missed name be like
+	filterOut := map[*propertyMissDiff]struct{}{}
+	for _, c := range missInCode {
+		for _, d := range missInDoc {
+			if dist := levenshteinDist(c.MDField().Name, d.mdField.Name); dist <= 3 {
+				// if the edit distances less than 3, we think it's a misspelling
+				filterOut[c] = struct{}{}
+				filterOut[d] = struct{}{}
+				res = append(res, newMisspelling(c, d))
+			}
+		}
+	}
+	for _, c := range checks {
+		if miss, ok := c.(*propertyMissDiff); !ok {
+			res = append(res, c)
+		} else {
+			if _, ok = filterOut[miss]; !ok {
+				res = append(res, c)
+			}
+		}
+	}
+	return res
+}

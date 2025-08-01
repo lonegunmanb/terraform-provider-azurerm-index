@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"errors"
+	"fmt"
+	"html"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apimanagementservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/policy"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceApiManagementPolicy() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceApiManagementPolicyCreateUpdate,
+		Read:   resourceApiManagementPolicyRead,
+		Update: resourceApiManagementPolicyCreateUpdate,
+		Delete: resourceApiManagementPolicyDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := policy.ParseServiceID(id)
+			return err
+		}),
+
+		SchemaVersion: 3,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.ApiManagementPolicyV0ToV1{},
+			1: migration.ApiManagementPolicyV1ToV2{},
+			2: migration.ApiManagementPolicyV2ToV3{},
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"api_management_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: apimanagementservice.ValidateServiceID,
+			},
+
+			"xml_content": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				Computed:         true,
+				ConflictsWith:    []string{"xml_link"},
+				ExactlyOneOf:     []string{"xml_link", "xml_content"},
+				DiffSuppressFunc: XmlWithDotNetInterpolationsDiffSuppress,
+			},
+
+			"xml_link": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ConflictsWith: []string{"xml_content"},
+				ExactlyOneOf:  []string{"xml_link", "xml_content"},
+			},
+		},
+	}
+}

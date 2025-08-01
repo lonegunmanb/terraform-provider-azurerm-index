@@ -1,0 +1,120 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
+import (
+	"context"
+	"fmt"
+	"log"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenLoadBalancerFrontendIpConfiguration(ipConfigs *[]loadbalancers.FrontendIPConfiguration) []interface{} {
+	result := make([]interface{}, 0)
+	if ipConfigs == nil {
+		return result
+	}
+
+	for _, config := range *ipConfigs {
+		name := ""
+		if config.Name != nil {
+			name = *config.Name
+		}
+
+		id := ""
+		if config.Id != nil {
+			id = *config.Id
+		}
+
+		var inboundNatRules []interface{}
+		var loadBalancingRules []interface{}
+		var outboundRules []interface{}
+		gatewayLoadBalancerId := ""
+		publicIpPrefixId := ""
+		privateIPAllocationMethod := ""
+		publicIpAddressId := ""
+		privateIpAddressVersion := ""
+		subnetId := ""
+		privateIpAddress := ""
+
+		if props := config.Properties; props != nil {
+			privateIPAllocationMethod = string(pointer.From(props.PrivateIPAllocationMethod))
+
+			if props.GatewayLoadBalancer != nil {
+				gatewayLoadBalancerId = pointer.From(props.GatewayLoadBalancer.Id)
+			}
+
+			if subnet := props.Subnet; subnet != nil {
+				subnetId = pointer.From(subnet.Id)
+			}
+			privateIpAddress = pointer.From(props.PrivateIPAddress)
+			privateIpAddressVersion = string(pointer.From(props.PrivateIPAddressVersion))
+
+			if pip := props.PublicIPAddress; pip != nil {
+				publicIpAddressId = pointer.From(pip.Id)
+			}
+
+			if pip := props.PublicIPPrefix; pip != nil {
+				publicIpPrefixId = pointer.From(pip.Id)
+			}
+
+			if rules := props.LoadBalancingRules; rules != nil {
+				for _, rule := range *rules {
+					if rule.Id == nil {
+						continue
+					}
+
+					loadBalancingRules = append(loadBalancingRules, pointer.From(rule.Id))
+				}
+			}
+
+			if rules := props.InboundNatRules; rules != nil {
+				for _, rule := range *rules {
+					inboundNatRules = append(inboundNatRules, pointer.From(rule.Id))
+				}
+			}
+
+			if rules := props.OutboundRules; rules != nil {
+				for _, rule := range *rules {
+					outboundRules = append(outboundRules, pointer.From(rule.Id))
+				}
+			}
+		}
+
+		out := map[string]interface{}{
+			"gateway_load_balancer_frontend_ip_configuration_id": gatewayLoadBalancerId,
+			"id":                            id,
+			"inbound_nat_rules":             pluginsdk.NewSet(pluginsdk.HashString, inboundNatRules),
+			"load_balancer_rules":           pluginsdk.NewSet(pluginsdk.HashString, loadBalancingRules),
+			"name":                          name,
+			"outbound_rules":                pluginsdk.NewSet(pluginsdk.HashString, outboundRules),
+			"public_ip_address_id":          publicIpAddressId,
+			"private_ip_address":            privateIpAddress,
+			"private_ip_address_version":    privateIpAddressVersion,
+			"private_ip_address_allocation": privateIPAllocationMethod,
+			"public_ip_prefix_id":           publicIpPrefixId,
+			"subnet_id":                     subnetId,
+			"zones":                         zones.FlattenUntyped(config.Zones),
+		}
+
+		result = append(result, out)
+	}
+	return result
+}

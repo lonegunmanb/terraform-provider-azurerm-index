@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2019-06-01-preview/tasks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandRegistryTaskSourceTriggers(triggers []SourceTrigger) *[]tasks.SourceTrigger {
+	if len(triggers) == 0 {
+		return nil
+	}
+	out := make([]tasks.SourceTrigger, 0, len(triggers))
+	for _, trigger := range triggers {
+		status := tasks.TriggerStatusDisabled
+		if trigger.Enabled {
+			status = tasks.TriggerStatusEnabled
+		}
+		sourceTrigger := tasks.SourceTrigger{
+			Name:   trigger.Name,
+			Status: &status,
+			SourceRepository: tasks.SourceProperties{
+				SourceControlType: tasks.SourceControlType(trigger.SourceType),
+				RepositoryURL:     trigger.RepositoryURL,
+			},
+		}
+		if len(trigger.Events) != 0 {
+			events := make([]tasks.SourceTriggerEvent, 0, len(trigger.Events))
+			for _, event := range trigger.Events {
+				events = append(events, tasks.SourceTriggerEvent(event))
+			}
+			sourceTrigger.SourceTriggerEvents = events
+		}
+
+		if trigger.Branch != "" {
+			sourceTrigger.SourceRepository.Branch = &trigger.Branch
+		}
+		if len(trigger.Auth) != 0 {
+			sourceTrigger.SourceRepository.SourceControlAuthProperties = expandRegistryTaskAuthInfo(trigger.Auth[0])
+		}
+		out = append(out, sourceTrigger)
+	}
+	return &out
+}

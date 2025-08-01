@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservices/2024-01-01/vaults"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r SiteRecoveryRecoveryVaultDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.RecoveryServices.VaultsClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var recoveryServiceVault SiteRecoveryRecoveryVaultDataSourceModel
+			if err := metadata.Decode(&recoveryServiceVault); err != nil {
+				return err
+			}
+
+			id := vaults.NewVaultID(subscriptionId, recoveryServiceVault.ResourceGroupName, recoveryServiceVault.Name)
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				flattenedIdentity, err := identity.FlattenSystemAndUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return fmt.Errorf("flattening `identity`: %+v", err)
+				}
+
+				skuName := ""
+				if model.Sku != nil {
+					skuName = string(model.Sku.Name)
+				}
+
+				recoveryServiceVault.Sku = skuName
+				recoveryServiceVault.Location = location.Normalize(model.Location)
+				recoveryServiceVault.Tags = pointer.From(model.Tags)
+				recoveryServiceVault.Identity = pointer.From(flattenedIdentity)
+			}
+
+			metadata.SetID(id)
+
+			if err := metadata.Encode(&recoveryServiceVault); err != nil {
+				return fmt.Errorf("encoding: %+v", err)
+			}
+
+			return nil
+		},
+	}
+}

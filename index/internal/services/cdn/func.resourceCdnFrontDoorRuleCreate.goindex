@@ -1,0 +1,74 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/rulesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-09-01/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	cdnFrontDoorRuleActions "github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdoorruleactions"
+	cdnFrontDoorRuleConditions "github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdoorruleconditions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceCdnFrontDoorRuleCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Cdn.FrontDoorRulesClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	ruleSetId, err := rulesets.ParseRuleSetID(d.Get("cdn_frontdoor_rule_set_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := rules.NewRuleID(ruleSetId.SubscriptionId, ruleSetId.ResourceGroupName, ruleSetId.ProfileName, ruleSetId.RuleSetName, d.Get("name").(string))
+
+	result, err := client.Get(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(result.HttpResponse) {
+			return fmt.Errorf("checking for existing %s: %+v", id, err)
+		}
+	}
+
+	if !response.WasNotFound(result.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_cdn_frontdoor_rule", id.ID())
+	}
+
+	matchProcessingBehaviorValue := pointer.To(rules.MatchProcessingBehavior(d.Get("behavior_on_match").(string)))
+	order := pointer.To(int64(d.Get("order").(int)))
+
+	actions, err := expandFrontdoorDeliveryRuleActions(d.Get("actions").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding 'actions': %+v", err)
+	}
+
+	conditions, err := expandFrontdoorDeliveryRuleConditions(d.Get("conditions").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding 'conditions': %+v", err)
+	}
+
+	props := rules.Rule{
+		Properties: &rules.RuleProperties{
+			Actions:                 &actions,
+			Conditions:              &conditions,
+			MatchProcessingBehavior: matchProcessingBehaviorValue,
+			RuleSetName:             &ruleSetId.RuleSetName,
+			Order:                   order,
+		},
+	}
+
+	err = client.CreateThenPoll(ctx, id, props)
+	if err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceCdnFrontDoorRuleRead(d, meta)
+}

@@ -1,0 +1,86 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachinescalesetvms"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/vmsspublicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func getVirtualMachineScaleSetVMConnectionInfo(ctx context.Context, networkInterfaces []networkinterfaces.NetworkInterface, resourceGroupName string, virtualMachineScaleSetName string, virtualmachineIndex string, publicIPAddressesClient *vmsspublicipaddresses.VMSSPublicIPAddressesClient) (*connectionInfo, error) {
+	if len(networkInterfaces) == 0 {
+		return nil, nil
+	}
+
+	primaryPublicAddress := ""
+	primaryPrivateAddress := ""
+	publicIPAddresses := make([]string, 0)
+	privateIPAddresses := make([]string, 0)
+
+	for _, nic := range networkInterfaces {
+		if props := nic.Properties; props != nil {
+			if ipConfigs := props.IPConfigurations; ipConfigs != nil {
+				for _, config := range *ipConfigs {
+					if configProps := config.Properties; configProps != nil {
+						if pip := configProps.PublicIPAddress; pip != nil {
+							pipID, err := commonids.ParseVirtualMachineScaleSetPublicIPAddressIDInsensitively(*pip.Id)
+							if err != nil {
+								return nil, err
+							}
+
+							publicIPAddress, err := publicIPAddressesClient.PublicIPAddressesGetVirtualMachineScaleSetPublicIPAddress(ctx, *pipID, vmsspublicipaddresses.DefaultPublicIPAddressesGetVirtualMachineScaleSetPublicIPAddressOperationOptions())
+							if err != nil {
+								return nil, fmt.Errorf("reading Public IP Address for VM Instance %q for Virtual Machine Scale Set %q (Resource Group %q): %+v", virtualmachineIndex, virtualMachineScaleSetName, resourceGroupName, err)
+							}
+
+							if publicIPAddress.Model == nil || publicIPAddress.Model.Properties == nil {
+								return nil, fmt.Errorf("retrieving %s: `model` or `properties` was nil", pipID)
+							}
+
+							if pointer.From(props.Primary) && pointer.From(configProps.Primary) {
+								primaryPublicAddress = pointer.From(publicIPAddress.Model.Properties.IPAddress)
+							}
+							publicIPAddresses = append(publicIPAddresses, pointer.From(publicIPAddress.Model.Properties.IPAddress))
+						}
+
+						if configProps.PrivateIPAddress != nil {
+							if pointer.From(props.Primary) && pointer.From(configProps.Primary) {
+								primaryPrivateAddress = pointer.From(configProps.PrivateIPAddress)
+							}
+							privateIPAddresses = append(privateIPAddresses, pointer.From(configProps.PrivateIPAddress))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if primaryPublicAddress == "" && len(publicIPAddresses) > 0 {
+		primaryPublicAddress = publicIPAddresses[0]
+	}
+
+	if primaryPrivateAddress == "" && len(privateIPAddresses) > 0 {
+		primaryPrivateAddress = privateIPAddresses[0]
+	}
+
+	return &connectionInfo{
+		primaryPublicAddress:  primaryPublicAddress,
+		publicAddresses:       publicIPAddresses,
+		primaryPrivateAddress: primaryPrivateAddress,
+		privateAddresses:      privateIPAddresses,
+	}, nil
+}

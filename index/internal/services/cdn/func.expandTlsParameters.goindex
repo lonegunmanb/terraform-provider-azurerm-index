@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandTlsParameters(input []interface{}) (*cdn.AFDDomainHTTPSParameters, error) {
+	// NOTE: With the Frontdoor service, they do not treat an empty object like an empty object
+	// if it is not nil they assume it is fully defined and then end up throwing errors when they
+	// attempt to get a value from one of the fields.
+	if len(input) == 0 || input[0] == nil {
+		return nil, nil
+	}
+
+	v := input[0].(map[string]interface{})
+
+	certType := v["certificate_type"].(string)
+	secretRaw := v["cdn_frontdoor_secret_id"].(string)
+	minTlsVersion := v["minimum_tls_version"].(string)
+
+	tls := cdn.AFDDomainHTTPSParameters{}
+
+	if tls.CertificateType == cdn.AfdCertificateTypeCustomerCertificate && secretRaw == "" {
+		return nil, fmt.Errorf("the 'cdn_frontdoor_secret_id' field must be set if the 'certificate_type' is 'CustomerCertificate'")
+	} else if tls.CertificateType == cdn.AfdCertificateTypeManagedCertificate && secretRaw != "" {
+		return nil, fmt.Errorf("the 'cdn_frontdoor_secret_id' field is not supported if the 'certificate_type' is 'ManagedCertificate'")
+	}
+
+	if secretRaw != "" {
+		secret, err := parse.FrontDoorSecretID(secretRaw)
+		if err != nil {
+			return nil, err
+		}
+
+		tls.Secret = expandResourceReference(secret.ID())
+	}
+
+	// NOTE: Minimum TLS Version is required in both pre-validated and not pre-validated
+	// custom domains and the schema defaults the value to TLS 1.2
+	tls.CertificateType = cdn.AfdCertificateType(certType)
+	tls.MinimumTLSVersion = cdn.AfdMinimumTLSVersion(minTlsVersion)
+
+	return &tls, nil
+}

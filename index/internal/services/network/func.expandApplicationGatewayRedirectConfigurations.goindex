@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewayRedirectConfigurations(d *pluginsdk.ResourceData, gatewayID string) (*[]applicationgateways.ApplicationGatewayRedirectConfiguration, error) {
+	vs := d.Get("redirect_configuration").(*pluginsdk.Set).List()
+	results := make([]applicationgateways.ApplicationGatewayRedirectConfiguration, 0)
+
+	for _, raw := range vs {
+		v := raw.(map[string]interface{})
+
+		name := v["name"].(string)
+		redirectType := v["redirect_type"].(string)
+		targetListenerName := v["target_listener_name"].(string)
+		targetUrl := v["target_url"].(string)
+		includePath := v["include_path"].(bool)
+		includeQueryString := v["include_query_string"].(bool)
+
+		output := applicationgateways.ApplicationGatewayRedirectConfiguration{
+			Name: pointer.To(name),
+			Properties: &applicationgateways.ApplicationGatewayRedirectConfigurationPropertiesFormat{
+				RedirectType:       pointer.To(applicationgateways.ApplicationGatewayRedirectType(redirectType)),
+				IncludeQueryString: pointer.To(includeQueryString),
+				IncludePath:        pointer.To(includePath),
+			},
+		}
+
+		if targetListenerName == "" && targetUrl == "" {
+			return nil, fmt.Errorf("Set either `target_listener_name` or `target_url`")
+		}
+
+		if targetListenerName != "" && targetUrl != "" {
+			return nil, fmt.Errorf("Conflict between `target_listener_name` and `target_url` (redirection is either to URL or target listener)")
+		}
+
+		if targetListenerName != "" {
+			targetListenerID := fmt.Sprintf("%s/httpListeners/%s", gatewayID, targetListenerName)
+			output.Properties.TargetListener = &applicationgateways.SubResource{
+				Id: pointer.To(targetListenerID),
+			}
+		}
+
+		if targetUrl != "" {
+			output.Properties.TargetURL = pointer.To(targetUrl)
+		}
+
+		results = append(results, output)
+	}
+
+	return &results, nil
+}

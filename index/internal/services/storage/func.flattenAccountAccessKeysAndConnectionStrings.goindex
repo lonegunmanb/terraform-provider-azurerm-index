@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenAccountAccessKeysAndConnectionStrings(accountName, domainSuffix string, keys []storageaccounts.StorageAccountKey, endpoints accountEndpoints) accountAccessKeysAndConnectionStrings {
+	output := accountAccessKeysAndConnectionStrings{}
+
+	// NOTE: users might not have access to list the keys, which is handled in the Data Source (optional) / Resource (required) respectively
+	if len(keys) > 0 {
+		output.primaryAccessKey = pointer.From(keys[0].Value)
+		if len(keys) > 1 {
+			output.secondaryAccessKey = pointer.From(keys[1].Value)
+		}
+
+		if output.primaryAccessKey != "" {
+			output.primaryConnectionString = fmt.Sprintf("DefaultEndpointsProtocol=https;AccountName=%s;AccountKey=%s;EndpointSuffix=%s", accountName, output.primaryAccessKey, domainSuffix)
+
+			if endpoints.primaryBlobEndpoint != "" {
+				output.primaryBlobConnectionString = fmt.Sprintf("DefaultEndpointsProtocol=https;BlobEndpoint=%s;AccountName=%s;AccountKey=%s", endpoints.primaryBlobEndpoint, accountName, output.primaryAccessKey)
+			}
+		}
+
+		if output.secondaryAccessKey != "" {
+			output.secondaryConnectionString = fmt.Sprintf("DefaultEndpointsProtocol=https;AccountName=%s;AccountKey=%s;EndpointSuffix=%s", accountName, output.secondaryAccessKey, domainSuffix)
+
+			if endpoints.secondaryBlobEndpoint != "" {
+				output.secondaryBlobConnectionString = fmt.Sprintf("DefaultEndpointsProtocol=https;BlobEndpoint=%s;AccountName=%s;AccountKey=%s", endpoints.secondaryBlobEndpoint, accountName, output.secondaryAccessKey)
+			}
+		}
+	}
+
+	return output
+}

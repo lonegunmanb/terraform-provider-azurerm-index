@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCdnFrontDoorCustomDomainUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Cdn.FrontDoorCustomDomainsClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.FrontDoorCustomDomainID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	props := cdn.AFDDomainUpdateParameters{
+		AFDDomainUpdatePropertiesParameters: &cdn.AFDDomainUpdatePropertiesParameters{},
+	}
+
+	if d.HasChange("dns_zone_id") {
+		if dnsZone := d.Get("dns_zone_id").(string); dnsZone != "" {
+			props.AFDDomainUpdatePropertiesParameters.AzureDNSZone = expandResourceReference(dnsZone)
+		}
+	}
+
+	if d.HasChange("tls") {
+		tls := &cdn.AFDDomainHTTPSParameters{}
+		tlsSettings := d.Get("tls").([]interface{})
+		v := tlsSettings[0].(map[string]interface{})
+		secretRaw := v["cdn_frontdoor_secret_id"].(string)
+
+		// NOTE: Cert type has to always be passed in the update else you will get a
+		// "AfdDomain.TlsSettings.CertificateType' is required but it was not set" error
+		tls.CertificateType = cdn.AfdCertificateType(v["certificate_type"].(string))
+
+		// NOTE: Secret always needs to be passed if it is defined else you will
+		// receive a 500 Internal Server Error
+		if secretRaw != "" {
+			secret, err := parse.FrontDoorSecretID(secretRaw)
+			if err != nil {
+				return err
+			}
+
+			tls.Secret = expandResourceReference(secret.ID())
+		}
+
+		if d.HasChange("tls.0.minimum_tls_version") {
+			tls.MinimumTLSVersion = cdn.AfdMinimumTLSVersion(v["minimum_tls_version"].(string))
+		}
+
+		if tls.CertificateType == cdn.AfdCertificateTypeCustomerCertificate && secretRaw == "" {
+			return fmt.Errorf("the 'cdn_frontdoor_secret_id' field must be set if the 'certificate_type' is 'CustomerCertificate'")
+		} else if tls.CertificateType == cdn.AfdCertificateTypeManagedCertificate && secretRaw != "" {
+			return fmt.Errorf("the 'cdn_frontdoor_secret_id' field is not supported if the 'certificate_type' is 'ManagedCertificate'")
+		}
+
+		props.AFDDomainUpdatePropertiesParameters.TLSSettings = tls
+	}
+
+	future, err := client.Update(ctx, id.ResourceGroup, id.ProfileName, id.CustomDomainName, props)
+	if err != nil {
+		return fmt.Errorf("updating %s: %+v", *id, err)
+	}
+
+	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("waiting for the update of %s: %+v", *id, err)
+	}
+
+	return resourceCdnFrontDoorCustomDomainRead(d, meta)
+}

@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenKubernetesClusterDataSourceIdentityProfile(profile *map[string]managedclusters.UserAssignedIdentity) ([]interface{}, error) {
+	if profile == nil || *profile == nil {
+		return []interface{}{}, nil
+	}
+
+	kubeletIdentity := make([]interface{}, 0)
+	kubeletidentity := (*profile)["kubeletidentity"]
+	clientId := ""
+	if clientid := kubeletidentity.ClientId; clientid != nil {
+		clientId = *clientid
+	}
+
+	objectId := ""
+	if objectid := kubeletidentity.ObjectId; objectid != nil {
+		objectId = *objectid
+	}
+
+	userAssignedIdentityId := ""
+	if resourceid := kubeletidentity.ResourceId; resourceid != nil {
+		parsedId, err := commonids.ParseUserAssignedIdentityIDInsensitively(*resourceid)
+		if err != nil {
+			return nil, err
+		}
+		userAssignedIdentityId = parsedId.ID()
+	}
+
+	kubeletIdentity = append(kubeletIdentity, map[string]interface{}{
+		"client_id":                 clientId,
+		"object_id":                 objectId,
+		"user_assigned_identity_id": userAssignedIdentityId,
+	})
+
+	return kubeletIdentity, nil
+}

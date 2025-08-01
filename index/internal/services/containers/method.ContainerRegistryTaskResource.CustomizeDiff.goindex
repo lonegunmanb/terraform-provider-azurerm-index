@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2019-06-01-preview/tasks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r ContainerRegistryTaskResource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			rd := metadata.ResourceDiff
+			isSystemTask := rd.Get("is_system_task").(bool)
+
+			if isSystemTask {
+				invalidProps := []string{"platform", "docker_step", "file_step", "encoded_step", "base_image_trigger", "source_trigger", "timer_trigger"}
+				for _, prop := range invalidProps {
+					if v := rd.Get(prop).([]interface{}); len(v) != 0 {
+						return fmt.Errorf("system task can't specify `%s`", prop)
+					}
+				}
+			} else {
+				if v := rd.Get("platform").([]interface{}); len(v) == 0 {
+					return fmt.Errorf("non-system task have to specify `platform`")
+				}
+
+				dockerStep := rd.Get("docker_step").([]interface{})
+				fileTaskStep := rd.Get("file_step").([]interface{})
+				encodedTaskStep := rd.Get("encoded_step").([]interface{})
+				if len(dockerStep)+len(fileTaskStep)+len(encodedTaskStep) == 0 {
+					return fmt.Errorf("non-system task have to specify one of `docker_step`, `file_step` and `encoded_step`")
+				}
+			}
+
+			return nil
+		},
+	}
+}

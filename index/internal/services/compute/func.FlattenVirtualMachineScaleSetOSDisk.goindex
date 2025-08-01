@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryapplicationversions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func FlattenVirtualMachineScaleSetOSDisk(input *virtualmachinescalesets.VirtualMachineScaleSetOSDisk) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	diffDiskSettings := make([]interface{}, 0)
+	if input.DiffDiskSettings != nil {
+		diffDiskSettings = append(diffDiskSettings, map[string]interface{}{
+			"option":    string(pointer.From(input.DiffDiskSettings.Option)),
+			"placement": string(pointer.From(input.DiffDiskSettings.Placement)),
+		})
+	}
+
+	diskSizeGb := 0
+	if input.DiskSizeGB != nil && *input.DiskSizeGB != 0 {
+		diskSizeGb = int(*input.DiskSizeGB)
+	}
+
+	storageAccountType := ""
+	diskEncryptionSetId := ""
+	secureVMDiskEncryptionSetId := ""
+	securityEncryptionType := ""
+	if input.ManagedDisk != nil {
+		storageAccountType = string(pointer.From(input.ManagedDisk.StorageAccountType))
+		if input.ManagedDisk.DiskEncryptionSet != nil && input.ManagedDisk.DiskEncryptionSet.Id != nil {
+			diskEncryptionSetId = *input.ManagedDisk.DiskEncryptionSet.Id
+		}
+
+		if securityProfile := input.ManagedDisk.SecurityProfile; securityProfile != nil {
+			securityEncryptionType = string(pointer.From(securityProfile.SecurityEncryptionType))
+			if securityProfile.DiskEncryptionSet != nil && securityProfile.DiskEncryptionSet.Id != nil {
+				secureVMDiskEncryptionSetId = *securityProfile.DiskEncryptionSet.Id
+			}
+		}
+	}
+
+	writeAcceleratorEnabled := false
+	if input.WriteAcceleratorEnabled != nil {
+		writeAcceleratorEnabled = *input.WriteAcceleratorEnabled
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"caching":                          string(pointer.From(input.Caching)),
+			"disk_size_gb":                     diskSizeGb,
+			"diff_disk_settings":               diffDiskSettings,
+			"storage_account_type":             storageAccountType,
+			"write_accelerator_enabled":        writeAcceleratorEnabled,
+			"disk_encryption_set_id":           diskEncryptionSetId,
+			"secure_vm_disk_encryption_set_id": secureVMDiskEncryptionSetId,
+			"security_encryption_type":         securityEncryptionType,
+		},
+	}
+}

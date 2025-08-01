@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-02/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSnapshotDiskEncryptionSettings(encryptionSettings *snapshots.EncryptionSettingsCollection) []interface{} {
+	if encryptionSettings == nil {
+		return []interface{}{}
+	}
+
+	diskEncryptionKeys := make([]interface{}, 0)
+	keyEncryptionKeys := make([]interface{}, 0)
+	if encryptionSettings.EncryptionSettings != nil && len(*encryptionSettings.EncryptionSettings) > 0 {
+		// at this time we only support a single element
+		settings := (*encryptionSettings.EncryptionSettings)[0]
+
+		if key := settings.DiskEncryptionKey; key != nil {
+			secretUrl := ""
+			if key.SecretURL != "" {
+				secretUrl = key.SecretURL
+			}
+
+			sourceVaultId := ""
+			if key.SourceVault.Id != nil {
+				sourceVaultId = *key.SourceVault.Id
+			}
+
+			diskEncryptionKeys = append(diskEncryptionKeys, map[string]interface{}{
+				"secret_url":      secretUrl,
+				"source_vault_id": sourceVaultId,
+			})
+		}
+
+		if key := settings.KeyEncryptionKey; key != nil {
+			keyUrl := ""
+			if key.KeyURL != "" {
+				keyUrl = key.KeyURL
+			}
+
+			sourceVaultId := ""
+			if key.SourceVault.Id != nil {
+				sourceVaultId = *key.SourceVault.Id
+			}
+
+			keyEncryptionKeys = append(keyEncryptionKeys, map[string]interface{}{
+				"key_url":         keyUrl,
+				"source_vault_id": sourceVaultId,
+			})
+		}
+	}
+
+	if len(diskEncryptionKeys) > 0 {
+		return []interface{}{
+			map[string]interface{}{
+				"disk_encryption_key": diskEncryptionKeys,
+				"key_encryption_key":  keyEncryptionKeys,
+			},
+		}
+	} else {
+		return []interface{}{}
+	}
+}

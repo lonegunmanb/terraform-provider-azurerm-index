@@ -1,0 +1,199 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservices/2024-01-01/vaults"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/backupprotecteditems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/backupresourcevaultconfigs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/protecteditems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationvaultsetting"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyvaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceRecoveryServicesVaultCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).RecoveryServices.VaultsClient
+	cfgsClient := meta.(*clients.Client).RecoveryServices.VaultsConfigsClient
+	settingsClient := meta.(*clients.Client).RecoveryServices.VaultsSettingsClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := vaults.NewVaultID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	cfgId := backupresourcevaultconfigs.NewVaultID(id.SubscriptionId, id.ResourceGroupName, id.VaultName)
+
+	storageMode := d.Get("storage_mode_type").(string)
+	crossRegionRestore := d.Get("cross_region_restore_enabled").(bool)
+
+	if crossRegionRestore && storageMode != string(vaults.StandardTierStorageRedundancyGeoRedundant) {
+		return fmt.Errorf("cannot enable cross region restore when storage mode type is not %s. %s", string(vaults.StandardTierStorageRedundancyGeoRedundant), id.String())
+	}
+
+	location := d.Get("location").(string)
+	t := d.Get("tags").(map[string]interface{})
+
+	log.Printf("[DEBUG] Creating Recovery Service %s", id.String())
+
+	existing, err := client.Get(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for presence of existing Recovery Service %s: %+v", id.String(), err)
+		}
+	}
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_recovery_services_vault", id.ID())
+	}
+
+	expandedIdentity, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding `identity`: %+v", err)
+	}
+
+	sku := d.Get("sku").(string)
+	crossRegionRestoreEnabled := vaults.CrossRegionRestoreDisabled
+	if d.Get("cross_region_restore_enabled").(bool) {
+		crossRegionRestoreEnabled = vaults.CrossRegionRestoreEnabled
+	}
+
+	vault := vaults.Vault{
+		Location: location,
+		Tags:     tags.Expand(t),
+		Identity: expandedIdentity,
+		Sku: &vaults.Sku{
+			Name: vaults.SkuName(sku),
+		},
+		Properties: &vaults.VaultProperties{
+			PublicNetworkAccess: expandRecoveryServicesVaultPublicNetworkAccess(d.Get("public_network_access_enabled").(bool)),
+			MonitoringSettings:  expandRecoveryServicesVaultMonitorSettings(d.Get("monitoring").([]interface{})),
+			RedundancySettings: &vaults.VaultPropertiesRedundancySettings{
+				CrossRegionRestore:            &crossRegionRestoreEnabled,
+				StandardTierStorageRedundancy: pointer.To(vaults.StandardTierStorageRedundancy(d.Get("storage_mode_type").(string))),
+			},
+		},
+	}
+
+	if vaults.SkuName(sku) == vaults.SkuNameRSZero {
+		vault.Sku.Tier = utils.String("Standard")
+	}
+
+	if _, ok := d.GetOk("encryption"); ok {
+		encryption, err := expandEncryption(d)
+		if err != nil {
+			return err
+		}
+		vault.Properties.Encryption = encryption
+	}
+
+	requireAdditionalUpdate := false
+	updatePatch := vaults.PatchVault{
+		Properties: &vaults.VaultProperties{},
+	}
+	if immutability, ok := d.GetOk("immutability"); ok {
+		// The API doesn't allow to set the immutability to "Locked" on creation.
+		// Here we firstly make it "Unlocked", and once created, we will update it to "Locked".
+		// Note: The `immutability` could be transitioned only in the limited directions.
+		// Locked <- Unlocked <-> Disabled
+		if immutability == string(vaults.ImmutabilityStateLocked) {
+			updatePatch.Properties.SecuritySettings = expandRecoveryServicesVaultSecuritySettings(immutability)
+			requireAdditionalUpdate = true
+			immutability = string(vaults.ImmutabilityStateUnlocked)
+		}
+		vault.Properties.SecuritySettings = expandRecoveryServicesVaultSecuritySettings(immutability)
+	}
+
+	// Async Operaation of creation with `UserAssigned` identity is returned with 404
+	// Tracked on https://github.com/Azure/azure-rest-api-specs/issues/27869
+	// `SystemAssigned, UserAssigned` Identity require an additional update to work
+	// Trakced on https://github.com/Azure/azure-rest-api-specs/issues/27851
+	if expandedIdentity.Type == identity.TypeUserAssigned || expandedIdentity.Type == identity.TypeSystemAssignedUserAssigned {
+		requireAdditionalUpdate = true
+		updatePatch.Identity = expandedIdentity
+		vault.Identity = &identity.SystemAndUserAssignedMap{
+			Type: identity.TypeNone,
+		}
+	}
+
+	err = client.CreateOrUpdateThenPoll(ctx, id, vault)
+	if err != nil {
+		return fmt.Errorf("creating %s: %+v", id.String(), err)
+	}
+
+	if requireAdditionalUpdate {
+		err := client.UpdateThenPoll(ctx, id, updatePatch)
+		if err != nil {
+			return fmt.Errorf("updating Recovery Service %s: %+v, but recovery vault was created, a manually import might be required", id.String(), err)
+		}
+	}
+	// an update on the vault will reset the vault config to default, so we handle it at last.
+	enhancedSecurityState := backupresourcevaultconfigs.EnhancedSecurityStateEnabled
+	cfg := backupresourcevaultconfigs.BackupResourceVaultConfigResource{
+		Properties: &backupresourcevaultconfigs.BackupResourceVaultConfig{
+			EnhancedSecurityState: &enhancedSecurityState, // always enabled
+		},
+	}
+
+	var StateRefreshPendingStrings []string
+	var StateRefreshTargetStrings []string
+	if sd := d.Get("soft_delete_enabled").(bool); sd {
+		state := backupresourcevaultconfigs.SoftDeleteFeatureStateEnabled
+		cfg.Properties.SoftDeleteFeatureState = &state
+		StateRefreshPendingStrings = []string{string(backupresourcevaultconfigs.SoftDeleteFeatureStateDisabled)}
+		StateRefreshTargetStrings = []string{string(backupresourcevaultconfigs.SoftDeleteFeatureStateEnabled)}
+	} else {
+		state := backupresourcevaultconfigs.SoftDeleteFeatureStateDisabled
+		cfg.Properties.SoftDeleteFeatureState = &state
+		StateRefreshPendingStrings = []string{string(backupresourcevaultconfigs.SoftDeleteFeatureStateEnabled)}
+		StateRefreshTargetStrings = []string{string(backupresourcevaultconfigs.SoftDeleteFeatureStateDisabled)}
+	}
+
+	_, err = cfgsClient.Update(ctx, cfgId, cfg)
+	if err != nil {
+		return err
+	}
+
+	// sometimes update sync succeed but READ returns with old value, so we refresh till the value is correct.
+	stateConf := &pluginsdk.StateChangeConf{
+		Pending:                   StateRefreshPendingStrings,
+		Target:                    StateRefreshTargetStrings,
+		MinTimeout:                30 * time.Second,
+		ContinuousTargetOccurence: 3,
+		Refresh:                   resourceRecoveryServicesVaultSoftDeleteRefreshFunc(ctx, cfgsClient, cfgId),
+	}
+
+	stateConf.Timeout = d.Timeout(pluginsdk.TimeoutCreate)
+
+	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for on update for Recovery Service %s: %+v", id.String(), err)
+	}
+
+	if d.Get("classic_vmware_replication_enabled").(bool) {
+		settingsId := replicationvaultsetting.NewReplicationVaultSettingID(id.SubscriptionId, id.ResourceGroupName, id.VaultName, "default")
+		settingsInput := replicationvaultsetting.VaultSettingCreationInput{
+			Properties: replicationvaultsetting.VaultSettingCreationInputProperties{
+				VMwareToAzureProviderType: utils.String("Vmware"),
+			},
+		}
+		if err := settingsClient.CreateThenPoll(ctx, settingsId, settingsInput); err != nil {
+			return fmt.Errorf("creating %s: %+v", settingsId, err)
+		}
+	}
+
+	d.SetId(id.ID())
+	return resourceRecoveryServicesVaultRead(d, meta)
+}

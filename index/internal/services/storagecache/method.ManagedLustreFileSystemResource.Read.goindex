@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/amlfilesystems"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ManagedLustreFileSystemResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.StorageCache.AmlFilesystems
+
+			id, err := amlfilesystems.ParseAmlFilesystemID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			state := ManagedLustreFileSystemModel{}
+			if model := resp.Model; model != nil {
+				state.Name = id.AmlFilesystemName
+				state.ResourceGroupName = id.ResourceGroupName
+				state.Location = location.Normalize(model.Location)
+				state.Tags = pointer.From(model.Tags)
+
+				identity, err := identity.FlattenUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return err
+				}
+				state.Identity = pointer.From(identity)
+
+				if properties := model.Properties; properties != nil {
+					state.SubnetId = properties.FilesystemSubnet
+					state.StorageCapacityInTb = int64(properties.StorageCapacityTiB)
+					state.MaintenanceWindow = flattenManagedLustreFileSystemMaintenanceWindow(properties.MaintenanceWindow)
+					if properties.ClientInfo != nil && properties.ClientInfo.MgsAddress != nil {
+						state.MgsAddress = *properties.ClientInfo.MgsAddress
+					}
+					state.HsmSetting = flattenManagedLustreFileSystemHsmSetting(properties.Hsm)
+					state.Zones = pointer.From(model.Zones)
+					state.EncryptionKey = flattenManagedLustreFileSystemEncryptionKey(properties.EncryptionSettings)
+
+					if v := model.Sku; v != nil {
+						state.SkuName = pointer.From(v.Name)
+					}
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

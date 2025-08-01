@@ -1,0 +1,80 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/kubernetesconfiguration/2023-05-01/fluxconfiguration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/containers"
+)
+func (r KubernetesFluxConfigurationResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Containers.KubernetesFluxConfigurationClient
+
+			id, err := fluxconfiguration.ParseScopedFluxConfigurationID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var configModel KubernetesFluxConfigurationModel
+			if err := metadata.Decode(&configModel); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			clusterId, err := commonids.ParseKubernetesClusterID(id.Scope)
+			if err != nil {
+				return err
+			}
+			state := KubernetesFluxConfigurationModel{
+				Name:      id.FluxConfigurationName,
+				ClusterID: clusterId.ID(),
+			}
+
+			if model := resp.Model; model != nil {
+				if properties := model.Properties; properties != nil {
+					blobStorage, err := flattenAzureBlobDefinitionModel(properties.AzureBlob, configModel.BlobStorage, metadata.Client.Storage.StorageDomainSuffix)
+					if err != nil {
+						return fmt.Errorf("flattening `blob_storage`: %+v", err)
+					}
+
+					state.BlobStorage = blobStorage
+					state.Bucket = flattenBucketDefinitionModel(properties.Bucket, configModel.Bucket)
+					gitRepositoryValue, err := flattenGitRepositoryDefinitionModel(properties.GitRepository, configModel.GitRepository)
+					if err != nil {
+						return err
+					}
+
+					state.GitRepository = gitRepositoryValue
+					state.Kustomizations = flattenKustomizationDefinitionModel(properties.Kustomizations)
+					state.Namespace = pointer.From(properties.Namespace)
+					state.Scope = string(pointer.From(properties.Scope))
+					state.ContinuousReconciliationEnabled = !pointer.From(properties.Suspend)
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

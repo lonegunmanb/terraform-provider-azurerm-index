@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/managementgroups/2020-05-01/managementgroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func getManagementGroupNameByDisplayName(ctx context.Context, client *managementgroups.ManagementGroupsClient, displayName string) (string, error) {
+	iterator, err := client.ListComplete(ctx, managementgroups.ListOperationOptions{
+		CacheControl: &managementGroupCacheControl,
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing Management Groups: %+v", err)
+	}
+
+	var results []string
+	for _, item := range iterator.Items {
+		if item.Properties == nil {
+			continue
+		}
+
+		if item.Properties.DisplayName != nil && *item.Properties.DisplayName == displayName && item.Name != nil && *item.Name != "" {
+			results = append(results, *item.Name)
+		}
+	}
+
+	// we found none
+	if len(results) == 0 {
+		return "", fmt.Errorf("Management Group (Display Name %q) was not found", displayName)
+	}
+
+	// we found more than one
+	if len(results) > 1 {
+		return "", fmt.Errorf("expected a single Management Group with the Display Name %q but expected one", displayName)
+	}
+
+	return results[0], nil
+}

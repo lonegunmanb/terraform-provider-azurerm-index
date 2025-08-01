@@ -1,0 +1,94 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/user"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceApiManagementUser() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceApiManagementUserCreateUpdate,
+		Read:   resourceApiManagementUserRead,
+		Update: resourceApiManagementUserCreateUpdate,
+		Delete: resourceApiManagementUserDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := user.ParseUserID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(45 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(45 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(45 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"user_id": schemaz.SchemaApiManagementUserName(),
+
+			"api_management_name": schemaz.SchemaApiManagementName(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"first_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"email": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"last_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"confirmation": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(user.ConfirmationInvite),
+					string(user.ConfirmationSignup),
+				}, false),
+			},
+
+			"note": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"password": {
+				Type:      pluginsdk.TypeString,
+				Optional:  true,
+				Sensitive: true,
+			},
+
+			"state": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(user.UserStateActive),
+					string(user.UserStateBlocked),
+					string(user.UserStatePending),
+				}, false),
+			},
+		},
+	}
+}

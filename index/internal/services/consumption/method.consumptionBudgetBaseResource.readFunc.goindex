@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/consumption/2019-10-01/budgets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (br consumptionBudgetBaseResource) readFunc(scopeFieldName string) sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Consumption.BudgetsClient
+			id, err := budgets.ParseScopedBudgetID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("reading %s, %+v", *id, err)
+			}
+
+			metadata.ResourceData.Set("name", id.BudgetName)
+			// lintignore:R001
+			metadata.ResourceData.Set(scopeFieldName, id.Scope)
+
+			if model := resp.Model; model != nil {
+				eTag := ""
+				if v := model.ETag; v != nil {
+					eTag = *v
+				}
+				metadata.ResourceData.Set("etag", eTag)
+
+				if props := model.Properties; props != nil {
+					metadata.ResourceData.Set("amount", props.Amount)
+					metadata.ResourceData.Set("time_grain", string(props.TimeGrain))
+					metadata.ResourceData.Set("time_period", flattenConsumptionBudgetTimePeriod(&props.TimePeriod))
+					metadata.ResourceData.Set("notification", flattenConsumptionBudgetNotifications(props.Notifications, scopeFieldName))
+					metadata.ResourceData.Set("filter", flattenConsumptionBudgetFilter(props.Filter))
+				}
+			}
+
+			return nil
+		},
+	}
+}

@@ -1,0 +1,133 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"reflect"
+	"strconv"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/resources/mgmt/2021-06-01-preview/policy" // nolint: staticcheck
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	mgmtGrpParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceArmPolicySetDefinitionCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Policy.SetDefinitionsClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	name := d.Get("name").(string)
+	managementGroupName := ""
+	if v, ok := d.GetOk("management_group_id"); ok {
+		managementGroupID, err := mgmtGrpParse.ManagementGroupID(v.(string))
+		if err != nil {
+			return err
+		}
+		managementGroupName = managementGroupID.Name
+	}
+
+	existing, err := getPolicySetDefinitionByName(ctx, client, name, managementGroupName)
+	if err != nil {
+		if !utils.ResponseWasNotFound(existing.Response) {
+			return fmt.Errorf("checking for presence of existing Policy Set Definition %q: %+v", name, err)
+		}
+	}
+
+	if existing.ID != nil && *existing.ID != "" {
+		return tf.ImportAsExistsError("azurerm_policy_set_definition", *existing.ID)
+	}
+
+	properties := policy.SetDefinitionProperties{
+		PolicyType:  policy.Type(d.Get("policy_type").(string)),
+		DisplayName: utils.String(d.Get("display_name").(string)),
+		Description: utils.String(d.Get("description").(string)),
+	}
+
+	if metaDataString := d.Get("metadata").(string); metaDataString != "" {
+		metaData, err := pluginsdk.ExpandJsonFromString(metaDataString)
+		if err != nil {
+			return fmt.Errorf("expanding JSON for `metadata`: %+v", err)
+		}
+		properties.Metadata = &metaData
+	}
+
+	if parametersString := d.Get("parameters").(string); parametersString != "" {
+		parameters, err := expandParameterDefinitionsValueFromString(parametersString)
+		if err != nil {
+			return fmt.Errorf("expanding JSON for `parameters`: %+v", err)
+		}
+		properties.Parameters = parameters
+	}
+
+	if v, ok := d.GetOk("policy_definition_reference"); ok {
+		definitions, err := expandAzureRMPolicySetDefinitionPolicyDefinitions(v.([]interface{}))
+		if err != nil {
+			return fmt.Errorf("expanding `policy_definition_reference`: %+v", err)
+		}
+		properties.PolicyDefinitions = definitions
+	}
+
+	if v, ok := d.GetOk("policy_definition_group"); ok {
+		properties.PolicyDefinitionGroups = expandAzureRMPolicySetDefinitionPolicyGroups(v.(*pluginsdk.Set).List())
+	}
+
+	definition := policy.SetDefinition{
+		SetDefinitionProperties: &properties,
+	}
+
+	if managementGroupName == "" {
+		_, err = client.CreateOrUpdate(ctx, name, definition)
+	} else {
+		_, err = client.CreateOrUpdateAtManagementGroup(ctx, name, definition, managementGroupName)
+	}
+
+	if err != nil {
+		return fmt.Errorf("creating Policy Set Definition %q: %+v", name, err)
+	}
+
+	// Policy Definitions are eventually consistent; wait for them to stabilize
+	log.Printf("[DEBUG] Waiting for Policy Set Definition %q to become available", name)
+	stateConf := &pluginsdk.StateChangeConf{
+		Pending:                   []string{"404"},
+		Target:                    []string{"200"},
+		Refresh:                   policySetDefinitionRefreshFunc(ctx, client, name, managementGroupName),
+		MinTimeout:                10 * time.Second,
+		ContinuousTargetOccurence: 10,
+	}
+
+	if d.IsNewResource() {
+		stateConf.Timeout = d.Timeout(pluginsdk.TimeoutCreate)
+	} else {
+		stateConf.Timeout = d.Timeout(pluginsdk.TimeoutUpdate)
+	}
+
+	if _, err = stateConf.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for Policy Set Definition %q to become available: %+v", name, err)
+	}
+
+	var resp policy.SetDefinition
+	resp, err = getPolicySetDefinitionByName(ctx, client, name, managementGroupName)
+	if err != nil {
+		return fmt.Errorf("retrieving Policy Set Definition %q: %+v", name, err)
+	}
+
+	id, err := parse.PolicySetDefinitionID(*resp.ID)
+	if err != nil {
+		return fmt.Errorf("parsing Policy Set Definition %q: %+v", *resp.ID, err)
+	}
+
+	d.SetId(id.Id)
+
+	return resourceArmPolicySetDefinitionRead(d, meta)
+}

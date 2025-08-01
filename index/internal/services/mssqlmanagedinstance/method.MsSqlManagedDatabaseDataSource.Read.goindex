@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (d MsSqlManagedDatabaseDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MSSQLManagedInstance.ManagedDatabasesClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+			longTermRetentionClient := metadata.Client.MSSQLManagedInstance.ManagedInstancesLongTermRetentionPoliciesClient
+			shortTermRetentionClient := metadata.Client.MSSQLManagedInstance.ManagedInstancesShortTermRetentionPoliciesClient
+
+			var state MsSqlManagedDatabaseDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v)", err)
+			}
+
+			managedInstanceId, err := commonids.ParseSqlManagedInstanceID(state.ManagedInstanceId)
+			if err != nil {
+				return err
+			}
+
+			id := commonids.NewSqlManagedInstanceDatabaseID(subscriptionId, managedInstanceId.ResourceGroupName, managedInstanceId.ManagedInstanceName, state.Name)
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %v", id, err)
+			}
+
+			model := MsSqlManagedDatabaseDataSourceModel{
+				Name:                id.DatabaseName,
+				ManagedInstanceName: managedInstanceId.ManagedInstanceName,
+				ResourceGroupName:   id.ResourceGroupName,
+				ManagedInstanceId:   managedInstanceId.ID(),
+			}
+
+			ltrResp, err := longTermRetentionClient.Get(ctx, id)
+			if err != nil {
+				return fmt.Errorf("retrieving Long Term Retention Policy for  %s: %v", id, err)
+			}
+
+			if ltrResp.Model != nil && ltrResp.Model.Properties != nil {
+				model.LongTermRetentionPolicy = flattenLongTermRetentionPolicy(*ltrResp.Model.Properties)
+			}
+
+			shortTermRetentionResp, err := shortTermRetentionClient.Get(ctx, id)
+			if err != nil {
+				return fmt.Errorf("retrieving Short Term Retention Policy for  %s: %v", id, err)
+			}
+
+			if shortTermRetentionResp.Model != nil && shortTermRetentionResp.Model.Properties != nil {
+				model.ShortTermRetentionDays = pointer.From(shortTermRetentionResp.Model.Properties.RetentionDays)
+			}
+
+			if v, ok := metadata.ResourceData.GetOk("point_in_time_restore"); ok {
+				model.PointInTimeRestore = flattenManagedDatabasePointInTimeRestore(v)
+			}
+
+			metadata.SetID(id)
+			return metadata.Encode(&model)
+		},
+	}
+}

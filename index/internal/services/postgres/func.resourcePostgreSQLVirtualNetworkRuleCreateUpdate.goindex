@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/virtualnetworkrules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePostgreSQLVirtualNetworkRuleCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Postgres.VirtualNetworkRulesClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := virtualnetworkrules.NewVirtualNetworkRuleID(subscriptionId, d.Get("resource_group_name").(string), d.Get("server_name").(string), d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_postgresql_virtual_network_rule", id.ID())
+		}
+	}
+
+	parameters := virtualnetworkrules.VirtualNetworkRule{
+		Properties: &virtualnetworkrules.VirtualNetworkRuleProperties{
+			VirtualNetworkSubnetId:           d.Get("subnet_id").(string),
+			IgnoreMissingVnetServiceEndpoint: utils.Bool(d.Get("ignore_missing_vnet_service_endpoint").(bool)),
+		},
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, parameters); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	// Wait for the provisioning state to become ready
+	log.Printf("[DEBUG] Waiting for %s to become ready", id)
+	stateConf := &pluginsdk.StateChangeConf{
+		Pending:                   []string{"Initializing", "InProgress", "Unknown", "ResponseNotFound"},
+		Target:                    []string{"Ready"},
+		Refresh:                   postgreSQLVirtualNetworkStateStatusCodeRefreshFunc(ctx, client, id),
+		MinTimeout:                1 * time.Minute,
+		ContinuousTargetOccurence: 5,
+	}
+
+	if d.IsNewResource() {
+		stateConf.Timeout = d.Timeout(pluginsdk.TimeoutCreate)
+	} else {
+		stateConf.Timeout = d.Timeout(pluginsdk.TimeoutUpdate)
+	}
+
+	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for %s to be created or updated: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourcePostgreSQLVirtualNetworkRuleRead(d, meta)
+}

@@ -1,0 +1,135 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-06-01/policyassignments"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (br assignmentBaseResource) updateFunc() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Policy.AssignmentsClient
+
+			id, err := policyassignments.ParseScopedPolicyAssignmentID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			getResp, err := client.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			existing := getResp.Model
+			if existing == nil {
+				return fmt.Errorf("retrieving %s: `properties` was nil", *id)
+			}
+
+			update := policyassignments.PolicyAssignment{
+				Location:   existing.Location,
+				Properties: existing.Properties,
+			}
+			if existing.Identity != nil {
+				update.Identity = existing.Identity
+			}
+
+			if metadata.ResourceData.HasChange("description") {
+				update.Properties.Description = utils.String(metadata.ResourceData.Get("description").(string))
+			}
+			if metadata.ResourceData.HasChange("display_name") {
+				update.Properties.DisplayName = utils.String(metadata.ResourceData.Get("display_name").(string))
+			}
+			if metadata.ResourceData.HasChange("enforce") {
+				update.Properties.EnforcementMode = convertEnforcementMode(metadata.ResourceData.Get("enforce").(bool))
+			}
+			if metadata.ResourceData.HasChange("location") {
+				update.Location = utils.String(metadata.ResourceData.Get("location").(string))
+			}
+			if metadata.ResourceData.HasChange("policy_definition_id") {
+				update.Properties.PolicyDefinitionId = utils.String(metadata.ResourceData.Get("policy_definition_id").(string))
+			}
+
+			if metadata.ResourceData.HasChange("identity") {
+				if update.Location == nil {
+					return fmt.Errorf("`location` must be set when `identity` is assigned")
+				}
+				identityRaw := metadata.ResourceData.Get("identity").([]interface{})
+				identityIns, err := identity.ExpandSystemOrUserAssignedMap(identityRaw)
+				if err != nil {
+					return fmt.Errorf("expanding `identity`: %+v", err)
+				}
+				update.Identity = identityIns
+			}
+
+			if metadata.ResourceData.HasChange("metadata") {
+				v := metadata.ResourceData.Get("metadata").(string)
+				m := map[string]interface{}{}
+				if v != "" {
+					m, err = pluginsdk.ExpandJsonFromString(v)
+					if err != nil {
+						return fmt.Errorf("parsing metadata: %+v", err)
+					}
+				}
+				var i interface{} = m
+				update.Properties.Metadata = &i
+			}
+
+			if metadata.ResourceData.HasChange("not_scopes") {
+				update.Properties.NotScopes = expandAzureRmPolicyNotScopes(metadata.ResourceData.Get("not_scopes").([]interface{}))
+			}
+
+			if metadata.ResourceData.HasChange("non_compliance_message") {
+				update.Properties.NonComplianceMessages = br.expandNonComplianceMessages(metadata.ResourceData.Get("non_compliance_message").([]interface{}))
+			}
+
+			if metadata.ResourceData.HasChange("parameters") {
+				m := map[string]policyassignments.ParameterValuesValue{}
+
+				if v := metadata.ResourceData.Get("parameters").(string); v != "" {
+					m, err = expandParameterValuesValueFromString(v)
+					if err != nil {
+						return fmt.Errorf("expanding JSON for `parameters` %q: %+v", v, err)
+					}
+				}
+				update.Properties.Parameters = &m
+			}
+
+			if metadata.ResourceData.HasChange("overrides") {
+				update.Properties.Overrides = br.expandOverrides(metadata.ResourceData.Get("overrides").([]interface{}))
+			}
+
+			if metadata.ResourceData.HasChange("resource_selectors") {
+				update.Properties.ResourceSelectors = br.expandResourceSelectors(metadata.ResourceData.Get("resource_selectors").([]interface{}))
+			}
+
+			// NOTE: there isn't an Update endpoint
+			if _, err := client.Create(ctx, *id, update); err != nil {
+				return fmt.Errorf("updating %s: %+v", *id, err)
+			}
+
+			// Policy Assignments are eventually consistent; wait for them to stabilize
+			log.Printf("[DEBUG] Waiting for %s to become available..", id)
+			if err := waitForPolicyAssignmentToStabilize(ctx, client, *id, true); err != nil {
+				return fmt.Errorf("waiting for %s to become available: %s", id, err)
+			}
+
+			return nil
+		},
+		Timeout: 30 * time.Minute,
+	}
+}

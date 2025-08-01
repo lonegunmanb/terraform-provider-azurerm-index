@@ -1,0 +1,191 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerinstance/2023-05-01/containerinstance"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandContainerGroupContainers(d *pluginsdk.ResourceData, addedEmptyDirs map[string]bool) ([]containerinstance.Container, []containerinstance.Port, []containerinstance.Volume, error) {
+	containersConfig := d.Get("container").([]interface{})
+	containers := make([]containerinstance.Container, 0)
+	containerInstancePorts := make([]containerinstance.Port, 0)
+	containerGroupPorts := make([]containerinstance.Port, 0)
+	containerGroupVolumes := make([]containerinstance.Volume, 0)
+
+	for _, containerConfig := range containersConfig {
+		data := containerConfig.(map[string]interface{})
+
+		name := data["name"].(string)
+		image := data["image"].(string)
+		cpu := data["cpu"].(float64)
+		memory := data["memory"].(float64)
+
+		container := containerinstance.Container{
+			Name: name,
+			Properties: containerinstance.ContainerProperties{
+				Image: image,
+				Resources: containerinstance.ResourceRequirements{
+					Requests: containerinstance.ResourceRequests{
+						MemoryInGB: memory,
+						Cpu:        cpu,
+					},
+				},
+				SecurityContext: expandContainerSecurityContext(data["security"].([]interface{})),
+			},
+		}
+
+		cpuLimit := data["cpu_limit"].(float64)
+		memLimit := data["memory_limit"].(float64)
+
+		if !(cpuLimit == 0.0 && memLimit == 0.0) {
+			limits := &containerinstance.ResourceLimits{}
+			if cpuLimit != 0.0 {
+				limits.Cpu = &cpuLimit
+			}
+			if memLimit != 0.0 {
+				limits.MemoryInGB = &memLimit
+			}
+
+			container.Properties.Resources.Limits = limits
+		}
+
+		if v, ok := data["ports"].(*pluginsdk.Set); ok && len(v.List()) > 0 {
+			var ports []containerinstance.ContainerPort
+			for _, v := range v.List() {
+				portObj := v.(map[string]interface{})
+
+				port := int64(portObj["port"].(int))
+				proto := portObj["protocol"].(string)
+
+				containerProtocol := containerinstance.ContainerNetworkProtocol(proto)
+				ports = append(ports, containerinstance.ContainerPort{
+					Port:     port,
+					Protocol: &containerProtocol,
+				})
+				groupProtocol := containerinstance.ContainerGroupNetworkProtocol(proto)
+				containerInstancePorts = append(containerInstancePorts, containerinstance.Port{
+					Port:     port,
+					Protocol: &groupProtocol,
+				})
+			}
+			container.Properties.Ports = &ports
+		}
+
+		// Set both sensitive and non-secure environment variables
+		var envVars *[]containerinstance.EnvironmentVariable
+		var secEnvVars *[]containerinstance.EnvironmentVariable
+
+		// Expand environment_variables into slice
+		if v, ok := data["environment_variables"]; ok {
+			envVars = expandContainerEnvironmentVariables(v, false)
+		}
+
+		// Expand secure_environment_variables into slice
+		if v, ok := data["secure_environment_variables"]; ok {
+			secEnvVars = expandContainerEnvironmentVariables(v, true)
+		}
+
+		// Combine environment variable slices
+		*envVars = append(*envVars, *secEnvVars...)
+
+		// Set both secure and non secure environment variables
+		container.Properties.EnvironmentVariables = envVars
+
+		if v, ok := data["commands"]; ok {
+			c := v.([]interface{})
+			command := make([]string, 0)
+			for _, v := range c {
+				command = append(command, v.(string))
+			}
+
+			container.Properties.Command = &command
+		}
+
+		if v, ok := data["volume"]; ok {
+			volumeMounts, _, err := expandSingleContainerVolume(v)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			container.Properties.VolumeMounts = volumeMounts
+
+			expandedContainerGroupVolumes, err := expandContainerVolume(v, addedEmptyDirs, containerGroupVolumes)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			containerGroupVolumes = expandedContainerGroupVolumes
+		}
+
+		if v, ok := data["liveness_probe"]; ok {
+			container.Properties.LivenessProbe = expandContainerProbe(v)
+		}
+
+		if v, ok := data["readiness_probe"]; ok {
+			container.Properties.ReadinessProbe = expandContainerProbe(v)
+		}
+
+		containers = append(containers, container)
+	}
+
+	// Determine ports to be exposed on the group level, based on exposed_ports
+	// and on what ports have been exposed on individual containers.
+	if v, ok := d.Get("exposed_port").(*pluginsdk.Set); ok && len(v.List()) > 0 {
+		cgpMap := make(map[int64]map[containerinstance.ContainerGroupNetworkProtocol]bool)
+		for _, p := range containerInstancePorts {
+			if p.Protocol == nil {
+				continue
+			}
+			protocol := *p.Protocol
+
+			if val, ok := cgpMap[p.Port]; ok {
+				val[protocol] = true
+				cgpMap[p.Port] = val
+			} else {
+				protoMap := map[containerinstance.ContainerGroupNetworkProtocol]bool{protocol: true}
+				cgpMap[p.Port] = protoMap
+			}
+		}
+
+		for _, p := range v.List() {
+			portConfig := p.(map[string]interface{})
+			port := int64(portConfig["port"].(int))
+			proto := portConfig["protocol"].(string)
+			if !cgpMap[port][containerinstance.ContainerGroupNetworkProtocol(proto)] {
+				return nil, nil, nil, fmt.Errorf("Port %d/%s is not exposed on any individual container in the container group.\n"+
+					"An exposed_ports block contains %d/%s, but no individual container has a ports block with the same port "+
+					"and protocol. Any ports exposed on the container group must also be exposed on an individual container.",
+					port, proto, port, proto)
+			}
+			portProtocol := containerinstance.ContainerGroupNetworkProtocol(proto)
+			containerGroupPorts = append(containerGroupPorts, containerinstance.Port{
+				Port:     port,
+				Protocol: &portProtocol,
+			})
+		}
+	} else {
+		containerGroupPorts = containerInstancePorts // remove in 3.0 of the provider
+	}
+
+	return containers, containerGroupPorts, containerGroupVolumes, nil
+}

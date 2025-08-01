@@ -1,0 +1,101 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func resourceDataFactoryCustomDatasetCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).DataFactory.DatasetClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	dataFactoryId, err := factories.ParseFactoryID(d.Get("data_factory_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := parse.NewDataSetID(subscriptionId, dataFactoryId.ResourceGroupName, dataFactoryId.FactoryName, d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id.ResourceGroup, id.FactoryName, id.Name, "")
+		if err != nil {
+			if !utils.ResponseWasNotFound(existing.Response) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+		if !utils.ResponseWasNotFound(existing.Response) {
+			return tf.ImportAsExistsError("azurerm_data_factory_custom_dataset", id.ID())
+		}
+	}
+
+	props := map[string]interface{}{
+		"type":              d.Get("type").(string),
+		"linkedServiceName": expandDataFactoryLinkedService(d.Get("linked_service").([]interface{})),
+	}
+
+	typePropertiesJson := fmt.Sprintf(`{ "typeProperties": %s }`, d.Get("type_properties_json").(string))
+	if err = json.Unmarshal([]byte(typePropertiesJson), &props); err != nil {
+		return err
+	}
+
+	additionalProperties := d.Get("additional_properties").(map[string]interface{})
+	for k, v := range additionalProperties {
+		props[k] = v
+	}
+
+	if v, ok := d.GetOk("annotations"); ok {
+		props["annotations"] = v.([]interface{})
+	}
+
+	if v, ok := d.GetOk("description"); ok {
+		props["description"] = v.(string)
+	}
+
+	if v, ok := d.GetOk("folder"); ok {
+		props["folder"] = &datafactory.DatasetFolder{
+			Name: utils.String(v.(string)),
+		}
+	}
+
+	if v, ok := d.GetOk("parameters"); ok {
+		props["parameters"] = expandDataSetParameters(v.(map[string]interface{}))
+	}
+
+	if v, ok := d.GetOk("schema_json"); ok {
+		schemaJson := fmt.Sprintf(`{ "schema": %s }`, v.(string))
+		if err = json.Unmarshal([]byte(schemaJson), &props); err != nil {
+			return err
+		}
+	}
+
+	jsonData, err := json.Marshal(map[string]interface{}{
+		"properties": props,
+	})
+	if err != nil {
+		return err
+	}
+
+	dataset := &datafactory.DatasetResource{}
+	if err := dataset.UnmarshalJSON(jsonData); err != nil {
+		return err
+	}
+
+	if _, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.FactoryName, id.Name, *dataset, ""); err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceDataFactoryCustomDatasetRead(d, meta)
+}

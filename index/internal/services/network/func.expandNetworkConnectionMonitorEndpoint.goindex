@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/networkwatchers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/connectionmonitors"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandNetworkConnectionMonitorEndpoint(input []interface{}) *[]connectionmonitors.ConnectionMonitorEndpoint {
+	results := make([]connectionmonitors.ConnectionMonitorEndpoint, 0)
+
+	for _, item := range input {
+		v := item.(map[string]interface{})
+
+		result := connectionmonitors.ConnectionMonitorEndpoint{
+			Name:   v["name"].(string),
+			Filter: expandNetworkConnectionMonitorEndpointFilter(v["filter"].([]interface{})),
+		}
+
+		if address := v["address"]; address != "" {
+			result.Address = pointer.To(address.(string))
+		}
+
+		if coverageLevel := v["coverage_level"]; coverageLevel != "" {
+			result.CoverageLevel = pointer.To(connectionmonitors.CoverageLevel(coverageLevel.(string)))
+		}
+
+		excludedItems := v["excluded_ip_addresses"].(*pluginsdk.Set).List()
+		includedItems := v["included_ip_addresses"].(*pluginsdk.Set).List()
+		if len(excludedItems) != 0 || len(includedItems) != 0 {
+			result.Scope = &connectionmonitors.ConnectionMonitorEndpointScope{}
+
+			if len(excludedItems) != 0 {
+				var excludedAddresses []connectionmonitors.ConnectionMonitorEndpointScopeItem
+				for _, v := range excludedItems {
+					excludedAddresses = append(excludedAddresses, connectionmonitors.ConnectionMonitorEndpointScopeItem{
+						Address: pointer.To(v.(string)),
+					})
+				}
+				result.Scope.Exclude = &excludedAddresses
+			}
+
+			if len(includedItems) != 0 {
+				var includedAddresses []connectionmonitors.ConnectionMonitorEndpointScopeItem
+				for _, v := range includedItems {
+					includedAddresses = append(includedAddresses, connectionmonitors.ConnectionMonitorEndpointScopeItem{
+						Address: pointer.To(v.(string)),
+					})
+				}
+				result.Scope.Include = &includedAddresses
+			}
+		}
+
+		if resourceId := v["target_resource_id"]; resourceId != "" {
+			result.ResourceId = pointer.To(resourceId.(string))
+		}
+
+		if endpointType := v["target_resource_type"]; endpointType != "" {
+			result.Type = pointer.To(connectionmonitors.EndpointType(endpointType.(string)))
+		}
+
+		results = append(results, result)
+	}
+
+	return &results
+}

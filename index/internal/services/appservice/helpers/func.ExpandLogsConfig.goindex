@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandLogsConfig(config []LogsConfig) *webapps.SiteLogsConfig {
+	result := &webapps.SiteLogsConfig{}
+	if len(config) == 0 {
+		return result
+	}
+
+	result.Properties = &webapps.SiteLogsConfigProperties{}
+
+	logsConfig := config[0]
+
+	if len(logsConfig.ApplicationLogs) == 1 {
+		appLogs := logsConfig.ApplicationLogs[0]
+		result.Properties.ApplicationLogs = &webapps.ApplicationLogsConfig{
+			FileSystem: &webapps.FileSystemApplicationLogsConfig{
+				Level: pointer.To(webapps.LogLevel(appLogs.FileSystemLevel)),
+			},
+		}
+		if len(appLogs.AzureBlobStorage) == 1 {
+			appLogsBlobs := appLogs.AzureBlobStorage[0]
+			result.Properties.ApplicationLogs.AzureBlobStorage = &webapps.AzureBlobStorageApplicationLogsConfig{
+				Level:           pointer.To(webapps.LogLevel(appLogsBlobs.Level)),
+				SasURL:          pointer.To(appLogsBlobs.SasURL),
+				RetentionInDays: pointer.To(appLogsBlobs.RetentionInDays),
+			}
+		}
+	}
+
+	if len(logsConfig.HttpLogs) == 1 {
+		httpLogs := logsConfig.HttpLogs[0]
+		result.Properties.HTTPLogs = &webapps.HTTPLogsConfig{}
+
+		if len(httpLogs.FileSystems) == 1 {
+			httpLogFileSystem := httpLogs.FileSystems[0]
+			result.Properties.HTTPLogs.FileSystem = &webapps.FileSystemHTTPLogsConfig{
+				Enabled:         pointer.To(true),
+				RetentionInMb:   pointer.To(httpLogFileSystem.RetentionMB),
+				RetentionInDays: pointer.To(httpLogFileSystem.RetentionDays),
+			}
+		}
+
+		if len(httpLogs.AzureBlobStorage) == 1 {
+			httpLogsBlobStorage := httpLogs.AzureBlobStorage[0]
+			result.Properties.HTTPLogs.AzureBlobStorage = &webapps.AzureBlobStorageHTTPLogsConfig{
+				Enabled:         pointer.To(httpLogsBlobStorage.SasURL != ""),
+				SasURL:          pointer.To(httpLogsBlobStorage.SasURL),
+				RetentionInDays: pointer.To(httpLogsBlobStorage.RetentionInDays),
+			}
+		}
+	}
+
+	result.Properties.DetailedErrorMessages = &webapps.EnabledConfig{
+		Enabled: pointer.To(logsConfig.DetailedErrorMessages),
+	}
+
+	result.Properties.FailedRequestsTracing = &webapps.EnabledConfig{
+		Enabled: pointer.To(logsConfig.FailedRequestTracing),
+	}
+
+	return result
+}

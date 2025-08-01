@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/hybridrunbookworker"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (m HybridRunbookWorkerResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, meta sdk.ResourceMetaData) error {
+			client := meta.Client.Automation.HybridRunbookWorker
+
+			var model HybridRunbookWorkerModel
+			if err := meta.Decode(&model); err != nil {
+				return err
+			}
+
+			subscriptionID := meta.Client.Account.SubscriptionId
+			id := hybridrunbookworker.NewHybridRunbookWorkerID(subscriptionID, model.ResourceGroupName,
+				model.AutomationAccountName, model.WorkerGroupName, model.WorkerId)
+			existing, err := client.Get(ctx, id)
+			if !response.WasNotFound(existing.HttpResponse) {
+				if err != nil {
+					return fmt.Errorf("retreiving %s: %v", id, err)
+				}
+				return meta.ResourceRequiresImport(m.ResourceType(), id)
+			}
+
+			req := hybridrunbookworker.HybridRunbookWorkerCreateParameters{}
+			if model.VmResourceId != "" {
+				req.Properties.VMResourceId = utils.String(model.VmResourceId)
+			}
+
+			future, err := client.Create(ctx, id, req)
+			if err != nil {
+				// Workaround swagger issue https://github.com/Azure/azure-rest-api-specs/issues/19741
+				if !response.WasStatusCode(future.HttpResponse, http.StatusCreated) {
+					return fmt.Errorf("creating %s: %v", id, err)
+				}
+			}
+			_ = future
+
+			meta.SetID(id)
+			return nil
+		},
+	}
+}

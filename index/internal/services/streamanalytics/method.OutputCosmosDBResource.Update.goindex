@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/streamanalytics
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2020-03-01/streamingjobs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/streamanalytics/2021-10-01-preview/outputs"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	cosmosParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	cosmosValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/streamanalytics/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r OutputCosmosDBResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.StreamAnalytics.OutputsClient
+			id, err := outputs.ParseOutputID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var state OutputCosmosDBResourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding %+v", err)
+			}
+
+			databaseId, err := cosmosParse.SqlDatabaseID(state.Database)
+			if err != nil {
+				return err
+			}
+
+			if metadata.ResourceData.HasChangesExcept("name", "stream_analytics_job_id") {
+				props := outputs.Output{
+					Properties: &outputs.OutputProperties{
+						Datasource: outputs.DocumentDbOutputDataSource{
+							Properties: &outputs.DocumentDbOutputDataSourceProperties{
+								AccountKey:            &state.AccountKey,
+								Database:              &databaseId.Name,
+								CollectionNamePattern: &state.ContainerName,
+								DocumentId:            &state.DocumentID,
+								PartitionKey:          &state.PartitionKey,
+							},
+						},
+					},
+				}
+				var opts outputs.UpdateOperationOptions
+				if _, err := client.Update(ctx, *id, props, opts); err != nil {
+					return fmt.Errorf("updating %s: %+v", *id, err)
+				}
+			}
+
+			return nil
+		},
+	}
+}

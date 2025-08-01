@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"fmt"
+	"log"
+	"math/big"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+	"golang.org/x/crypto/ssh"
+)
+func flattenKeyVaultKeyRotationPolicy(input keyvault.KeyRotationPolicy) []interface{} {
+	if input.LifetimeActions == nil && input.Attributes == nil {
+		return []interface{}{}
+	}
+
+	policy := make(map[string]interface{})
+	if input.Attributes != nil && input.Attributes.ExpiryTime != nil && *input.Attributes.ExpiryTime != "" {
+		policy["expire_after"] = *input.Attributes.ExpiryTime
+	}
+
+	if input.LifetimeActions != nil {
+		for _, ltAction := range *input.LifetimeActions {
+			action := ltAction.Action
+			trigger := ltAction.Trigger
+
+			if action != nil && trigger != nil && action.Type != "" && strings.EqualFold(string(action.Type), string(keyvault.ActionTypeNotify)) && trigger.TimeBeforeExpiry != nil && *trigger.TimeBeforeExpiry != "" {
+				// Somehow a default is set after creation for notify_before_expiry
+				// Submitting this set value in the next run will not work though..
+				if policy["expire_after"] != nil {
+					policy["notify_before_expiry"] = *trigger.TimeBeforeExpiry
+				}
+			}
+
+			if action != nil && trigger != nil && action.Type != "" && strings.EqualFold(string(action.Type), string(keyvault.ActionTypeRotate)) {
+				autoRotation := make(map[string]interface{}, 0)
+				autoRotation["time_after_creation"] = pointer.From(trigger.TimeAfterCreate)
+				autoRotation["time_before_expiry"] = pointer.From(trigger.TimeBeforeExpiry)
+				policy["automatic"] = []map[string]interface{}{autoRotation}
+			}
+		}
+	}
+
+	if len(policy) == 0 {
+		return []interface{}{}
+	}
+
+	return []interface{}{policy}
+}

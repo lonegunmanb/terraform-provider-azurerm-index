@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r LinuxWebAppResource) CustomImporter() sdk.ResourceRunFunc {
+	return func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+		client := metadata.Client.AppService.WebAppsClient
+		servicePlanClient := metadata.Client.AppService.ServicePlanClient
+
+		id, err := commonids.ParseWebAppID(metadata.ResourceData.Id())
+		if err != nil {
+			return err
+		}
+		site, err := client.Get(ctx, *id)
+		if err != nil || site.Model == nil || site.Model.Properties == nil {
+			return fmt.Errorf("reading Linux %s: %+v", id, err)
+		}
+		props := site.Model.Properties
+		if props.ServerFarmId == nil {
+			return fmt.Errorf("determining Service Plan ID for Linux %s: %+v", id, err)
+		}
+		servicePlanId, err := commonids.ParseAppServicePlanIDInsensitively(*props.ServerFarmId)
+		if err != nil {
+			return err
+		}
+
+		sp, err := servicePlanClient.Get(ctx, *servicePlanId)
+		if err != nil || sp.Model == nil || sp.Model.Kind == nil {
+			return fmt.Errorf("reading Service Plan for Linux %s: %+v", id, err)
+		}
+		if !strings.Contains(strings.ToLower(*sp.Model.Kind), "linux") {
+			return fmt.Errorf("specified Service Plan is not a Linux plan")
+		}
+
+		return nil
+	}
+}

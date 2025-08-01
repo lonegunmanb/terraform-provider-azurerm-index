@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/file/shares"
+)
+func (s ShareV1ToV2) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		id := rawState["id"].(string)
+
+		// name/resourceGroup/accountName
+		parsedId := strings.Split(id, "/")
+		if len(parsedId) != 3 {
+			return rawState, fmt.Errorf("expected 3 segments in the ID but got %d", len(parsedId))
+		}
+
+		shareName := parsedId[0]
+		accountName := parsedId[2]
+
+		accountId := accounts.AccountId{
+			AccountName:   accountName,
+			SubDomainType: "file",
+			DomainSuffix:  meta.(*clients.Client).Storage.StorageDomainSuffix,
+		}
+
+		newResourceId := shares.NewShareID(accountId, shareName)
+		log.Printf("[DEBUG] Updating Resource ID from %q to %q", id, newResourceId)
+
+		rawState["id"] = newResourceId.ID()
+
+		return rawState, nil
+	}
+}

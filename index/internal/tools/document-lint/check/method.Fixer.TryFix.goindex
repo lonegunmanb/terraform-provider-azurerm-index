@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"log"
+	"os"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func (f *Fixer) TryFix() (err error) {
+	// read file as bytes
+	if len(f.Diff) == 0 {
+		return err
+	}
+	if d, ok := f.Diff[0].(diffWithMessage); ok {
+		log.Printf("%s: %s", f.ResourceType, d.msg)
+		return err
+	}
+	content, err := os.ReadFile(f.MDFile)
+	if err != nil {
+		log.Printf("open %s: %v", f.MDFile, err)
+		return err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for idx, item := range f.Diff {
+		_ = idx
+		// fix timeout first!
+		if to, ok := item.(timeoutDiff); ok {
+			lines = tryFixTimeouts(f.ResourceType, lines, to.TimeoutDiff)
+			continue
+		}
+
+		// mdField is nil for no document exists or page title mismatch
+		if item.ShouldSkip() {
+			continue
+		}
+
+		lineIdx := item.Line()
+		line := lines[lineIdx]
+
+		if line, err = item.Fix(line); err != nil {
+			return err
+		}
+
+		if suf := strings.TrimSuffix(line, " "); suf != "" {
+			if ch := suf[len(suf)-1]; ch != '.' && ch != '?' {
+				line = suf + "."
+			}
+		}
+
+		lines[lineIdx] = line
+	}
+	f.FixedContent = strings.Join(lines, "\n")
+	return nil
+}

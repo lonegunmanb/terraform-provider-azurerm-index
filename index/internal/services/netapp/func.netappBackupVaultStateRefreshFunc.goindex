@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backupvaults"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func netappBackupVaultStateRefreshFunc(ctx context.Context, vaultClient *backupvaults.BackupVaultsClient, backupClient *backups.BackupsClient, id backupvaults.BackupVaultId) pluginsdk.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+		res, err := vaultClient.Get(ctx, id)
+		if err != nil {
+			if response.WasNotFound(res.HttpResponse) {
+				return res, strconv.Itoa(res.HttpResponse.StatusCode), nil
+			}
+			return nil, "", fmt.Errorf("retrieving %s: %s", id, err)
+		}
+
+		// Handling a race condition where the backup started but the volume got deleted and it takes time for it to show up within the vault.
+		// The vault deletion process will hang until the deadline is reached and never retry to delete the backup preventing vault to be deleted.
+		// For this to work, need to scrub activity logs to see if there was a failed deletion operation due to backup just showing up in the vault
+		// midway after the vault deletion process started.
+		backupVaultID := backups.NewBackupVaultID(id.SubscriptionId, id.ResourceGroupName, id.NetAppAccountName, id.BackupVaultName)
+		backupList, err := backupClient.ListByVault(ctx, backupVaultID, backups.ListByVaultOperationOptions{})
+		if err != nil {
+			return nil, "", fmt.Errorf("listing backups from vault %s: %w", id.ID(), err)
+		}
+
+		if backupList.Model != nil || len(pointer.From(backupList.Model)) > 0 {
+			return nil, "409", fmt.Errorf("backups found on vault %s, forcing retry", id.ID()) // Forcing vault deletion to retry
+		}
+
+		return res, strconv.Itoa(res.HttpResponse.StatusCode), nil
+	}
+}

@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/protectionpolicies"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenBackupProtectionPolicyVMScheduleV2(schedule protectionpolicies.SimpleSchedulePolicyV2) []interface{} {
+	block := map[string]interface{}{}
+
+	frequency := pointer.From(schedule.ScheduleRunFrequency)
+	block["frequency"] = string(frequency)
+
+	switch frequency {
+	case protectionpolicies.ScheduleRunTypeHourly:
+		schedule := schedule.HourlySchedule
+		if schedule.Interval != nil {
+			block["hour_interval"] = *schedule.Interval
+		}
+
+		if schedule.ScheduleWindowDuration != nil {
+			block["hour_duration"] = *schedule.ScheduleWindowDuration
+		}
+
+		if schedule.ScheduleWindowStartTime != nil {
+			policyTime, _ := time.Parse(time.RFC3339, pointer.From(schedule.ScheduleWindowStartTime))
+			block["time"] = policyTime.Format("15:04")
+		}
+	case protectionpolicies.ScheduleRunTypeDaily:
+		schedule := schedule.DailySchedule
+		if times := schedule.ScheduleRunTimes; times != nil && len(*times) > 0 {
+			policyTime, _ := time.Parse(time.RFC3339, (*times)[0])
+			block["time"] = policyTime.Format("15:04")
+		}
+	case protectionpolicies.ScheduleRunTypeWeekly:
+		schedule := schedule.WeeklySchedule
+		if days := schedule.ScheduleRunDays; days != nil {
+			weekdays := make([]interface{}, 0)
+			for _, d := range *days {
+				weekdays = append(weekdays, string(d))
+			}
+			block["weekdays"] = pluginsdk.NewSet(pluginsdk.HashString, weekdays)
+		}
+
+		if times := schedule.ScheduleRunTimes; times != nil && len(*times) > 0 {
+			policyTime, _ := time.Parse(time.RFC3339, (*times)[0])
+			block["time"] = policyTime.Format("15:04")
+		}
+	default:
+	}
+
+	return []interface{}{block}
+}

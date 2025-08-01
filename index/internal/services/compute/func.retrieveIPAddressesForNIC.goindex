@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/publicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func retrieveIPAddressesForNIC(ctx context.Context, nicClient *networkinterfaces.NetworkInterfacesClient, pipClient *publicipaddresses.PublicIPAddressesClient, nicID string) *interfaceDetails {
+	id, err := commonids.ParseNetworkInterfaceID(nicID)
+	if err != nil {
+		return nil
+	}
+
+	nic, err := nicClient.Get(ctx, *id, networkinterfaces.DefaultGetOperationOptions())
+	if err != nil {
+		return nil
+	}
+
+	if nic.Model == nil || nic.Model.Properties == nil || nic.Model.Properties.IPConfigurations == nil {
+		return nil
+	}
+
+	privateIPAddresses := make([]string, 0)
+	publicIPAddresses := make([]string, 0)
+	for _, config := range *nic.Model.Properties.IPConfigurations {
+		if props := config.Properties; props != nil {
+			if props.PrivateIPAddress != nil {
+				privateIPAddresses = append(privateIPAddresses, *props.PrivateIPAddress)
+			}
+
+			if pip := props.PublicIPAddress; pip != nil {
+				if pip.Id != nil {
+					publicIPAddress, err := retrievePublicIPAddress(ctx, pipClient, *pip.Id)
+					if err != nil {
+						continue
+					}
+
+					if publicIPAddress != nil {
+						publicIPAddresses = append(publicIPAddresses, *publicIPAddress)
+					}
+				}
+			}
+		}
+	}
+
+	return &interfaceDetails{
+		privateIPAddresses: privateIPAddresses,
+		publicIPAddresses:  publicIPAddresses,
+	}
+}

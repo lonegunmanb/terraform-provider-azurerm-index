@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/api"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apimanagementservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/product"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/subscription"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (ApiManagementSubscriptionDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ApiManagement.SubscriptionsClient
+
+			var state ApiManagementSubscriptionDataSourceModel
+
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			api_management_id, err := apimanagementservice.ParseServiceID(state.ApiManagementId)
+			if err != nil {
+				return fmt.Errorf("parsing: %+v", err)
+			}
+
+			id := subscription.NewSubscriptions2ID(api_management_id.SubscriptionId, api_management_id.ResourceGroupName, api_management_id.ServiceName, state.SubscriptionId)
+
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			if model := resp.Model; model != nil {
+				if props := model.Properties; props != nil {
+					// check if the subscription is for all apis or a specific product/ api
+					if props.Scope != "" && !strings.HasSuffix(props.Scope, "/apis") {
+						// the scope is either a product or api id
+						parseId, err := product.ParseProductIDInsensitively(props.Scope)
+						if err == nil {
+							state.ProductId = parseId.ID()
+						} else {
+							parsedApiId, err := api.ParseApiIDInsensitively(props.Scope)
+							if err != nil {
+								return fmt.Errorf("parsing scope into product/api id %q: %+v", props.Scope, err)
+							}
+							state.ApiId = parsedApiId.ID()
+						}
+					}
+					state.AllowTracing = pointer.From(props.AllowTracing)
+					state.DisplayName = pointer.From(props.DisplayName)
+					state.State = string(props.State)
+					state.UserId = pointer.From(props.OwnerId)
+				}
+			}
+
+			// Primary and secondary keys must be got from this additional api
+			keyResp, err := client.ListSecrets(ctx, id)
+			if err != nil {
+				return fmt.Errorf("listing Primary and Secondary Keys for %s: %+v", id, err)
+			}
+			if model := keyResp.Model; model != nil {
+				state.SecondaryKey = pointer.From(model.SecondaryKey)
+				state.PrimaryKey = pointer.From(model.PrimaryKey)
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

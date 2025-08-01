@@ -1,0 +1,74 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflowrunactions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflows"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func resourceLogicAppActionHTTPCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	workflowId, err := workflows.ParseWorkflowID(d.Get("logic_app_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := parse.NewActionID(workflowId.SubscriptionId, workflowId.ResourceGroupName, workflowId.WorkflowName, d.Get("name").(string))
+
+	headersRaw := d.Get("headers").(map[string]interface{})
+	headers, err := expandLogicAppActionHttpHeaders(headersRaw)
+	if err != nil {
+		return err
+	}
+
+	queriesRaw := d.Get("queries").(map[string]interface{})
+	queries, err := expandLogicAppActionHttpQueries(queriesRaw)
+	if err != nil {
+		return err
+	}
+
+	inputs := map[string]interface{}{
+		"method":  d.Get("method").(string),
+		"uri":     d.Get("uri").(string),
+		"headers": headers,
+		"queries": queries,
+	}
+
+	// if it's json object then storing action's body in json object to keep consistent with azure portal
+	// if starts with dynamic function (starts with "@") then store it as string
+	if bodyRaw, ok := d.GetOk("body"); ok {
+		if json.Valid([]byte(bodyRaw.(string))) {
+			var body map[string]interface{}
+			if err := json.Unmarshal([]byte(bodyRaw.(string)), &body); err != nil {
+				return fmt.Errorf("unmarshalling JSON for Action %q: %+v", id.Name, err)
+			}
+			inputs["body"] = body
+		} else {
+			inputs["body"] = bodyRaw.(string)
+		}
+	}
+
+	action := map[string]interface{}{
+		"inputs": inputs,
+		"type":   "http",
+	}
+
+	if v, ok := d.GetOk("run_after"); ok {
+		action["runAfter"] = expandLogicAppActionRunAfter(v.(*pluginsdk.Set).List())
+	}
+
+	err = resourceLogicAppActionUpdate(d, meta, *workflowId, id, action, "azurerm_logic_app_action_http")
+	if err != nil {
+		return err
+	}
+
+	return resourceLogicAppActionHTTPRead(d, meta)
+}

@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/relay/2021-11-01/hybridconnections"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/relay/2021-11-01/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceAppServiceHybridConnectionRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Web.AppServicesClient
+	relayClient := meta.(*clients.Client).Relay.HybridConnectionsClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.HybridConnectionID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.GetHybridConnection(ctx, id.ResourceGroup, id.SiteName, id.HybridConnectionNamespaceName, id.RelayName)
+	if err != nil {
+		if utils.ResponseWasNotFound(resp.Response) {
+			log.Printf("[DEBUG] Hybrid Connection %q for App Service %q (Resource Group %q) was not found - removing from state", id.HybridConnectionNamespaceName, id.SiteName, id.RelayName)
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving App Service Hybrid Connection %q in Namespace %q, Resource Group %q: %s", id.SiteName, id.HybridConnectionNamespaceName, id.ResourceGroup, err)
+	}
+	d.Set("app_service_name", id.SiteName)
+	d.Set("resource_group_name", id.ResourceGroup)
+	d.Set("namespace_name", id.HybridConnectionNamespaceName)
+	d.Set("relay_name", id.RelayName)
+
+	if props := resp.HybridConnectionProperties; props != nil {
+		d.Set("port", resp.Port)
+		d.Set("service_bus_namespace", resp.ServiceBusNamespace)
+		d.Set("send_key_name", resp.SendKeyName)
+		d.Set("service_bus_suffix", resp.ServiceBusSuffix)
+		d.Set("relay_id", resp.RelayArmURI)
+		d.Set("hostname", resp.Hostname)
+	}
+
+	// key values are not returned in the response, so we get the primary key from the relay namespace ListKeys func
+	if resp.ServiceBusNamespace != nil && resp.SendKeyName != nil {
+		relayNamespacesClient := meta.(*clients.Client).Relay.NamespacesClient
+		relayNamespaceRG, err := findRelayNamespace(ctx, relayNamespacesClient, id.SubscriptionId, *resp.ServiceBusNamespace)
+		if err != nil {
+			return err
+		}
+		authRuleId := namespaces.NewAuthorizationRuleID(id.SubscriptionId, *relayNamespaceRG, *resp.ServiceBusNamespace, *resp.SendKeyName)
+		accessKeys, err := relayNamespacesClient.ListKeys(ctx, authRuleId)
+
+		if err == nil && accessKeys.Model != nil {
+			d.Set("send_key_value", accessKeys.Model.PrimaryKey)
+			return nil
+		}
+
+		connAccessKeys, err := relayClient.ListKeys(ctx, hybridconnections.NewHybridConnectionAuthorizationRuleID(id.SubscriptionId, *relayNamespaceRG, *resp.ServiceBusNamespace, *resp.Name, *resp.SendKeyName))
+		if err != nil {
+			return fmt.Errorf("unable to List Access Keys for %q (Resource Group %q): %+v", id, id.ResourceGroup, err)
+		}
+		if model := connAccessKeys.Model; model != nil {
+			d.Set("send_key_value", model.PrimaryKey)
+		}
+	}
+
+	return nil
+}

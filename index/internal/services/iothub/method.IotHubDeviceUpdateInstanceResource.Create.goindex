@@ -1,0 +1,74 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/deviceupdate/2022-10-01/deviceupdates"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r IotHubDeviceUpdateInstanceResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model IotHubDeviceUpdateInstanceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			client := metadata.Client.IoTHub.DeviceUpdatesClient
+			deviceUpdateAccountId, err := deviceupdates.ParseAccountID(model.DeviceUpdateAccountId)
+			if err != nil {
+				return err
+			}
+
+			id := deviceupdates.NewInstanceID(deviceUpdateAccountId.SubscriptionId, deviceUpdateAccountId.ResourceGroupName, deviceUpdateAccountId.AccountName, model.Name)
+			existing, err := client.InstancesGet(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for existing %s: %+v", id, err)
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			deviceUpdateAccount, err := client.AccountsGet(ctx, *deviceUpdateAccountId)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *deviceUpdateAccountId, err)
+			}
+
+			if deviceUpdateAccount.Model == nil {
+				return fmt.Errorf("retrieving %s: model was nil", *deviceUpdateAccountId)
+			}
+
+			properties := &deviceupdates.Instance{
+				Location: location.Normalize(deviceUpdateAccount.Model.Location),
+				Properties: deviceupdates.InstanceProperties{
+					AccountName:                 &deviceUpdateAccountId.AccountName,
+					DiagnosticStorageProperties: expandDiagnosticStorageAccount(model.DiagnosticStorageAccount),
+					EnableDiagnostics:           &model.DiagnosticEnabled,
+					IotHubs: &[]deviceupdates.IotHubSettings{
+						{
+							ResourceId: model.IotHubId,
+						},
+					},
+				},
+				Tags: &model.Tags,
+			}
+
+			if err := client.InstancesCreateThenPoll(ctx, id, *properties); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

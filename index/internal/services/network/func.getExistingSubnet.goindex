@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/ddosprotectionplans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/routetables"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/serviceendpointpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/subnets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworks"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func getExistingSubnet(ctx context.Context, client virtualnetworks.VirtualNetworksClient, id commonids.VirtualNetworkId, subnetName string) (*virtualnetworks.Subnet, error) {
+	resp, err := client.Get(ctx, id, virtualnetworks.DefaultGetOperationOptions())
+	if err != nil {
+		// The Subnet doesn't exist when the Virtual Network doesn't exist
+		if response.WasNotFound(resp.HttpResponse) {
+			return pointer.To(virtualnetworks.Subnet{}), nil
+		}
+		// raise an error if there was an issue other than 404 in getting subnet properties
+		return nil, err
+	}
+
+	if model := resp.Model; model != nil {
+		if props := model.Properties; props != nil {
+			for _, subnet := range pointer.From(props.Subnets) {
+				if subnetName == pointer.From(subnet.Name) {
+					// Return it directly rather than copy the fields to prevent potential uncovered properties (for example, `ServiceEndpoints` mentioned in #1619)
+					return pointer.To(subnet), nil
+				}
+			}
+		}
+	}
+
+	return pointer.To(virtualnetworks.Subnet{}), nil
+}

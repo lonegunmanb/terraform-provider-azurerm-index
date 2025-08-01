@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenMachineLearningWorkspaceEncryption(input *workspaces.EncryptionProperty) (*[]interface{}, error) {
+	if input == nil || input.Status != workspaces.EncryptionStatusEnabled {
+		return &[]interface{}{}, nil
+	}
+
+	keyVaultId := ""
+	keyVaultKeyId := ""
+
+	if input.KeyVaultProperties.KeyIdentifier != "" {
+		keyVaultKeyId = input.KeyVaultProperties.KeyIdentifier
+	}
+	if input.KeyVaultProperties.KeyVaultArmId != "" {
+		keyVaultId = input.KeyVaultProperties.KeyVaultArmId
+	}
+
+	userAssignedIdentityId := ""
+	if input.Identity != nil && input.Identity.UserAssignedIdentity != nil {
+		id, err := commonids.ParseUserAssignedIdentityIDInsensitively(*input.Identity.UserAssignedIdentity)
+		if err != nil {
+			return nil, fmt.Errorf("parsing userAssignedIdentityId %q: %+v", *input.Identity.UserAssignedIdentity, err)
+		}
+
+		userAssignedIdentityId = id.ID()
+	}
+
+	return &[]interface{}{
+		map[string]interface{}{
+			"user_assigned_identity_id": userAssignedIdentityId,
+			"key_vault_id":              keyVaultId,
+			"key_id":                    keyVaultKeyId,
+		},
+	}, nil
+}

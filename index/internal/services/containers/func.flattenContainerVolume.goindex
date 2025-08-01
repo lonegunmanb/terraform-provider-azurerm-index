@@ -1,0 +1,98 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerinstance/2023-05-01/containerinstance"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenContainerVolume(containerConfig map[string]interface{}, containersConfigRaw []interface{}, containerName string, volumeMounts *[]containerinstance.VolumeMount, containerGroupVolumes *[]containerinstance.Volume) {
+	// Also pass in the container volume config from schema
+	var containerVolumesConfig *[]interface{}
+	for _, containerConfigRaw := range containersConfigRaw {
+		data := containerConfigRaw.(map[string]interface{})
+		nameRaw := data["name"].(string)
+		if nameRaw == containerName {
+			// found container config for current container
+			// extract volume mounts from config
+			if v, ok := data["volume"]; ok {
+				containerVolumesRaw := v.([]interface{})
+				containerVolumesConfig = &containerVolumesRaw
+			}
+		}
+	}
+	volumeConfigs := make([]interface{}, 0)
+
+	if volumeMounts == nil {
+		containerConfig["volume"] = nil
+		return
+	}
+
+	for _, vm := range *volumeMounts {
+		volumeConfig := make(map[string]interface{})
+		volumeConfig["name"] = vm.Name
+		volumeConfig["mount_path"] = vm.MountPath
+		if vm.ReadOnly != nil {
+			volumeConfig["read_only"] = *vm.ReadOnly
+		}
+
+		// find corresponding volume in container group volumes
+		// and use the data
+		if containerGroupVolumes != nil {
+			for _, cgv := range *containerGroupVolumes {
+				if cgv.Name == vm.Name {
+					if file := cgv.AzureFile; file != nil {
+						volumeConfig["share_name"] = file.ShareName
+						volumeConfig["storage_account_name"] = file.StorageAccountName
+						// skip storage_account_key, is always nil
+					}
+
+					if cgv.EmptyDir != nil {
+						volumeConfig["empty_dir"] = true
+					}
+
+					volumeConfig["git_repo"] = flattenGitRepoVolume(cgv.GitRepo)
+				}
+			}
+		}
+
+		// find corresponding volume in config
+		// and use the data
+		if containerVolumesConfig != nil {
+			for _, cvr := range *containerVolumesConfig {
+				cv := cvr.(map[string]interface{})
+				rawName := cv["name"].(string)
+				if vm.Name == rawName {
+					storageAccountKey := cv["storage_account_key"].(string)
+					volumeConfig["storage_account_key"] = storageAccountKey
+					volumeConfig["secret"] = cv["secret"]
+				}
+			}
+		}
+
+		volumeConfigs = append(volumeConfigs, volumeConfig)
+	}
+
+	containerConfig["volume"] = volumeConfigs
+}

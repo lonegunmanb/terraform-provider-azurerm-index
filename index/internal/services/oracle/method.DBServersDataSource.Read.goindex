@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2024-06-01/dbservers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (d DBServersDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Oracle.OracleClient.DbServers
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var state DBServersDataModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := dbservers.NewCloudExadataInfrastructureID(subscriptionId, state.ResourceGroupName, state.CloudExadataInfrastructureName)
+
+			resp, err := client.ListByCloudExadataInfrastructure(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				for _, element := range *model {
+					if props := element.Properties; props != nil {
+						dbServer := DBServerDataModel{
+							AutonomousVMClusterIds:      pointer.From(props.AutonomousVMClusterIds),
+							AutonomousVirtualMachineIds: pointer.From(props.AutonomousVirtualMachineIds),
+							CompartmentId:               pointer.From(props.CompartmentId),
+							CpuCoreCount:                pointer.From(props.CpuCoreCount),
+							DbNodeIds:                   pointer.From(props.DbNodeIds),
+							DbNodeStorageSizeInGbs:      pointer.From(props.DbNodeStorageSizeInGbs),
+							DisplayName:                 pointer.From(props.DisplayName),
+							ExadataInfrastructureId:     pointer.From(props.ExadataInfrastructureId),
+							LifecycleDetails:            pointer.From(props.LifecycleDetails),
+							LifecycleState:              string(pointer.From(props.LifecycleState)),
+							MaxCPUCount:                 pointer.From(props.MaxCPUCount),
+							MaxDbNodeStorageInGbs:       pointer.From(props.MaxDbNodeStorageInGbs),
+							MaxMemoryInGbs:              pointer.From(props.MaxMemoryInGbs),
+							MemorySizeInGbs:             pointer.From(props.MemorySizeInGbs),
+							Ocid:                        pointer.From(props.Ocid),
+							Shape:                       pointer.From(props.Shape),
+							TimeCreated:                 pointer.From(props.TimeCreated),
+							VMClusterIds:                pointer.From(props.VMClusterIds),
+						}
+						state.DBServers = append(state.DBServers, dbServer)
+					}
+				}
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&state)
+		},
+	}
+}

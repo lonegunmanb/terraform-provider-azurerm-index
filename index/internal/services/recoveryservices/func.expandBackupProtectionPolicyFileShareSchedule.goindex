@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2023-02-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandBackupProtectionPolicyFileShareSchedule(d *pluginsdk.ResourceData, times []string) *protectionpolicies.SimpleSchedulePolicy {
+	if bb, ok := d.Get("backup").([]interface{}); ok && len(bb) > 0 {
+		block := bb[0].(map[string]interface{})
+
+		schedule := protectionpolicies.SimpleSchedulePolicy{ // LongTermSchedulePolicy has no properties
+			ScheduleRunTimes: &times,
+		}
+
+		if v, ok := block["frequency"].(string); ok {
+			schedule.ScheduleRunFrequency = pointer.To(protectionpolicies.ScheduleRunType(v))
+		}
+
+		if v, ok := block["hourly"].([]interface{}); ok && len(v) > 0 {
+			hourlyBlock := v[0].(map[string]interface{})
+
+			if schedule.ScheduleRunFrequency != nil && *schedule.ScheduleRunFrequency == protectionpolicies.ScheduleRunTypeHourly {
+				schedule.HourlySchedule = &protectionpolicies.HourlySchedule{}
+				if v, ok := hourlyBlock["interval"].(int); ok {
+					schedule.HourlySchedule.Interval = pointer.To(int64(v))
+				}
+				if t, ok := hourlyBlock["start_time"].(string); ok {
+					schedule.HourlySchedule.ScheduleWindowStartTime = pointer.To(fmt.Sprintf("2018-07-30T%s:00.000Z", t))
+				}
+				if v, ok := hourlyBlock["window_duration"].(int); ok {
+					schedule.HourlySchedule.ScheduleWindowDuration = pointer.To(int64(v))
+				}
+			}
+		}
+
+		return &schedule
+	}
+
+	return nil
+}

@@ -1,0 +1,103 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/kusto/2023-08-15/databaseprincipalassignments"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceKustoDatabasePrincipalAssignment() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceKustoDatabasePrincipalAssignmentCreate,
+		Read:   resourceKustoDatabasePrincipalAssignmentRead,
+		Delete: resourceKustoDatabasePrincipalAssignmentDelete,
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.KustoDatabasePrincipalAssignmentV0ToV1{},
+		}),
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := databaseprincipalassignments.ParseDatabasePrincipalAssignmentID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(60 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"cluster_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.ClusterName,
+			},
+
+			"database_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.DatabaseName,
+			},
+
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.DatabasePrincipalAssignmentName,
+			},
+
+			"tenant_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"tenant_name": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"principal_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"principal_name": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"principal_type": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringInSlice(databaseprincipalassignments.PossibleValuesForPrincipalType(), false),
+			},
+
+			"role": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringInSlice(databaseprincipalassignments.PossibleValuesForDatabasePrincipalRole(), false),
+			},
+		},
+	}
+}

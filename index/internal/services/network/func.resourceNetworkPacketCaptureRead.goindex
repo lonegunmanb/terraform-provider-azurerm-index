@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/packetcaptures"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceNetworkPacketCaptureRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.PacketCaptures
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := packetcaptures.ParsePacketCaptureID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[WARN] %s not found - removing from state", *id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("reading %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.PacketCaptureName)
+	d.Set("network_watcher_name", id.NetworkWatcherName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		if props := model.Properties; props != nil {
+			d.Set("target_resource_id", props.Target)
+			d.Set("maximum_bytes_per_packet", int(pointer.From(props.BytesToCapturePerPacket)))
+			d.Set("maximum_bytes_per_session", int(pointer.From(props.TotalBytesPerSession)))
+			d.Set("maximum_capture_duration", int(pointer.From(props.TimeLimitInSeconds)))
+
+			location := flattenNetworkPacketCaptureStorageLocation(props.StorageLocation)
+			if err := d.Set("storage_location", location); err != nil {
+				return fmt.Errorf("setting `storage_location`: %+v", err)
+			}
+
+			filters := flattenNetworkPacketCaptureFilters(props.Filters)
+			if err := d.Set("filter", filters); err != nil {
+				return fmt.Errorf("setting `filter`: %+v", err)
+			}
+		}
+	}
+
+	return nil
+}

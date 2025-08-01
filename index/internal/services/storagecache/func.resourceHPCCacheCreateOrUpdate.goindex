@@ -1,0 +1,228 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/caches"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceHPCCacheCreateOrUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).StorageCache.Caches
+	keyVaultsClient := meta.(*clients.Client).KeyVault
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	log.Printf("[INFO] preparing arguments for Azure HPC Cache creation.")
+	name := d.Get("name").(string)
+	resourceGroup := d.Get("resource_group_name").(string)
+
+	id := caches.NewCacheID(subscriptionId, resourceGroup, name)
+
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing HPC Cache %q: %s", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_hpc_cache", id.ID())
+		}
+	}
+
+	location := d.Get("location").(string)
+	cacheSize := d.Get("cache_size_in_gb").(int)
+	subnet := d.Get("subnet_id").(string)
+	skuName := d.Get("sku_name").(string)
+
+	// SKU Cache Combo Validation
+	switch {
+	case skuName == "Standard_L4_5G" && cacheSize != 21623:
+		return fmt.Errorf("The Standard_L4_5G SKU only supports a cache size of 21623")
+	case skuName == "Standard_L9G" && cacheSize != 43246:
+		return fmt.Errorf("The Standard_L9G SKU only supports a cache size of 43246")
+	case skuName == "Standard_L16G" && cacheSize != 86491:
+		return fmt.Errorf("The Standard_L16G SKU only supports a cache size of 86491")
+	case (cacheSize == 21623 || cacheSize == 43246 || cacheSize == 86491) && (skuName == "Standard_2G" || skuName == "Standard_4G" || skuName == "Standard_8G"):
+		return fmt.Errorf("Incompatible cache size chosen. 21623, 43246 and 86491 are reserved for Read Only resources.")
+	}
+
+	var accessPolicies []caches.NfsAccessPolicy
+	if !d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			return fmt.Errorf("retrieving existing HPC Cache %q: %v", id, err)
+		}
+		if model := existing.Model; model != nil {
+			if prop := model.Properties; prop != nil {
+				if settings := prop.SecuritySettings; settings != nil {
+					if policies := settings.AccessPolicies; policies != nil {
+						accessPolicies = *policies
+					}
+				}
+			}
+		}
+	}
+	defaultAccessPolicy := expandStorageCacheDefaultAccessPolicy(d.Get("default_access_policy").([]interface{}))
+	if defaultAccessPolicy != nil {
+		var err error
+		accessPolicies, err = CacheInsertOrUpdateAccessPolicy(accessPolicies, *defaultAccessPolicy)
+		if err != nil {
+			return err
+		}
+	}
+
+	directorySetting := expandStorageCacheDirectorySettings(d)
+
+	i, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding `identity`: %+v", err)
+	}
+
+	cache := caches.Cache{
+		Name:     pointer.To(name),
+		Location: pointer.To(location),
+		Properties: &caches.CacheProperties{
+			CacheSizeGB:     utils.Int64(int64(cacheSize)),
+			Subnet:          pointer.To(subnet),
+			NetworkSettings: expandStorageCacheNetworkSettings(d),
+			SecuritySettings: &caches.CacheSecuritySettings{
+				AccessPolicies: &accessPolicies,
+			},
+			DirectoryServicesSettings: directorySetting,
+		},
+		Sku: &caches.CacheSku{
+			Name: pointer.To(skuName),
+		},
+		Identity: i,
+		Tags:     tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	if !d.IsNewResource() {
+		oldKeyVaultKeyId, newKeyVaultKeyId := d.GetChange("key_vault_key_id")
+		if (oldKeyVaultKeyId.(string) != "" && newKeyVaultKeyId.(string) == "") || (oldKeyVaultKeyId.(string) == "" && newKeyVaultKeyId.(string) != "") {
+			return fmt.Errorf("`key_vault_key_id` can not be added or removed after HPC Cache is created")
+		}
+	}
+
+	requireAdditionalUpdate := false
+	if v, ok := d.GetOk("key_vault_key_id"); ok {
+		autoKeyRotationEnabled := d.Get("automatically_rotate_key_to_latest_enabled").(bool)
+		if !d.IsNewResource() && d.HasChange("key_vault_key_id") && autoKeyRotationEnabled {
+			// It is by design that `automatically_rotate_key_to_latest_enabled` changes to `false` when `key_vault_key_id` is changed, needs to do an additional update to set it back
+			requireAdditionalUpdate = true
+		}
+		// For new created resource `automatically_rotate_key_to_latest_enabled` needs an additional update to set it to true to.
+		if d.IsNewResource() && autoKeyRotationEnabled {
+			requireAdditionalUpdate = true
+		}
+
+		keyVaultKeyId := v.(string)
+		keyVaultDetails, err := storageCacheRetrieveKeyVault(ctx, keyVaultsClient, subscriptionId, keyVaultKeyId)
+		if err != nil {
+			return fmt.Errorf("validating Key Vault Key %q for HPC Cache: %+v", keyVaultKeyId, err)
+		}
+		if azure.NormalizeLocation(keyVaultDetails.location) != azure.NormalizeLocation(location) {
+			return fmt.Errorf("validating Key Vault %q (Resource Group %q) for HPC Cache: Key Vault must be in the same region as HPC Cache!", keyVaultDetails.keyVaultName, keyVaultDetails.resourceGroupName)
+		}
+		if !keyVaultDetails.softDeleteEnabled {
+			return fmt.Errorf("validating Key Vault %q (Resource Group %q) for HPC Cache: Soft Delete must be enabled but it isn't!", keyVaultDetails.keyVaultName, keyVaultDetails.resourceGroupName)
+		}
+		if !keyVaultDetails.purgeProtectionEnabled {
+			return fmt.Errorf("validating Key Vault %q (Resource Group %q) for HPC Cache: Purge Protection must be enabled but it isn't!", keyVaultDetails.keyVaultName, keyVaultDetails.resourceGroupName)
+		}
+
+		cache.Properties.EncryptionSettings = &caches.CacheEncryptionSettings{
+			KeyEncryptionKey: &caches.KeyVaultKeyReference{
+				KeyURL: keyVaultKeyId,
+				SourceVault: caches.KeyVaultKeyReferenceSourceVault{
+					Id: pointer.To(keyVaultDetails.keyVaultId),
+				},
+			},
+			RotationToLatestKeyVersionEnabled: pointer.To(autoKeyRotationEnabled),
+		}
+	}
+
+	if err = client.CreateOrUpdateThenPoll(ctx, id, cache); err != nil {
+		return fmt.Errorf("creating/updating HPC Cache %q (Resource Group %q): %+v", name, resourceGroup, err)
+	}
+
+	if requireAdditionalUpdate {
+		if err := client.CreateOrUpdateThenPoll(ctx, id, cache); err != nil {
+			return fmt.Errorf("Updating HPC Cache %q (Resource Group %q): %+v", name, resourceGroup, err)
+		}
+	}
+
+	// If any directory setting is set, we'll further check either the `usernameDownloaded` (for LDAP/Flat File), or the `domainJoined` (for AD) in response to ensure the configuration is correct, and the cache is functional.
+	// There are situations that the LRO succeeded, whilst ends up with a non-functional cache (e.g. providing some invalid flat file setting).
+	if directorySetting != nil {
+		resp, err := client.Get(ctx, id)
+		if err != nil {
+			return fmt.Errorf("retrieving HPC Cache %q (Resource Group %q): %+v", name, resourceGroup, err)
+		}
+
+		model := resp.Model
+		if model == nil {
+			return fmt.Errorf("Unepxected nil `cacheProperties` in response")
+		}
+		prop := model.Properties
+		if prop == nil {
+			return fmt.Errorf("Unepxected nil `cacheProperties` in response")
+		}
+		ds := prop.DirectoryServicesSettings
+		if ds == nil {
+			return fmt.Errorf("Unexpected nil `directoryServicesSettings` in response")
+		}
+
+		// In case the user uses active directory service, we
+		if directorySetting.ActiveDirectory != nil {
+			ad := ds.ActiveDirectory
+			if ad == nil || ad.DomainJoined == nil {
+				return fmt.Errorf("Unexpected nil `activeDirectory` in response")
+			}
+			if *ad.DomainJoined != caches.DomainJoinedTypeYes {
+				return fmt.Errorf("failed to join domain, current status: %s", *ad.DomainJoined)
+			}
+		} else {
+			ud := ds.UsernameDownload
+			if ud == nil || ud.UsernameDownloaded == nil {
+				return fmt.Errorf("Unexpected nil `usernameDownload` in response")
+			}
+			if *ud.UsernameDownloaded != caches.UsernameDownloadedTypeYes {
+				return fmt.Errorf("failed to download directory info, current status: %s", *ud.UsernameDownloaded)
+			}
+		}
+	}
+
+	d.SetId(id.ID())
+
+	// wait for HPC Cache provision state to be succeeded. or further operations with it may fail.
+	cacheClient := meta.(*clients.Client).StorageCache.Caches
+	if _, err = resourceHPCCacheWaitForCreating(ctx, cacheClient, id, d); err != nil {
+		return fmt.Errorf("waiting for the HPC Cache provision state %s (Resource Group: %s) : %+v", name, resourceGroup, err)
+	}
+
+	return resourceHPCCacheRead(d, meta)
+}

@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backupvaults"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func deleteBackupsFromVault(ctx context.Context, id *backupvaults.BackupVaultId, backupClient *backups.BackupsClient, shouldDestroyBackups bool) error {
+	for {
+		backupVaultID := backups.NewBackupVaultID(id.SubscriptionId, id.ResourceGroupName, id.NetAppAccountName, id.BackupVaultName)
+		backupList, err := backupClient.ListByVault(ctx, backupVaultID, backups.ListByVaultOperationOptions{})
+		if err != nil {
+			return fmt.Errorf("listing backups from vault %s: %w", id.ID(), err)
+		}
+
+		if backupList.Model == nil || len(pointer.From(backupList.Model)) == 0 {
+			return nil // No more backups to delete
+		}
+
+		for _, backup := range pointer.From(backupList.Model) {
+			if backup.Name == nil {
+				continue
+			}
+
+			if shouldDestroyBackups {
+				backupID, err := backups.ParseBackupID(pointer.From(backup.Id))
+				if err != nil {
+					return fmt.Errorf("parsing backup ID %s: %w", pointer.From(backup.Id), err)
+				}
+
+				if err := retryBackupDelete(ctx, backupClient, pointer.From(backupID), 120, 30); err != nil {
+					return fmt.Errorf("failed to delete backup %s: %w", backupID.ID(), err)
+				}
+			} else {
+				return fmt.Errorf("cannot delete backups from backup vault due to missing DeleteBackupsOnBackupVaultDestroy feature set as true, backup vault id %s, DeleteBackupsOnBackupVaultDestroy setting is: %t", id.ID(), shouldDestroyBackups)
+			}
+		}
+
+		time.Sleep(10 * time.Second)
+	}
+}

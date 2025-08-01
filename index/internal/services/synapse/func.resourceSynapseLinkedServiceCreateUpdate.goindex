@@ -1,0 +1,111 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	artifacts "github.com/jackofallops/kermit/sdk/synapse/2021-06-01-preview/synapse"
+)
+func resourceSynapseLinkedServiceCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	synapseClient := meta.(*clients.Client).Synapse
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+	environment := meta.(*clients.Client).Account.Environment
+	synapseDomainSuffix, ok := environment.Synapse.DomainSuffix()
+	if !ok {
+		return fmt.Errorf("could not determine Synapse domain suffix for environment %q", environment.Name)
+	}
+
+	workspaceId, err := parse.WorkspaceID(d.Get("synapse_workspace_id").(string))
+	if err != nil {
+		return err
+	}
+
+	client, err := synapseClient.LinkedServiceClient(workspaceId.Name, *synapseDomainSuffix)
+	if err != nil {
+		return err
+	}
+
+	id := parse.NewLinkedServiceID(workspaceId.SubscriptionId, workspaceId.ResourceGroup, workspaceId.Name, d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.GetLinkedService(ctx, id.Name, "")
+		if err != nil {
+			if !utils.ResponseWasNotFound(existing.Response) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+		if !utils.ResponseWasNotFound(existing.Response) {
+			return tf.ImportAsExistsError("azurerm_synapse_linked_service", id.ID())
+		}
+	}
+
+	props := map[string]interface{}{
+		"type":       d.Get("type").(string),
+		"connectVia": expandSynapseLinkedServiceIntegrationRuntimeV2(d.Get("integration_runtime").([]interface{})),
+	}
+
+	jsonDataStr := fmt.Sprintf(`{ "typeProperties": %s }`, d.Get("type_properties_json").(string))
+	if err = json.Unmarshal([]byte(jsonDataStr), &props); err != nil {
+		return err
+	}
+
+	if v, ok := d.GetOk("description"); ok {
+		props["description"] = v.(string)
+	}
+
+	if v, ok := d.GetOk("parameters"); ok {
+		props["parameters"] = expandSynapseParameters(v.(map[string]interface{}))
+	}
+
+	if v, ok := d.GetOk("annotations"); ok {
+		props["annotations"] = v.([]interface{})
+	}
+
+	additionalProperties := d.Get("additional_properties").(map[string]interface{})
+	for k, v := range additionalProperties {
+		props[k] = v
+	}
+
+	jsonData, err := json.Marshal(map[string]interface{}{
+		"properties": props,
+	})
+	if err != nil {
+		return err
+	}
+
+	linkedService := &artifacts.LinkedServiceResource{}
+	if err := linkedService.UnmarshalJSON(jsonData); err != nil {
+		return err
+	}
+
+	future, err := client.CreateOrUpdateLinkedService(ctx, id.Name, *linkedService, "")
+	if err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("waiting on creation for %s: %+v", id, err)
+	}
+
+	// Sometimes this resource fails to create but Azure is returning a 200. We'll check if the last response failed or not before moving on
+	// todo remove this once https://github.com/hashicorp/go-azure-sdk/pull/122 is merged
+	if err = checkLinkedServiceResponse(future.Response()); err != nil {
+		return err
+	}
+
+	d.SetId(id.ID())
+
+	return resourceSynapseLinkedServiceRead(d, meta)
+}

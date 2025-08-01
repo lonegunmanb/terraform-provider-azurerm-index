@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFrontDoorRulesEngineMatchCondition(input []interface{}) *[]frontdoors.RulesEngineMatchCondition {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	output := make([]frontdoors.RulesEngineMatchCondition, 0)
+
+	for _, c := range input {
+		condition := c.(map[string]interface{})
+
+		selector := condition["selector"].(string)
+		negateCondition := condition["negate_condition"].(bool)
+		matchVariable := condition["variable"].(string)
+		operator := condition["operator"].(string)
+		transform := condition["transform"].([]interface{})
+		matchValue := condition["value"].([]interface{})
+
+		matchValueArray := make([]string, 0)
+		for _, v := range matchValue {
+			matchValueArray = append(matchValueArray, v.(string))
+		}
+
+		matchCondition := frontdoors.RulesEngineMatchCondition{
+			RulesEngineMatchVariable: frontdoors.RulesEngineMatchVariable(matchVariable),
+			Selector:                 utils.String(selector),
+			RulesEngineOperator:      frontdoors.RulesEngineOperator(operator),
+			NegateCondition:          &negateCondition,
+			RulesEngineMatchValue:    matchValueArray,
+			Transforms:               expandFrontDoorRulesEngineMatchConditionTransform(transform),
+		}
+		output = append(output, matchCondition)
+	}
+	return &output
+}

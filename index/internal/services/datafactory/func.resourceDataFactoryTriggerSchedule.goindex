@@ -1,0 +1,240 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func resourceDataFactoryTriggerSchedule() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceDataFactoryTriggerScheduleCreate,
+		Read:   resourceDataFactoryTriggerScheduleRead,
+		Update: resourceDataFactoryTriggerScheduleUpdate,
+		Delete: resourceDataFactoryTriggerScheduleDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.TriggerID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.DataFactoryPipelineAndTriggerName(),
+			},
+
+			"data_factory_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: factories.ValidateFactoryID,
+			},
+
+			"description": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"schedule": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MinItems: 1,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"days_of_month": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeInt,
+								ValidateFunc: validation.Any(
+									validation.IntBetween(1, 31),
+									validation.IntBetween(-31, -1),
+								),
+							},
+						},
+
+						"days_of_week": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MaxItems: 7,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.IsDayOfTheWeek(false),
+							},
+						},
+
+						"hours": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeInt,
+								ValidateFunc: validation.IntBetween(0, 24),
+							},
+						},
+
+						"minutes": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeInt,
+								ValidateFunc: validation.IntBetween(0, 60),
+							},
+						},
+
+						"monthly": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MinItems: 1,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"weekday": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.IsDayOfTheWeek(false),
+									},
+
+									"week": {
+										Type:     pluginsdk.TypeInt,
+										Optional: true,
+										ValidateFunc: validation.Any(
+											validation.IntBetween(1, 5),
+											validation.IntBetween(-5, -1),
+										),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			// This time can only be  represented in UTC.
+			// An issue has been filed in the SDK for the timezone attribute that doesn't seem to work
+			// https://github.com/Azure/azure-sdk-for-go/issues/6244
+			"start_time": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				Computed:         true,
+				DiffSuppressFunc: suppress.RFC3339Time,
+				ValidateFunc:     validation.IsRFC3339Time, // times in the past just start immediately
+			},
+
+			// This time can only be  represented in UTC.
+			// An issue has been filed in the SDK for the timezone attribute that doesn't seem to work
+			// https://github.com/Azure/azure-sdk-for-go/issues/6244
+			"end_time": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				DiffSuppressFunc: suppress.RFC3339Time,
+				ValidateFunc:     validation.IsRFC3339Time, // times in the past just start immediately
+			},
+
+			"time_zone": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"frequency": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(datafactory.RecurrenceFrequencyMinute),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(datafactory.RecurrenceFrequencyMinute),
+					string(datafactory.RecurrenceFrequencyHour),
+					string(datafactory.RecurrenceFrequencyDay),
+					string(datafactory.RecurrenceFrequencyWeek),
+					string(datafactory.RecurrenceFrequencyMonth),
+				}, false),
+			},
+
+			"interval": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      1,
+				ValidateFunc: validation.IntAtLeast(1),
+			},
+
+			"activated": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"pipeline": {
+				Type:          pluginsdk.TypeList,
+				Optional:      true,
+				Computed:      true,
+				ConflictsWith: []string{"pipeline_parameters"},
+				ExactlyOneOf:  []string{"pipeline", "pipeline_name"},
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validate.DataFactoryPipelineAndTriggerName(),
+						},
+
+						"parameters": {
+							Type:     pluginsdk.TypeMap,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+					},
+				},
+			},
+
+			"pipeline_name": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ExactlyOneOf: []string{"pipeline", "pipeline_name"},
+				ValidateFunc: validate.DataFactoryPipelineAndTriggerName(),
+			},
+
+			"pipeline_parameters": {
+				Type:          pluginsdk.TypeMap,
+				Optional:      true,
+				Computed:      true,
+				ConflictsWith: []string{"pipeline"},
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"annotations": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.StringIsNotEmpty,
+				},
+			},
+		},
+	}
+}

@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/diagnostic"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/logger"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandApiManagementDiagnosticHTTPMessageDiagnostic(input []interface{}) *diagnostic.HTTPMessageDiagnostic {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	v := input[0].(map[string]interface{})
+
+	result := &diagnostic.HTTPMessageDiagnostic{
+		Body: &diagnostic.BodyDiagnosticSettings{},
+	}
+
+	if bodyBytes, ok := v["body_bytes"]; ok {
+		result.Body.Bytes = pointer.To(int64(bodyBytes.(int)))
+	}
+	if headersSetRaw, ok := v["headers_to_log"]; ok {
+		headersSet := headersSetRaw.(*pluginsdk.Set).List()
+		headers := []string{}
+		for _, header := range headersSet {
+			headers = append(headers, header.(string))
+		}
+		result.Headers = pointer.To(headers)
+	}
+
+	result.DataMasking = expandApiManagementDataMasking(v["data_masking"].([]interface{}))
+
+	return result
+}

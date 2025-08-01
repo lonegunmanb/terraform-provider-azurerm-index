@@ -1,0 +1,31 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/sdk
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func diagnosticsWrapper(in func(ctx context.Context, d *schema.ResourceData, meta interface{}) error, logger Logger) func(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	return func(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+		out := make([]diag.Diagnostic, 0)
+		if err := in(ctx, d, meta); err != nil {
+			out = append(out, diag.Diagnostic{
+				Severity:      diag.Error,
+				Summary:       err.Error(),
+				Detail:        err.Error(),
+				AttributePath: nil,
+			})
+		}
+
+		if diagsLogger, ok := logger.(*DiagnosticsLogger); ok {
+			out = append(out, diagsLogger.diagnostics...)
+		}
+
+		return out
+	}
+}

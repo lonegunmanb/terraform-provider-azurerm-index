@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/resource
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2020-06-01/resources" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-09-01/providers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func determineResourceProviderAPIVersionsForResources(ctx context.Context, client *providers.ProvidersClient, resourceProviders []resources.Provider, subscriptionId string) (*map[string]string, error) {
+	resourceProviderApiVersions := make(map[string]string)
+
+	for _, provider := range resourceProviders {
+		if provider.Namespace == nil {
+			continue
+		}
+
+		providerId := providers.NewSubscriptionProviderID(subscriptionId, *provider.Namespace)
+		providerResp, err := client.Get(ctx, providerId, providers.DefaultGetOperationOptions())
+		if err != nil {
+			return nil, fmt.Errorf("retrieving MetaData for %s: %+v", providerId, err)
+		}
+		resourceTypes := make([]providers.ProviderResourceType, 0)
+		if model := providerResp.Model; model != nil && model.ResourceTypes != nil {
+			resourceTypes = *model.ResourceTypes
+		}
+		if len(resourceTypes) == 0 {
+			return nil, fmt.Errorf("`resourceTypes` was nil/empty for %s", providerId)
+		}
+
+		for _, resourceType := range *provider.ResourceTypes {
+			resourceTypeName := *resourceType.ResourceType
+			availableResourceTypes := resourceTypes
+			apiVersion := findApiVersionForResourceType(resourceTypeName, availableResourceTypes)
+			if apiVersion == nil {
+				return nil, fmt.Errorf("unable to determine API version for Resource Type %q (%s)", resourceTypeName, providerId)
+			}
+
+			// NOTE: there's an enhancement in that not all RP's necessarily offer everything in every version
+			// but the majority do, so this is likely sufficient for now
+			resourceProviderApiVersions[strings.ToLower(providerId.ProviderName)] = *apiVersion
+			break
+		}
+	}
+
+	return &resourceProviderApiVersions, nil
+}

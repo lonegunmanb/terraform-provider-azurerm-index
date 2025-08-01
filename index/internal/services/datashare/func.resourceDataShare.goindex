@@ -1,0 +1,108 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datashare
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datashare/2019-11-01/account"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datashare/2019-11-01/share"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datashare/2019-11-01/synchronizationsetting"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datashare/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceDataShare() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceDataShareCreateUpdate,
+		Read:   resourceDataShareRead,
+		Update: resourceDataShareCreateUpdate,
+		Delete: resourceDataShareDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := share.ParseShareID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.ShareName(),
+			},
+
+			"account_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: account.ValidateAccountID,
+			},
+
+			"kind": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(share.ShareKindCopyBased),
+					string(share.ShareKindInPlace),
+				}, false),
+			},
+
+			"description": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"snapshot_schedule": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validate.SnapshotScheduleName(),
+						},
+
+						"recurrence": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(synchronizationsetting.RecurrenceIntervalDay),
+								string(synchronizationsetting.RecurrenceIntervalHour),
+							}, false),
+						},
+
+						"start_time": {
+							Type:             pluginsdk.TypeString,
+							Required:         true,
+							ValidateFunc:     validation.IsRFC3339Time,
+							DiffSuppressFunc: suppress.RFC3339Time,
+						},
+					},
+				},
+			},
+
+			"terms": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+		},
+	}
+}

@@ -1,0 +1,112 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	lbvalidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceNetworkInterfaceCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.NetworkInterfaces
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := commonids.NewNetworkInterfaceID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	existing, err := client.Get(ctx, id, networkinterfaces.DefaultGetOperationOptions())
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+		}
+	}
+
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_network_interface", id.ID())
+	}
+
+	var enableIpForwarding, enableAcceleratedNetworking bool
+
+	enableIpForwarding = d.Get("ip_forwarding_enabled").(bool)
+	enableAcceleratedNetworking = d.Get("accelerated_networking_enabled").(bool)
+
+	properties := networkinterfaces.NetworkInterfacePropertiesFormat{
+		EnableIPForwarding:          &enableIpForwarding,
+		EnableAcceleratedNetworking: &enableAcceleratedNetworking,
+	}
+
+	locks.ByName(id.NetworkInterfaceName, networkInterfaceResourceName)
+	defer locks.UnlockByName(id.NetworkInterfaceName, networkInterfaceResourceName)
+
+	if auxiliaryMode, hasAuxiliaryMode := d.GetOk("auxiliary_mode"); hasAuxiliaryMode {
+		properties.AuxiliaryMode = pointer.To(networkinterfaces.NetworkInterfaceAuxiliaryMode(auxiliaryMode.(string)))
+	}
+
+	if auxiliarySku, hasAuxiliarySku := d.GetOk("auxiliary_sku"); hasAuxiliarySku {
+		properties.AuxiliarySku = pointer.To(networkinterfaces.NetworkInterfaceAuxiliarySku(auxiliarySku.(string)))
+	}
+
+	dns, hasDns := d.GetOk("dns_servers")
+	nameLabel, hasNameLabel := d.GetOk("internal_dns_name_label")
+	if hasDns || hasNameLabel {
+		dnsSettings := networkinterfaces.NetworkInterfaceDnsSettings{}
+
+		if hasDns {
+			dnsRaw := dns.([]interface{})
+			dns := expandNetworkInterfaceDnsServers(dnsRaw)
+			dnsSettings.DnsServers = &dns
+		}
+
+		if hasNameLabel {
+			dnsSettings.InternalDnsNameLabel = pointer.To(nameLabel.(string))
+		}
+
+		properties.DnsSettings = &dnsSettings
+	}
+
+	ipConfigsRaw := d.Get("ip_configuration").([]interface{})
+	ipConfigs, err := expandNetworkInterfaceIPConfigurations(ipConfigsRaw)
+	if err != nil {
+		return fmt.Errorf("expanding `ip_configuration`: %+v", err)
+	}
+	lockingDetails, err := determineResourcesToLockFromIPConfiguration(ipConfigs)
+	if err != nil {
+		return fmt.Errorf("determining locking details: %+v", err)
+	}
+
+	lockingDetails.lock()
+	defer lockingDetails.unlock()
+
+	if len(*ipConfigs) > 0 {
+		properties.IPConfigurations = ipConfigs
+	}
+
+	iface := networkinterfaces.NetworkInterface{
+		Name:             pointer.To(id.NetworkInterfaceName),
+		ExtendedLocation: expandEdgeZoneModel(d.Get("edge_zone").(string)),
+		Location:         pointer.To(location.Normalize(d.Get("location").(string))),
+		Properties:       &properties,
+		Tags:             tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	err = client.CreateOrUpdateThenPoll(ctx, id, iface)
+	if err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceNetworkInterfaceRead(d, meta)
+}

@@ -1,0 +1,278 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mobilenetwork
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/mobilenetwork"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/service"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ServiceResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"mobile_network_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: mobilenetwork.ValidateMobileNetworkID,
+		},
+
+		"location": commonschema.Location(),
+
+		"pcc_rule": {
+			Type:     pluginsdk.TypeList,
+			Required: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringLenBetween(1, 64),
+					},
+
+					"precedence": {
+						Type:         pluginsdk.TypeInt,
+						Required:     true,
+						ValidateFunc: validation.IntBetween(0, 255),
+					},
+
+					"qos_policy": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						MaxItems: 1,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"allocation_and_retention_priority_level": {
+									Type:     pluginsdk.TypeInt,
+									Optional: true,
+								},
+
+								"qos_indicator": {
+									Type:         pluginsdk.TypeInt,
+									Required:     true,
+									ValidateFunc: validation.IntAtLeast(1),
+								},
+
+								"guaranteed_bit_rate": {
+									Type:     pluginsdk.TypeList,
+									Optional: true,
+									MaxItems: 1,
+									Elem: &pluginsdk.Resource{
+										Schema: map[string]*pluginsdk.Schema{
+											"downlink": {
+												Type:     pluginsdk.TypeString,
+												Required: true,
+												ValidateFunc: validation.StringMatch(
+													regexp.MustCompile(`^([1-9]\d*|0)(\.\d+)?\s(Kbps|Mbps|Gbps|Tbps)$`),
+													"The value must be a number followed by Kbps, Mbps, Gbps or Tbps.",
+												),
+											},
+
+											"uplink": {
+												Type:     pluginsdk.TypeString,
+												Required: true,
+												ValidateFunc: validation.StringMatch(
+													regexp.MustCompile(`^([1-9]\d*|0)(\.\d+)?\s(Kbps|Mbps|Gbps|Tbps)$`),
+													"The value must be a number followed by Kbps, Mbps, Gbps or Tbps.",
+												),
+											},
+										},
+									},
+								},
+
+								"maximum_bit_rate": {
+									Type:     pluginsdk.TypeList,
+									Required: true,
+									MaxItems: 1,
+									Elem: &pluginsdk.Resource{
+										Schema: map[string]*pluginsdk.Schema{
+											"downlink": {
+												Type:     pluginsdk.TypeString,
+												Required: true,
+												ValidateFunc: validation.StringMatch(
+													regexp.MustCompile(`^([1-9]\d*|0)(\.\d+)?\s(Kbps|Mbps|Gbps|Tbps)$`),
+													"The value must be a number followed by Kbps, Mbps, Gbps or Tbps.",
+												),
+											},
+
+											"uplink": {
+												Type:     pluginsdk.TypeString,
+												Required: true,
+												ValidateFunc: validation.StringMatch(
+													regexp.MustCompile(`^([1-9]\d*|0)(\.\d+)?\s(Kbps|Mbps|Gbps|Tbps)$`),
+													"The value must be a number followed by Kbps, Mbps, Gbps or Tbps.",
+												),
+											},
+										},
+									},
+								},
+
+								"preemption_capability": {
+									Type:     pluginsdk.TypeString,
+									Optional: true,
+									Default:  string(service.PreemptionCapabilityNotPreempt),
+									ValidateFunc: validation.StringInSlice([]string{
+										string(service.PreemptionCapabilityNotPreempt),
+										string(service.PreemptionCapabilityMayPreempt),
+									}, false),
+								},
+
+								"preemption_vulnerability": {
+									Type:     pluginsdk.TypeString,
+									Optional: true,
+									Default:  string(service.PreemptionVulnerabilityPreemptable),
+									ValidateFunc: validation.StringInSlice([]string{
+										string(service.PreemptionVulnerabilityNotPreemptable),
+										string(service.PreemptionVulnerabilityPreemptable),
+									}, false),
+								},
+							},
+						},
+					},
+
+					"service_data_flow_template": {
+						Type:     pluginsdk.TypeList,
+						Required: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"direction": {
+									Type:     pluginsdk.TypeString,
+									Required: true,
+									ValidateFunc: validation.StringInSlice([]string{
+										string(service.SdfDirectionUplink),
+										string(service.SdfDirectionDownlink),
+										string(service.SdfDirectionBidirectional),
+									}, false),
+								},
+
+								"ports": {
+									Type:     pluginsdk.TypeList,
+									Optional: true,
+									Elem: &pluginsdk.Schema{
+										Type: pluginsdk.TypeString,
+									},
+								},
+
+								"protocol": {
+									Type:     pluginsdk.TypeList,
+									Required: true,
+									Elem: &pluginsdk.Schema{
+										Type: pluginsdk.TypeString,
+									},
+								},
+
+								"remote_ip_list": {
+									Type:     pluginsdk.TypeList,
+									Required: true,
+									Elem: &pluginsdk.Schema{
+										Type: pluginsdk.TypeString,
+									},
+								},
+
+								"name": {
+									Type:         pluginsdk.TypeString,
+									Required:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+							},
+						},
+					},
+
+					"traffic_control_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						Default:  true,
+					},
+				},
+			},
+		},
+
+		"service_precedence": {
+			Type:         pluginsdk.TypeInt,
+			Required:     true,
+			ValidateFunc: validation.IntBetween(0, 255),
+		},
+
+		"service_qos_policy": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"allocation_and_retention_priority_level": {
+						Type:         pluginsdk.TypeInt,
+						Optional:     true,
+						Default:      9,
+						ValidateFunc: validation.IntBetween(1, 127),
+					},
+
+					"qos_indicator": {
+						Type:         pluginsdk.TypeInt,
+						Optional:     true,
+						ValidateFunc: validation.IntAtLeast(1),
+					},
+
+					"maximum_bit_rate": {
+						Type:     pluginsdk.TypeList,
+						Required: true,
+						MaxItems: 1,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"downlink": {
+									Type:     pluginsdk.TypeString,
+									Required: true,
+									ValidateFunc: validation.StringMatch(
+										regexp.MustCompile(`^\d+(\\.\\d+)?\s(bps|Kbps|Mbps|Gbps|Tbps)$`),
+										"The value must be a number followed by bps, Kbps, Mbps, Gbps or Tbps.",
+									),
+								},
+
+								"uplink": {
+									Type:     pluginsdk.TypeString,
+									Required: true,
+									ValidateFunc: validation.StringMatch(
+										regexp.MustCompile(`^\d+(\\.\\d+)?\s(bps|Kbps|Mbps|Gbps|Tbps)$`),
+										"The value must be a number followed by bps, Kbps, Mbps, Gbps or Tbps.",
+									),
+								},
+							},
+						},
+					},
+
+					"preemption_capability": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						ValidateFunc: validation.StringInSlice([]string{
+							string(service.PreemptionCapabilityNotPreempt),
+							string(service.PreemptionCapabilityMayPreempt),
+						}, false),
+					},
+
+					"preemption_vulnerability": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						ValidateFunc: validation.StringInSlice([]string{
+							string(service.PreemptionVulnerabilityNotPreemptable),
+							string(service.PreemptionVulnerabilityPreemptable),
+						}, false),
+					},
+				},
+			},
+		},
+
+		"tags": commonschema.Tags(),
+	}
+}

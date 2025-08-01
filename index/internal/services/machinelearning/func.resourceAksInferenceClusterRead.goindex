@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/machinelearningcomputes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceAksInferenceClusterRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).MachineLearning.MachineLearningComputes
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := machinelearningcomputes.ParseComputeID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	d.Set("name", id.ComputeName)
+
+	// Check that Inference Cluster Response can be read
+	computeResource, err := client.ComputeGet(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(computeResource.HttpResponse) {
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("making Read request on Inference Cluster %q in Workspace %q (Resource Group %q): %+v",
+			id.ComputeName, id.WorkspaceName, id.ResourceGroupName, err)
+	}
+
+	// Retrieve Machine Learning Workspace ID
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	workspaceId := machinelearningcomputes.NewWorkspaceID(subscriptionId, id.ResourceGroupName, id.WorkspaceName)
+	d.Set("machine_learning_workspace_id", workspaceId.ID())
+
+	// use ComputeResource to get to AKS Cluster ID and other properties
+	aksComputeProperties := computeResource.Model.Properties.(machinelearningcomputes.AKS)
+
+	// Retrieve AKS Cluster ID
+	aksId, err := commonids.ParseKubernetesClusterIDInsensitively(*aksComputeProperties.ResourceId)
+	if err != nil {
+		return err
+	}
+	d.Set("kubernetes_cluster_id", aksId.ID())
+	clusterPurpose := ""
+	if aksComputeProperties.Properties != nil {
+		clusterPurpose = string(pointer.From(aksComputeProperties.Properties.ClusterPurpose))
+	}
+	d.Set("cluster_purpose", clusterPurpose)
+	d.Set("description", aksComputeProperties.Description)
+
+	// Retrieve location
+	if location := computeResource.Model.Location; location != nil {
+		d.Set("location", azure.NormalizeLocation(*location))
+	}
+
+	identity, err := flattenIdentity(computeResource.Model.Identity)
+	if err != nil {
+		return fmt.Errorf("flattening `identity`: %+v", err)
+	}
+	if err := d.Set("identity", identity); err != nil {
+		return fmt.Errorf("setting `identity`: %+v", err)
+	}
+
+	return tags.FlattenAndSet(d, computeResource.Model.Tags)
+}

@@ -1,0 +1,133 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2019-06-01-preview/tasks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r ContainerRegistryTaskResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Containers.ContainerRegistryClient_v2019_06_01_preview.Tasks
+			id, err := tasks.ParseTaskID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+			registryId := registries.NewRegistryID(id.SubscriptionId, id.ResourceGroupName, id.RegistryName)
+
+			task, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(task.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			var diffOrStateModel ContainerRegistryTaskModel
+			if err := metadata.Decode(&diffOrStateModel); err != nil {
+				return fmt.Errorf("decoding model from diff/state %+v", err)
+			}
+
+			var (
+				agentConfig        []AgentConfig
+				agentPoolName      string
+				isSystemTask       bool
+				logTemplate        string
+				platform           []Platform
+				enabled            bool
+				timeoutInSec       int64
+				dockerStep         []DockerStep
+				fileTaskStep       []FileTaskStep
+				encodedTaskStep    []EncodedTaskStep
+				baseImageTrigger   []BaseImageTrigger
+				sourceTrigger      []SourceTrigger
+				timerTrigger       []TimerTrigger
+				registryCredential []RegistryCredential
+				tag                map[string]string
+			)
+
+			if model := task.Model; model != nil {
+				if model.Tags != nil {
+					tag = *model.Tags
+				}
+
+				flattenedIdentity, err := identity.FlattenSystemAndUserAssignedMap(model.Identity)
+				if err != nil {
+					return fmt.Errorf("flattening `identity`: %+v", err)
+				}
+				if err := metadata.ResourceData.Set("identity", flattenedIdentity); err != nil {
+					return fmt.Errorf("setting `identity`: %+v", err)
+				}
+
+				if props := model.Properties; props != nil {
+					agentConfig = flattenRegistryTaskAgentProperties(props.AgentConfiguration)
+					if props.AgentPoolName != nil {
+						agentPoolName = *props.AgentPoolName
+					}
+					if props.IsSystemTask != nil {
+						isSystemTask = *props.IsSystemTask
+					}
+					if props.LogTemplate != nil {
+						logTemplate = *props.LogTemplate
+					}
+					platform = flattenRegistryTaskPlatform(props.Platform)
+					enabled = *props.Status == tasks.TaskStatusEnabled
+					if props.Timeout != nil {
+						timeoutInSec = *props.Timeout
+					}
+					dockerStep = flattenRegistryTaskDockerStep(props.Step, diffOrStateModel)
+					fileTaskStep = flattenRegistryTaskFileTaskStep(props.Step, diffOrStateModel)
+					encodedTaskStep = flattenRegistryTaskEncodedTaskStep(props.Step, diffOrStateModel)
+					if trigger := props.Trigger; trigger != nil {
+						baseImageTrigger = flattenRegistryTaskBaseImageTrigger(trigger.BaseImageTrigger, diffOrStateModel)
+						sourceTrigger = flattenRegistryTaskSourceTriggers(trigger.SourceTriggers, diffOrStateModel)
+						timerTrigger = flattenRegistryTaskTimerTriggers(trigger.TimerTriggers)
+					}
+					registryCredential = flattenRegistryTaskCredentials(props.Credentials, diffOrStateModel)
+				}
+			}
+
+			model := ContainerRegistryTaskModel{
+				Name:                id.TaskName,
+				ContainerRegistryId: registryId.ID(),
+				AgentConfig:         agentConfig,
+				AgentPoolName:       agentPoolName,
+				IsSystemTask:        isSystemTask,
+				LogTemplate:         logTemplate,
+				Platform:            platform,
+				Enabled:             enabled,
+				TimeoutInSec:        timeoutInSec,
+				DockerStep:          dockerStep,
+				FileTaskStep:        fileTaskStep,
+				EncodedTaskStep:     encodedTaskStep,
+				BaseImageTrigger:    baseImageTrigger,
+				SourceTrigger:       sourceTrigger,
+				TimerTrigger:        timerTrigger,
+				RegistryCredential:  registryCredential,
+				Tags:                tag,
+			}
+
+			if err := metadata.Encode(&model); err != nil {
+				return fmt.Errorf("encoding: %+v", err)
+			}
+
+			return nil
+		},
+	}
+}

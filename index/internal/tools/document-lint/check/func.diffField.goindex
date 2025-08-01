@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"log"
+	"path"
+	"strings"
+
+	"github.com/fatih/color"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func diffField(r *schema.Resource, mdField *model.Field, xPath []string) (res []Checker) {
+	fullPath := strings.Join(xPath, ".")
+	if isSkipProp(r.ResourceType, fullPath) {
+		return
+	}
+
+	// if end property
+	if mdField.Subs == nil {
+		want := r.PossibleValues[fullPath]
+		docVal := mdField.PossibleValues()
+		if missed, spare := SliceDiff(want, docVal, true); len(missed)+len(spare) > 0 {
+			if !mayExistsInDoc(mdField.Content, want) {
+				base := newCheckBase(mdField.Line, fullPath, mdField)
+				res = append(res, newPossibleValueDiff(base, want, docVal, missed, spare))
+			}
+		}
+		return
+	}
+	// check if r has such path
+	if !r.HasPathFor(xPath) {
+		log.Printf("%s %s has no path [%s], there must be an error in markdwon", color.YellowString("[WARN]"), r.ResourceType, strings.Join(xPath, "."))
+		return
+	}
+	for _, sub := range mdField.Subs {
+		subRes := diffField(r, sub, append(xPath, sub.Name))
+		res = append(res, subRes...)
+	}
+	return
+}

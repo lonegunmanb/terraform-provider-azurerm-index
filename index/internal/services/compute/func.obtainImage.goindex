@@ -1,0 +1,100 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryimageversions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func obtainImage(client *galleryimageversions.GalleryImageVersionsClient, ctx context.Context, id galleryimageversions.ImageVersionId, sortBySemVer bool) (*galleryimageversions.GalleryImageVersion, error) {
+	galleryImageId := galleryimageversions.NewGalleryImageID(id.SubscriptionId, id.ResourceGroupName, id.GalleryName, id.ImageName)
+
+	notFoundError := fmt.Errorf("a version was not found for %s", galleryImageId)
+
+	switch id.VersionName {
+	case "latest":
+		resp, err := client.ListByGalleryImageComplete(ctx, galleryImageId)
+		if err != nil {
+			if response.WasNotFound(resp.LatestHttpResponse) {
+				return nil, notFoundError
+			}
+			return nil, fmt.Errorf("retrieving `latest` versions for %s: %+v", galleryImageId, err)
+		}
+
+		images := resp.Items
+
+		// the last image in the list is the latest version
+		if len(images) > 0 {
+			if sortBySemVer {
+				var errs []error
+				images, errs = sortSharedImageVersions(images)
+				if len(errs) > 0 {
+					return nil, fmt.Errorf("parsing version(s): %v", errs)
+				}
+			}
+
+			for i := len(images) - 1; i >= 0; i-- {
+				if prop := images[i].Properties; prop == nil || prop.PublishingProfile == nil || prop.PublishingProfile.ExcludeFromLatest == nil || !*prop.PublishingProfile.ExcludeFromLatest {
+					return &(images[i]), nil
+				}
+			}
+		}
+		return nil, notFoundError
+
+	case "recent":
+		resp, err := client.ListByGalleryImageComplete(ctx, galleryImageId)
+		if err != nil {
+			if response.WasNotFound(resp.LatestHttpResponse) {
+				return nil, notFoundError
+			}
+			return nil, fmt.Errorf("retrieving `recent` versions for %s: %+v", galleryImageId, err)
+		}
+		var image *galleryimageversions.GalleryImageVersion
+		var recentDate *time.Time
+		// compare dates until we find the image that was updated most recently
+		for _, currentImage := range resp.Items {
+			if profile := currentImage.Properties.PublishingProfile; profile != nil {
+				if profile.PublishedDate != nil {
+					publishedDate, err := time.Parse(time.RFC3339, *profile.PublishedDate)
+					if err != nil {
+						return nil, fmt.Errorf("parsing published date for %s: %+v", galleryImageId, err)
+					}
+					if recentDate == nil || publishedDate.After(*recentDate) {
+						recentDate = pointer.To(publishedDate)
+						image = pointer.To(currentImage)
+					}
+				}
+			}
+		}
+
+		if image != nil {
+			return image, nil
+		}
+
+		return nil, notFoundError
+
+	default:
+		image, err := client.Get(ctx, id, galleryimageversions.DefaultGetOperationOptions())
+		if err != nil {
+			if response.WasNotFound(image.HttpResponse) {
+				return nil, notFoundError
+			}
+			return nil, fmt.Errorf("retrieving %s: %+v", id, err)
+		}
+
+		if image.Model == nil {
+			return nil, fmt.Errorf("model is nil for %s", id)
+		}
+
+		return image.Model, nil
+	}
+}

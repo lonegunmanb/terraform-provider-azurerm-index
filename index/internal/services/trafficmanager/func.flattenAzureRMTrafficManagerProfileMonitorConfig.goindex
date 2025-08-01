@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/trafficmanager
+import (
+	"errors"
+	"fmt"
+	"log"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/trafficmanager/2022-04-01/profiles"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/trafficmanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAzureRMTrafficManagerProfileMonitorConfig(cfg *profiles.MonitorConfig) []interface{} {
+	result := make(map[string]interface{})
+
+	protocol := ""
+	if cfg.Protocol != nil {
+		protocol = string(*cfg.Protocol)
+	}
+	result["protocol"] = protocol
+	result["port"] = int(*cfg.Port)
+	result["custom_header"] = flattenArmTrafficManagerCustomHeadersConfig(cfg.CustomHeaders)
+
+	if cfg.Path != nil {
+		result["path"] = *cfg.Path
+	}
+
+	result["interval_in_seconds"] = int(*cfg.IntervalInSeconds)
+	result["timeout_in_seconds"] = int(*cfg.TimeoutInSeconds)
+	result["tolerated_number_of_failures"] = int(*cfg.ToleratedNumberOfFailures)
+
+	if v := cfg.ExpectedStatusCodeRanges; v != nil {
+		ranges := make([]string, 0)
+		for _, r := range *v {
+			if r.Min == nil || r.Max == nil {
+				continue
+			}
+
+			ranges = append(ranges, fmt.Sprintf("%d-%d", *r.Min, *r.Max))
+		}
+		result["expected_status_code_ranges"] = ranges
+	}
+
+	return []interface{}{result}
+}

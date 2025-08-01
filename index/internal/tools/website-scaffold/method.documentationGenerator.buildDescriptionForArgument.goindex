@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/magodo/terraform-provider-azurerm-example-gen/examplegen"
+)
+func (gen documentationGenerator) buildDescriptionForArgument(name string, field *schema.Schema, blockName string) string {
+	if name == "name" {
+		if blockName == "" {
+			if gen.isDataSource {
+				return fmt.Sprintf("The name of this %s.", gen.brandName)
+			}
+
+			return fmt.Sprintf("The name which should be used for this %s.", gen.brandName)
+		} else {
+			return "The name which should be used for this TODO."
+		}
+	}
+	if name == "location" {
+		if gen.isDataSource {
+			return fmt.Sprintf("The Azure Region where the %s exists.", gen.brandName)
+		}
+
+		return fmt.Sprintf("The Azure Region where the %s should exist.", gen.brandName)
+	}
+	if name == "resource_group_name" {
+		if gen.isDataSource {
+			return fmt.Sprintf("The name of the Resource Group where the %s exists.", gen.brandName)
+		}
+
+		return fmt.Sprintf("The name of the Resource Group where the %s should exist.", gen.brandName)
+	}
+	if name == "tags" {
+		return fmt.Sprintf("A mapping of tags which should be assigned to the %s.", gen.brandName)
+	}
+
+	if name == "enabled" || strings.HasSuffix(name, "_enabled") {
+		return "Should the TODO be enabled?"
+	}
+
+	if strings.HasSuffix(name, "_id") {
+		return "The ID of the TODO."
+	}
+
+	if field.Elem != nil {
+		if _, ok := field.Elem.(*schema.Resource); ok {
+			fmtBlock := func(name string, maxItem int, blockIsBefore bool) string {
+				var head string
+				if maxItem == 1 {
+					head = fmt.Sprintf("A `%s` block", name)
+				} else {
+					head = fmt.Sprintf("One or more `%s` blocks", name)
+				}
+
+				var tail string
+				if blockIsBefore {
+					tail = "as defined above."
+				} else {
+					tail = "as defined below."
+				}
+				return head + " " + tail
+			}
+			return fmtBlock(name, field.MaxItems, gen.blockIsBefore(name, blockName))
+		}
+	}
+
+	switch field.Type {
+	case schema.TypeList, schema.TypeSet, schema.TypeMap:
+		return "Specifies a list of TODO."
+	}
+
+	return "TODO."
+}

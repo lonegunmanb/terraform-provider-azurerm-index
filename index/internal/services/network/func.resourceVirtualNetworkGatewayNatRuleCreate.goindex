@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceVirtualNetworkGatewayNatRuleCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	client := meta.(*clients.Client).Network.VirtualNetworkGateways
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	vnetGatewayId, err := virtualnetworkgateways.ParseVirtualNetworkGatewayID(d.Get("virtual_network_gateway_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := virtualnetworkgateways.NewVirtualNetworkGatewayNatRuleID(subscriptionId, d.Get("resource_group_name").(string), vnetGatewayId.VirtualNetworkGatewayName, d.Get("name").(string))
+
+	existing, err := client.VirtualNetworkGatewayNatRulesGet(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for existing %s: %+v", id, err)
+		}
+	}
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_virtual_network_gateway_nat_rule", id.ID())
+	}
+
+	props := virtualnetworkgateways.VirtualNetworkGatewayNatRule{
+		Name: pointer.To(d.Get("name").(string)),
+		Properties: &virtualnetworkgateways.VirtualNetworkGatewayNatRuleProperties{
+			ExternalMappings: expandVirtualNetworkGatewayNatRuleMappings(d.Get("external_mapping").([]interface{})),
+			InternalMappings: expandVirtualNetworkGatewayNatRuleMappings(d.Get("internal_mapping").([]interface{})),
+			Mode:             pointer.To(virtualnetworkgateways.VpnNatRuleMode(d.Get("mode").(string))),
+			Type:             pointer.To(virtualnetworkgateways.VpnNatRuleType(d.Get("type").(string))),
+		},
+	}
+
+	if v, ok := d.GetOk("ip_configuration_id"); ok {
+		props.Properties.IPConfigurationId = pointer.To(v.(string))
+	}
+
+	if err := client.VirtualNetworkGatewayNatRulesCreateOrUpdateThenPoll(ctx, id, props); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceVirtualNetworkGatewayNatRuleRead(d, meta)
+}

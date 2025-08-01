@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"bytes"
+	"flag"
+	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"log"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"github.com/hashicorp/go-hclog"
+	"golang.org/x/tools/go/ast/astutil"
+)
+func main() {
+	logger = hclog.New(hclog.DefaultOptions)
+	if os.Getenv("DEBUG") != "" {
+		logger.SetLevel(hclog.Debug)
+	}
+
+	f := flag.NewFlagSet("update-api-version", flag.ExitOnError)
+	serviceName := f.String("service", "", "-service=compute")
+	oldApiVersion := f.String("old-api-version", "", "-old-api-version=2019-01-01")
+	newApiVersion := f.String("new-api-version", "", "-new-api-version=2023-06-01")
+	if len(os.Args) == 1 { // 0 is the app name
+		log.Fatalf("expected multiple arguments but didn't get any")
+	}
+	if err := f.Parse(os.Args[1:]); err != nil {
+		log.Fatalf("parsing arguments: %+v", err)
+	}
+	if serviceName == nil || *serviceName == "" {
+		log.Fatalf("missing `-service`")
+	}
+	if oldApiVersion == nil || *oldApiVersion == "" {
+		log.Fatalf("missing `-old-api-version`")
+	}
+	if newApiVersion == nil || *newApiVersion == "" {
+		log.Fatalf("missing `-new-api-version`")
+	}
+
+	workingDirectory := "../.." // path to the `internal` folder
+	if err := run(*serviceName, *oldApiVersion, *newApiVersion, workingDirectory); err != nil {
+		log.Fatalf("error: %+v", err)
+	}
+}

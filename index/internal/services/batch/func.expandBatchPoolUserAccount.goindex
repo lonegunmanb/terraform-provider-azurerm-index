@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandBatchPoolUserAccount(ref map[string]interface{}) pool.UserAccount {
+	result := pool.UserAccount{
+		Name:           ref["name"].(string),
+		Password:       ref["password"].(string),
+		ElevationLevel: pointer.To(pool.ElevationLevel(ref["elevation_level"].(string))),
+	}
+
+	if linuxUserConfig, ok := ref["linux_user_configuration"]; ok {
+		if linuxUserConfig != nil && len(linuxUserConfig.([]interface{})) > 0 {
+			linuxUserConfigMap := linuxUserConfig.([]interface{})[0].(map[string]interface{})
+			var linuxUserConfig pool.LinuxUserConfiguration
+			if uid, ok := linuxUserConfigMap["uid"]; ok {
+				linuxUserConfig = pool.LinuxUserConfiguration{
+					Uid: utils.Int64(int64(uid.(int))),
+					Gid: utils.Int64(int64(linuxUserConfigMap["gid"].(int))),
+				}
+			}
+			if sshPrivateKey, ok := linuxUserConfigMap["ssh_private_key"]; ok {
+				linuxUserConfig.SshPrivateKey = utils.String(sshPrivateKey.(string))
+			}
+			result.LinuxUserConfiguration = &linuxUserConfig
+		}
+	}
+
+	if winUserConfig, ok := ref["windows_user_configuration"]; ok {
+		if winUserConfig != nil && len(winUserConfig.([]interface{})) > 0 {
+			winUserConfigMap := winUserConfig.([]interface{})[0].(map[string]interface{})
+			result.WindowsUserConfiguration = &pool.WindowsUserConfiguration{
+				LoginMode: pointer.To(pool.LoginMode(winUserConfigMap["login_mode"].(string))),
+			}
+		}
+	}
+
+	return result
+}

@@ -1,0 +1,95 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/azurefirewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/parse"
+	firewallValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceFirewallApplicationRuleCollectionRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.AzureFirewalls
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.FirewallApplicationRuleCollectionID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	firewallId := azurefirewalls.NewAzureFirewallID(id.SubscriptionId, id.ResourceGroup, id.AzureFirewallName)
+
+	read, err := client.Get(ctx, firewallId)
+	if err != nil {
+		if response.WasNotFound(read.HttpResponse) {
+			log.Printf("[DEBUG] Azure Firewall %q (Resource Group %q) was not found - removing from state!", id.ApplicationRuleCollectionName, id.ResourceGroup)
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	if read.Model == nil {
+		return fmt.Errorf("retrieving Application Rule Collection %q (Firewall %q / Resource Group %q): `model` was nil", id.ApplicationRuleCollectionName, id.AzureFirewallName, id.ResourceGroup)
+	}
+
+	if read.Model.Properties == nil {
+		return fmt.Errorf("retrieving Application Rule Collection %q (Firewall %q / Resource Group %q): `props` was nil", id.ApplicationRuleCollectionName, id.AzureFirewallName, id.ResourceGroup)
+	}
+	props := *read.Model.Properties
+
+	if props.ApplicationRuleCollections == nil {
+		return fmt.Errorf("retrieving Application Rule Collection %q (Firewall %q / Resource Group %q): `props.ApplicationRuleCollections` was nil", id.ApplicationRuleCollectionName, id.AzureFirewallName, id.ResourceGroup)
+	}
+
+	var rule *azurefirewalls.AzureFirewallApplicationRuleCollection
+	for _, r := range *props.ApplicationRuleCollections {
+		if r.Name == nil {
+			continue
+		}
+
+		if *r.Name == id.ApplicationRuleCollectionName {
+			rule = &r
+			break
+		}
+	}
+
+	if rule == nil {
+		log.Printf("[DEBUG] Application Rule Collection %q was not found on Firewall %q (Resource Group %q) - removing from state!", id.ApplicationRuleCollectionName, id.AzureFirewallName, id.ResourceGroup)
+		d.SetId("")
+		return nil
+	}
+
+	d.Set("name", id.ApplicationRuleCollectionName)
+	d.Set("azure_firewall_name", id.AzureFirewallName)
+	d.Set("resource_group_name", id.ResourceGroup)
+
+	if props := rule.Properties; props != nil {
+		if action := props.Action; action != nil {
+			d.Set("action", string(pointer.From(action.Type)))
+		}
+
+		if priority := props.Priority; priority != nil {
+			d.Set("priority", int(*priority))
+		}
+
+		flattenedRules := flattenFirewallApplicationRuleCollectionRules(props.Rules)
+		if err := d.Set("rule", flattenedRules); err != nil {
+			return fmt.Errorf("setting `rule`: %+v", err)
+		}
+	}
+
+	return nil
+}

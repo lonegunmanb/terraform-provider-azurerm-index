@@ -1,0 +1,216 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandDefaultNodePool(d *pluginsdk.ResourceData) (*[]managedclusters.ManagedClusterAgentPoolProfile, error) {
+	input := d.Get("default_node_pool").([]interface{})
+
+	raw := input[0].(map[string]interface{})
+
+	enableAutoScaling := raw["auto_scaling_enabled"].(bool)
+
+	nodeLabelsRaw := raw["node_labels"].(map[string]interface{})
+	nodeLabels := expandNodeLabels(nodeLabelsRaw)
+	var nodeTaints *[]string
+
+	criticalAddonsEnabled := raw["only_critical_addons_enabled"].(bool)
+	if criticalAddonsEnabled {
+		nodeTaints = pointer.To([]string{"CriticalAddonsOnly=true:NoSchedule"})
+	}
+
+	t := raw["tags"].(map[string]interface{})
+
+	profile := managedclusters.ManagedClusterAgentPoolProfile{
+		EnableAutoScaling:      utils.Bool(enableAutoScaling),
+		EnableFIPS:             utils.Bool(raw["fips_enabled"].(bool)),
+		EnableNodePublicIP:     utils.Bool(raw["node_public_ip_enabled"].(bool)),
+		EnableEncryptionAtHost: utils.Bool(raw["host_encryption_enabled"].(bool)),
+		KubeletDiskType:        pointer.To(managedclusters.KubeletDiskType(raw["kubelet_disk_type"].(string))),
+		Name:                   raw["name"].(string),
+		NodeLabels:             nodeLabels,
+		NodeTaints:             nodeTaints,
+		Tags:                   tags.Expand(t),
+		Type:                   pointer.To(managedclusters.AgentPoolType(raw["type"].(string))),
+		VMSize:                 utils.String(raw["vm_size"].(string)),
+
+		// at this time the default node pool has to be Linux or the AKS cluster fails to provision with:
+		// Pods not in Running status: coredns-7fc597cc45-v5z7x,coredns-autoscaler-7ccc76bfbd-djl7j,metrics-server-cbd95f966-5rl97,tunnelfront-7d9884977b-wpbvn
+		// Windows agents can be configured via the separate node pool resource
+		OsType: pointer.To(managedclusters.OSTypeLinux),
+
+		// without this set the API returns:
+		// Code="MustDefineAtLeastOneSystemPool" Message="Must define at least one system pool."
+		// since this is the "default" node pool we can assume this is a system node pool
+		Mode: pointer.To(managedclusters.AgentPoolModeSystem),
+
+		UpgradeSettings: expandClusterNodePoolUpgradeSettings(raw["upgrade_settings"].([]interface{})),
+
+		// // TODO: support these in time
+		// ScaleSetEvictionPolicy: "",
+		// ScaleSetPriority:       "",
+	}
+
+	zones := zones.ExpandUntyped(raw["zones"].(*schema.Set).List())
+	if len(zones) > 0 {
+		profile.AvailabilityZones = &zones
+	}
+
+	if maxPods := int64(raw["max_pods"].(int)); maxPods > 0 {
+		profile.MaxPods = utils.Int64(maxPods)
+	}
+
+	if prefixID := raw["node_public_ip_prefix_id"].(string); prefixID != "" {
+		profile.NodePublicIPPrefixID = utils.String(prefixID)
+	}
+
+	if osDiskSizeGB := int64(raw["os_disk_size_gb"].(int)); osDiskSizeGB > 0 {
+		profile.OsDiskSizeGB = utils.Int64(osDiskSizeGB)
+	}
+
+	profile.OsDiskType = pointer.To(managedclusters.OSDiskTypeManaged)
+	if osDiskType := raw["os_disk_type"].(string); osDiskType != "" {
+		profile.OsDiskType = pointer.To(managedclusters.OSDiskType(osDiskType))
+	}
+
+	if osSku := raw["os_sku"].(string); osSku != "" {
+		profile.OsSKU = pointer.To(managedclusters.OSSKU(osSku))
+	}
+
+	if podSubnetID := raw["pod_subnet_id"].(string); podSubnetID != "" {
+		profile.PodSubnetID = utils.String(podSubnetID)
+	}
+
+	scaleDownModeDelete := managedclusters.ScaleDownModeDelete
+	profile.ScaleDownMode = &scaleDownModeDelete
+	if scaleDownMode := raw["scale_down_mode"].(string); scaleDownMode != "" {
+		profile.ScaleDownMode = pointer.To(managedclusters.ScaleDownMode(scaleDownMode))
+	}
+
+	if snapshotId := raw["snapshot_id"].(string); snapshotId != "" {
+		profile.CreationData = &managedclusters.CreationData{
+			SourceResourceId: utils.String(snapshotId),
+		}
+	}
+
+	if ultraSSDEnabled, ok := raw["ultra_ssd_enabled"]; ok {
+		profile.EnableUltraSSD = utils.Bool(ultraSSDEnabled.(bool))
+	}
+
+	if vnetSubnetID := raw["vnet_subnet_id"].(string); vnetSubnetID != "" {
+		profile.VnetSubnetID = utils.String(vnetSubnetID)
+	}
+
+	if hostGroupID := raw["host_group_id"].(string); hostGroupID != "" {
+		profile.HostGroupID = utils.String(hostGroupID)
+	}
+
+	if orchestratorVersion := raw["orchestrator_version"].(string); orchestratorVersion != "" {
+		profile.OrchestratorVersion = utils.String(orchestratorVersion)
+	}
+
+	if proximityPlacementGroupId := raw["proximity_placement_group_id"].(string); proximityPlacementGroupId != "" {
+		profile.ProximityPlacementGroupID = utils.String(proximityPlacementGroupId)
+	}
+
+	if workloadRunTime := raw["workload_runtime"].(string); workloadRunTime != "" {
+		profile.WorkloadRuntime = pointer.To(managedclusters.WorkloadRuntime(workloadRunTime))
+	}
+
+	if capacityReservationGroupId := raw["capacity_reservation_group_id"].(string); capacityReservationGroupId != "" {
+		profile.CapacityReservationGroupID = utils.String(capacityReservationGroupId)
+	}
+
+	if gpuInstanceProfile := raw["gpu_instance"].(string); gpuInstanceProfile != "" {
+		profile.GpuInstanceProfile = pointer.To(managedclusters.GPUInstanceProfile(gpuInstanceProfile))
+	}
+
+	count := raw["node_count"].(int)
+	maxCount := raw["max_count"].(int)
+	minCount := raw["min_count"].(int)
+
+	// Count must always be set (see #6094), RP behaviour has changed
+	// since the API version upgrade in v2.1.0 making Count required
+	// for all create/update requests
+	profile.Count = utils.Int64(int64(count))
+
+	if enableAutoScaling {
+		// if Count has not been set use min count
+		if count == 0 {
+			count = minCount
+			profile.Count = utils.Int64(int64(count))
+		}
+
+		// Count must be set for the initial creation when using AutoScaling but cannot be updated
+		if d.HasChange("default_node_pool.0.node_count") && !d.IsNewResource() {
+			return nil, fmt.Errorf("cannot change `node_count` when `auto_scaling_enabled` is set to `true`")
+		}
+
+		if maxCount > 0 {
+			profile.MaxCount = utils.Int64(int64(maxCount))
+
+			if maxCount < count && d.IsNewResource() {
+				return nil, fmt.Errorf("`node_count`(%d) must be equal to or less than `max_count`(%d) when `auto_scaling_enabled` is set to `true`", count, maxCount)
+			}
+		} else {
+			return nil, fmt.Errorf("`max_count` must be configured when `auto_scaling_enabled` is set to `true`")
+		}
+
+		if minCount > 0 {
+			profile.MinCount = utils.Int64(int64(minCount))
+
+			if minCount > count && d.IsNewResource() {
+				return nil, fmt.Errorf("`node_count`(%d) must be equal to or greater than `min_count`(%d) when `auto_scaling_enabled` is set to `true`", count, minCount)
+			}
+		} else {
+			return nil, fmt.Errorf("`min_count` must be configured when `auto_scaling_enabled` is set to `true`")
+		}
+
+		if minCount > maxCount {
+			return nil, fmt.Errorf("`max_count` must be >= `min_count`")
+		}
+	} else if minCount > 0 || maxCount > 0 {
+		return nil, fmt.Errorf("`max_count`(%d) and `min_count`(%d) must be set to `null` when `auto_scaling_enabled` is set to `false`", maxCount, minCount)
+	}
+
+	if kubeletConfig := raw["kubelet_config"].([]interface{}); len(kubeletConfig) > 0 {
+		profile.KubeletConfig = expandClusterNodePoolKubeletConfig(kubeletConfig)
+	}
+
+	if linuxOSConfig := raw["linux_os_config"].([]interface{}); len(linuxOSConfig) > 0 {
+		linuxOSConfig, err := expandClusterNodePoolLinuxOSConfig(linuxOSConfig)
+		if err != nil {
+			return nil, err
+		}
+		profile.LinuxOSConfig = linuxOSConfig
+	}
+
+	if networkProfile := raw["node_network_profile"].([]interface{}); len(networkProfile) > 0 {
+		profile.NetworkProfile = expandClusterPoolNetworkProfile(networkProfile)
+	}
+
+	return &[]managedclusters.ManagedClusterAgentPoolProfile{
+		profile,
+	}, nil
+}

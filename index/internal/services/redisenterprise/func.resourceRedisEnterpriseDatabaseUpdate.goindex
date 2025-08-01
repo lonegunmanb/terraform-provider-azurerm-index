@@ -1,0 +1,77 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redisenterprise
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2024-06-01-preview/databases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2024-06-01-preview/redisenterprise"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redisenterprise/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceRedisEnterpriseDatabaseUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	client := meta.(*clients.Client).RedisEnterprise.DatabaseClient
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	clusterId, err := redisenterprise.ParseRedisEnterpriseID(d.Get("cluster_id").(string))
+	if err != nil {
+		return fmt.Errorf("parsing `cluster_id`: %+v", err)
+	}
+
+	id := databases.NewDatabaseID(subscriptionId, clusterId.ResourceGroupName, clusterId.RedisEnterpriseName, d.Get("name").(string))
+
+	clusteringPolicy := databases.ClusteringPolicy(d.Get("clustering_policy").(string))
+	evictionPolicy := databases.EvictionPolicy(d.Get("eviction_policy").(string))
+	protocol := databases.Protocol(d.Get("client_protocol").(string))
+
+	oldItems, newItems := d.GetChange("linked_database_id")
+	isForceUnlink, data := forceUnlinkItems(oldItems.(*pluginsdk.Set).List(), newItems.(*pluginsdk.Set).List())
+	if isForceUnlink {
+		if err := forceUnlinkDatabase(d, meta, *data); err != nil {
+			return fmt.Errorf("unlinking database error: %+v", err)
+		}
+	}
+
+	linkedDatabase, err := expandArmGeoLinkedDatabase(d.Get("linked_database_id").(*pluginsdk.Set).List(), id.ID(), d.Get("linked_database_group_nickname").(string))
+	if err != nil {
+		return fmt.Errorf("Setting geo database for database %s error: %+v", id.ID(), err)
+	}
+
+	isGeoEnabled := false
+	if linkedDatabase != nil {
+		isGeoEnabled = true
+	}
+	module, err := expandArmDatabaseModuleArray(d.Get("module").([]interface{}), isGeoEnabled)
+	if err != nil {
+		return fmt.Errorf("setting module error: %+v", err)
+	}
+
+	parameters := databases.Database{
+		Properties: &databases.DatabaseProperties{
+			ClientProtocol:   &protocol,
+			ClusteringPolicy: &clusteringPolicy,
+			EvictionPolicy:   &evictionPolicy,
+			Modules:          module,
+			// Persistence:      expandArmDatabasePersistence(d.Get("persistence").([]interface{})),
+			GeoReplication: linkedDatabase,
+			Port:           utils.Int64(int64(d.Get("port").(int))),
+		},
+	}
+
+	if err := client.CreateThenPoll(ctx, id, parameters); err != nil {
+		return fmt.Errorf("updatig %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceRedisEnterpriseDatabaseRead(d, meta)
+}

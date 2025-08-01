@@ -1,0 +1,157 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/fileshares"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/file/shares"
+)
+func resourceStorageShareCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	sharesClient := meta.(*clients.Client).Storage.ResourceManager.FileShares
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	if !features.FivePointOh() {
+		storageClient := meta.(*clients.Client).Storage
+		if accountName := d.Get("storage_account_name").(string); accountName != "" {
+			shareName := d.Get("name").(string)
+			quota := d.Get("quota").(int)
+			metaDataRaw := d.Get("metadata").(map[string]interface{})
+			metaData := ExpandMetaData(metaDataRaw)
+
+			account, err := storageClient.FindAccount(ctx, subscriptionId, accountName)
+			if err != nil {
+				return fmt.Errorf("retrieving Account %q for Share %q: %v", accountName, shareName, err)
+			}
+			if account == nil {
+				return fmt.Errorf("locating Storage Account %q", accountName)
+			}
+
+			// Determine the file endpoint, so we can build a data plane ID
+			endpoint, err := account.DataPlaneEndpoint(client.EndpointTypeFile)
+			if err != nil {
+				return fmt.Errorf("determining File endpoint: %v", err)
+			}
+
+			// Parse the file endpoint as a data plane account ID
+			accountId, err := accounts.ParseAccountID(*endpoint, storageClient.StorageDomainSuffix)
+			if err != nil {
+				return fmt.Errorf("parsing Account ID: %v", err)
+			}
+
+			id := shares.NewShareID(*accountId, shareName)
+
+			protocol := shares.ShareProtocol(d.Get("enabled_protocol").(string))
+			if protocol == shares.NFS {
+				// Only FileStorage (whose sku tier is Premium only) storage account is able to have NFS file shares.
+				// See: https://learn.microsoft.com/en-us/azure/storage/files/storage-files-quick-create-use-linux#applies-to
+				if account.Kind != storageaccounts.KindFileStorage {
+					return fmt.Errorf("NFS File Share is only supported for Storage Account with kind %q but got `%s`", string(storageaccounts.KindFileStorage), account.Kind)
+				}
+			}
+
+			// The files API does not support bearer tokens (@manicminer, 2024-02-15)
+			fileSharesDataPlaneClient, err := storageClient.FileSharesDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingOnlySharedKeyAuth())
+			if err != nil {
+				return fmt.Errorf("building File Share Client: %v", err)
+			}
+
+			exists, err := fileSharesDataPlaneClient.Exists(ctx, shareName)
+			if err != nil {
+				return fmt.Errorf("checking for existing %s: %v", id, err)
+			}
+			if exists != nil && *exists {
+				return tf.ImportAsExistsError("azurerm_storage_share", id.ID())
+			}
+
+			log.Printf("[INFO] Creating Share %q in Storage Account %q", shareName, accountName)
+			input := shares.CreateInput{
+				QuotaInGB:       quota,
+				MetaData:        metaData,
+				EnabledProtocol: protocol,
+			}
+
+			if accessTier := d.Get("access_tier").(string); accessTier != "" {
+				tier := shares.AccessTier(accessTier)
+				input.AccessTier = &tier
+			}
+
+			if err = fileSharesDataPlaneClient.Create(ctx, shareName, input); err != nil {
+				return fmt.Errorf("creating %s: %v", id, err)
+			}
+
+			d.SetId(id.ID())
+
+			aclsRaw := d.Get("acl").(*pluginsdk.Set).List()
+			acls := expandStorageShareACLsDeprecated(aclsRaw)
+			if err = fileSharesDataPlaneClient.UpdateACLs(ctx, shareName, shares.SetAclInput{SignedIdentifiers: acls}); err != nil {
+				return fmt.Errorf("setting ACLs for %s: %v", id, err)
+			}
+
+			return resourceStorageShareRead(d, meta)
+		}
+	}
+
+	accountId, err := commonids.ParseStorageAccountID(d.Get("storage_account_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := fileshares.NewShareID(accountId.SubscriptionId, accountId.ResourceGroupName, accountId.StorageAccountName, d.Get("name").(string))
+
+	existing, err := sharesClient.Get(ctx, id, fileshares.DefaultGetOperationOptions())
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for existing %q: %v", id, err)
+		}
+	}
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_storage_share", id.ID())
+	}
+
+	payload := fileshares.FileShare{
+		Properties: &fileshares.FileShareProperties{
+			EnabledProtocols:  pointer.To(fileshares.EnabledProtocols(d.Get("enabled_protocol").(string))),
+			Metadata:          pointer.To(ExpandMetaData(d.Get("metadata").(map[string]interface{}))),
+			ShareQuota:        pointer.To(int64(d.Get("quota").(int))),
+			SignedIdentifiers: expandStorageShareACLs(d.Get("acl").(*pluginsdk.Set).List()),
+		},
+	}
+
+	if sharedAccessTier, ok := d.GetOk("access_tier"); ok && sharedAccessTier.(string) != "" {
+		payload.Properties.AccessTier = pointer.To(fileshares.ShareAccessTier(sharedAccessTier.(string)))
+	}
+
+	pollerType := custompollers.NewStorageShareCreatePoller(sharesClient, id, payload)
+	poller := pollers.NewPoller(pollerType, 5*time.Second, pollers.DefaultNumberOfDroppedConnectionsToAllow)
+
+	if err = poller.PollUntilDone(ctx); err != nil {
+		return fmt.Errorf("creating %s: %v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceStorageShareRead(d, meta)
+}

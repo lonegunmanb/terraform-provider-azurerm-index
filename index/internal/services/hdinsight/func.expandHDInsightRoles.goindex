@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/applications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/extensions"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandHDInsightRoles(input []interface{}, definition hdInsightRoleDefinition) (*[]clusters.Role, error) {
+	v := input[0].(map[string]interface{})
+
+	headNodeRaw := v["head_node"].([]interface{})
+	headNode, err := ExpandHDInsightNodeDefinition("headnode", headNodeRaw, definition.HeadNodeDef)
+	if err != nil {
+		return nil, fmt.Errorf("expanding `head_node`: %+v", err)
+	}
+
+	workerNodeRaw := v["worker_node"].([]interface{})
+	workerNode, err := ExpandHDInsightNodeDefinition("workernode", workerNodeRaw, definition.WorkerNodeDef)
+	if err != nil {
+		return nil, fmt.Errorf("expanding `worker_node`: %+v", err)
+	}
+
+	zookeeperNodeRaw := v["zookeeper_node"].([]interface{})
+	zookeeperNode, err := ExpandHDInsightNodeDefinition("zookeepernode", zookeeperNodeRaw, definition.ZookeeperNodeDef)
+	if err != nil {
+		return nil, fmt.Errorf("expanding `zookeeper_node`: %+v", err)
+	}
+
+	roles := []clusters.Role{
+		*headNode,
+		*workerNode,
+		*zookeeperNode,
+	}
+
+	if definition.EdgeNodeDef != nil {
+		edgeNodeRaw := v["edge_node"].([]interface{})
+		edgeNode, err := ExpandHDInsightNodeDefinition("edgenode", edgeNodeRaw, *definition.EdgeNodeDef)
+		if err != nil {
+			return nil, fmt.Errorf("expanding `edge_node`: %+v", err)
+		}
+		roles = append(roles, *edgeNode)
+	}
+
+	if definition.KafkaManagementNodeDef != nil {
+		kafkaManagementNodeRaw := v["kafka_management_node"].([]interface{})
+		// "kafka_management_node" is optional, we expand it only when user has specified it.
+		if len(kafkaManagementNodeRaw) != 0 {
+			kafkaManagementNode, err := ExpandHDInsightNodeDefinition("kafkamanagementnode", kafkaManagementNodeRaw, *definition.KafkaManagementNodeDef)
+			if err != nil {
+				return nil, fmt.Errorf("expanding `kafka_management_node`: %+v", err)
+			}
+			roles = append(roles, *kafkaManagementNode)
+		}
+	}
+
+	return &roles, nil
+}

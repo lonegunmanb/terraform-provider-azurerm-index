@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backuppolicy"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r NetAppBackupPolicyResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 90 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.NetApp.BackupPolicyClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var model netAppModels.NetAppBackupPolicyModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := backuppolicy.NewBackupPolicyID(subscriptionId, model.ResourceGroupName, model.AccountName, model.Name)
+
+			// Validations
+			if errorList := netAppValidate.ValidateNetAppBackupPolicyCombinedRetention(model.DailyBackupsToKeep, model.WeeklyBackupsToKeep, model.MonthlyBackupsToKeep); len(errorList) > 0 {
+				return fmt.Errorf("one or more issues found while performing deeper validations for %s:\n%+v", id, errorList)
+			}
+
+			metadata.Logger.Infof("Import check for %s", id)
+			existing, err := client.BackupPoliciesGet(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %s", id, err)
+				}
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return tf.ImportAsExistsError(r.ResourceType(), id.ID())
+			}
+
+			parameters := backuppolicy.BackupPolicy{
+				Location: location.Normalize(model.Location),
+				Tags:     pointer.To(model.Tags),
+				Properties: backuppolicy.BackupPolicyProperties{
+					DailyBackupsToKeep:   pointer.To(model.DailyBackupsToKeep),
+					WeeklyBackupsToKeep:  pointer.To(model.WeeklyBackupsToKeep),
+					MonthlyBackupsToKeep: pointer.To(model.MonthlyBackupsToKeep),
+					Enabled:              pointer.To(model.Enabled),
+				},
+			}
+
+			err = client.BackupPoliciesCreateThenPoll(ctx, id, parameters)
+			if err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			return nil
+		},
+	}
+}

@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandBatchPoolAzureBlobFileSystemConfiguration(list []interface{}) (*pool.AzureBlobFileSystemConfiguration, interface{}) {
+	if len(list) == 0 || list[0] == nil {
+		return nil, fmt.Errorf("azure_blob_file_system is empty")
+	}
+
+	configMap := list[0].(map[string]interface{})
+	result := pool.AzureBlobFileSystemConfiguration{
+		AccountName:       configMap["account_name"].(string),
+		ContainerName:     configMap["container_name"].(string),
+		RelativeMountPath: configMap["relative_mount_path"].(string),
+	}
+
+	if accountKey, ok := configMap["account_key"]; ok && accountKey != "" {
+		result.AccountKey = utils.String(accountKey.(string))
+	} else if sasKey, ok := configMap["sas_key"]; ok && sasKey != "" {
+		result.SasKey = utils.String(sasKey.(string))
+	} else if computedIDRef, err := expandBatchPoolIdentityReference(configMap); err == nil {
+		result.IdentityReference = computedIDRef
+	}
+
+	if blobfuseOptions, ok := configMap["blobfuse_options"]; ok {
+		result.BlobfuseOptions = utils.String(blobfuseOptions.(string))
+	}
+	return &result, nil
+}

@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/privatednsresolver
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dnsresolver/2022-07-01/dnsforwardingrulesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dnsresolver/2022-07-01/forwardingrules"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r PrivateDNSResolverForwardingRuleDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.PrivateDnsResolver.ForwardingRulesClient
+
+			var state PrivateDNSResolverForwardingRuleDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			dnsForwardingRulesetId, err := forwardingrules.ParseDnsForwardingRulesetID(state.DnsForwardingRulesetId)
+			if err != nil {
+				return err
+			}
+
+			id := forwardingrules.NewForwardingRuleID(
+				dnsForwardingRulesetId.SubscriptionId,
+				dnsForwardingRulesetId.ResourceGroupName,
+				dnsForwardingRulesetId.DnsForwardingRulesetName,
+				state.Name)
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			model := resp.Model
+			if model == nil {
+				return fmt.Errorf("retrieving %s: model was nil", id)
+			}
+
+			properties := &model.Properties
+			state.DomainName = properties.DomainName
+
+			state.Enabled = false
+			if properties.ForwardingRuleState != nil && *properties.ForwardingRuleState == forwardingrules.ForwardingRuleStateEnabled {
+				state.Enabled = true
+			}
+
+			if properties.Metadata != nil {
+				state.Metadata = *properties.Metadata
+			}
+
+			state.TargetDnsServers = flattenTargetDnsServerModel(&properties.TargetDnsServers)
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&state)
+		},
+	}
+}

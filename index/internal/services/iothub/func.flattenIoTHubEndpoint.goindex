@@ -1,0 +1,234 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"fmt"
+	"log"
+	"net/url"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	eventhubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	servicebusValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func flattenIoTHubEndpoint(input *devices.RoutingProperties) []interface{} {
+	results := make([]interface{}, 0)
+
+	if input != nil && input.Endpoints != nil {
+		if containers := input.Endpoints.StorageContainers; containers != nil {
+			for _, container := range *containers {
+				output := make(map[string]interface{})
+
+				authenticationType := string(devices.AuthenticationTypeKeyBased)
+				if string(container.AuthenticationType) != "" {
+					authenticationType = string(container.AuthenticationType)
+				}
+				output["authentication_type"] = authenticationType
+
+				connectionStr := ""
+				if container.ConnectionString != nil {
+					connectionStr = *container.ConnectionString
+				}
+				output["connection_string"] = connectionStr
+
+				endpointUri := ""
+				if container.EndpointURI != nil {
+					endpointUri = *container.EndpointURI
+				}
+				output["endpoint_uri"] = endpointUri
+
+				identityId := ""
+				if container.Identity != nil && container.Identity.UserAssignedIdentity != nil {
+					identityId = *container.Identity.UserAssignedIdentity
+				}
+				output["identity_id"] = identityId
+
+				if name := container.Name; name != nil {
+					output["name"] = *name
+				}
+				if containerName := container.ContainerName; containerName != nil {
+					output["container_name"] = *containerName
+				}
+				if fileNameFmt := container.FileNameFormat; fileNameFmt != nil {
+					output["file_name_format"] = *fileNameFmt
+				}
+				if batchFreq := container.BatchFrequencyInSeconds; batchFreq != nil {
+					output["batch_frequency_in_seconds"] = *batchFreq
+				}
+				if chunkSize := container.MaxChunkSizeInBytes; chunkSize != nil {
+					output["max_chunk_size_in_bytes"] = *chunkSize
+				}
+				if resourceGroup := container.ResourceGroup; resourceGroup != nil {
+					output["resource_group_name"] = *resourceGroup
+				}
+
+				output["encoding"] = string(container.Encoding)
+				output["type"] = "AzureIotHub.StorageContainer"
+
+				results = append(results, output)
+			}
+		}
+
+		if queues := input.Endpoints.ServiceBusQueues; queues != nil {
+			for _, queue := range *queues {
+				output := make(map[string]interface{})
+
+				authenticationType := string(devices.AuthenticationTypeKeyBased)
+				if string(queue.AuthenticationType) != "" {
+					authenticationType = string(queue.AuthenticationType)
+				}
+				output["authentication_type"] = authenticationType
+
+				connectionStr := ""
+				if queue.ConnectionString != nil {
+					connectionStr = *queue.ConnectionString
+				}
+				output["connection_string"] = connectionStr
+
+				endpointUri := ""
+				if queue.EndpointURI != nil {
+					endpointUri = *queue.EndpointURI
+				}
+				output["endpoint_uri"] = endpointUri
+
+				entityPath := ""
+				if queue.EntityPath != nil {
+					entityPath = *queue.EntityPath
+				}
+				output["entity_path"] = entityPath
+
+				identityId := ""
+				if queue.Identity != nil && queue.Identity.UserAssignedIdentity != nil {
+					identityId = *queue.Identity.UserAssignedIdentity
+				}
+				output["identity_id"] = identityId
+
+				if name := queue.Name; name != nil {
+					output["name"] = *name
+				}
+				if resourceGroup := queue.ResourceGroup; resourceGroup != nil {
+					output["resource_group_name"] = *resourceGroup
+				}
+
+				output["type"] = "AzureIotHub.ServiceBusQueue"
+
+				results = append(results, output)
+			}
+		}
+
+		if topics := input.Endpoints.ServiceBusTopics; topics != nil {
+			for _, topic := range *topics {
+				output := make(map[string]interface{})
+
+				authenticationType := string(devices.AuthenticationTypeKeyBased)
+				if string(topic.AuthenticationType) != "" {
+					authenticationType = string(topic.AuthenticationType)
+				}
+				output["authentication_type"] = authenticationType
+
+				connectionStr := ""
+				if topic.ConnectionString != nil {
+					connectionStr = *topic.ConnectionString
+				}
+				output["connection_string"] = connectionStr
+
+				endpointUri := ""
+				if topic.EndpointURI != nil {
+					endpointUri = *topic.EndpointURI
+				}
+				output["endpoint_uri"] = endpointUri
+
+				entityPath := ""
+				if topic.EntityPath != nil {
+					entityPath = *topic.EntityPath
+				}
+				output["entity_path"] = entityPath
+
+				identityId := ""
+				if topic.Identity != nil && topic.Identity.UserAssignedIdentity != nil {
+					identityId = *topic.Identity.UserAssignedIdentity
+				}
+				output["identity_id"] = identityId
+
+				if name := topic.Name; name != nil {
+					output["name"] = *name
+				}
+				if resourceGroup := topic.ResourceGroup; resourceGroup != nil {
+					output["resource_group_name"] = *resourceGroup
+				}
+
+				output["type"] = "AzureIotHub.ServiceBusTopic"
+
+				results = append(results, output)
+			}
+		}
+
+		if eventHubs := input.Endpoints.EventHubs; eventHubs != nil {
+			for _, eventHub := range *eventHubs {
+				output := make(map[string]interface{})
+
+				authenticationType := string(devices.AuthenticationTypeKeyBased)
+				if string(eventHub.AuthenticationType) != "" {
+					authenticationType = string(eventHub.AuthenticationType)
+				}
+				output["authentication_type"] = authenticationType
+
+				connectionStr := ""
+				if eventHub.ConnectionString != nil {
+					connectionStr = *eventHub.ConnectionString
+				}
+				output["connection_string"] = connectionStr
+
+				endpointUri := ""
+				if eventHub.EndpointURI != nil {
+					endpointUri = *eventHub.EndpointURI
+				}
+				output["endpoint_uri"] = endpointUri
+
+				entityPath := ""
+				if eventHub.EntityPath != nil {
+					entityPath = *eventHub.EntityPath
+				}
+				output["entity_path"] = entityPath
+
+				identityId := ""
+				if eventHub.Identity != nil && eventHub.Identity.UserAssignedIdentity != nil {
+					identityId = *eventHub.Identity.UserAssignedIdentity
+				}
+				output["identity_id"] = identityId
+
+				if name := eventHub.Name; name != nil {
+					output["name"] = *name
+				}
+				if resourceGroup := eventHub.ResourceGroup; resourceGroup != nil {
+					output["resource_group_name"] = *resourceGroup
+				}
+
+				output["type"] = "AzureIotHub.EventHub"
+
+				results = append(results, output)
+			}
+		}
+	}
+
+	return results
+}

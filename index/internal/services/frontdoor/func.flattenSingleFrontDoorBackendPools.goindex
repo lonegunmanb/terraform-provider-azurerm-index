@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSingleFrontDoorBackendPools(input *frontdoors.BackendPool, frontDoorId frontdoors.FrontDoorId) (map[string]interface{}, error) {
+	if input == nil {
+		return make(map[string]interface{}), nil
+	}
+
+	id := ""
+	name := ""
+	if input.Name != nil {
+		name = *input.Name
+		// rewrite the ID to ensure it's consistent
+		id = parse.NewBackendPoolID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, name).ID()
+	}
+
+	backend := make([]interface{}, 0)
+	healthProbeName := ""
+	loadBalancingName := ""
+	if props := input.Properties; props != nil {
+		backend = flattenFrontDoorBackend(props.Backends)
+		if props.HealthProbeSettings != nil && props.HealthProbeSettings.Id != nil {
+			name, err := parse.HealthProbeIDInsensitively(*props.HealthProbeSettings.Id)
+			if err != nil {
+				return nil, err
+			}
+			healthProbeName = name.HealthProbeSettingName
+		}
+
+		if props.LoadBalancingSettings != nil && props.LoadBalancingSettings.Id != nil {
+			name, err := parse.LoadBalancingIDInsensitively(*props.LoadBalancingSettings.Id)
+			if err != nil {
+				return nil, err
+			}
+			loadBalancingName = name.LoadBalancingSettingName
+		}
+	}
+
+	output := map[string]interface{}{
+		"backend":             backend,
+		"health_probe_name":   healthProbeName,
+		"id":                  id,
+		"load_balancing_name": loadBalancingName,
+		"name":                name,
+	}
+
+	return output, nil
+}

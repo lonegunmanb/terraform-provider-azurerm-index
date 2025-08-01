@@ -1,0 +1,317 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-02/diskaccesses"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceManagedDiskCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	client := meta.(*clients.Client).Compute.DisksClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	log.Printf("[INFO] preparing arguments for Azure ARM Managed Disk creation.")
+
+	name := d.Get("name").(string)
+	resourceGroup := d.Get("resource_group_name").(string)
+
+	id := commonids.NewManagedDiskID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing Managed Disk %q (Resource Group %q): %s", name, resourceGroup, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_managed_disk", id.ID())
+		}
+	}
+
+	location := azure.NormalizeLocation(d.Get("location").(string))
+	createOption := disks.DiskCreateOption(d.Get("create_option").(string))
+	storageAccountType := d.Get("storage_account_type").(string)
+	osType := disks.OperatingSystemTypes(d.Get("os_type").(string))
+	maxShares := d.Get("max_shares").(int)
+
+	t := d.Get("tags").(map[string]interface{})
+	skuName := disks.DiskStorageAccountTypes(storageAccountType)
+	encryptionTypePlatformKey := disks.EncryptionTypeEncryptionAtRestWithPlatformKey
+
+	props := &disks.DiskProperties{
+		CreationData: disks.CreationData{
+			CreateOption:    createOption,
+			PerformancePlus: pointer.To(d.Get("performance_plus_enabled").(bool)),
+		},
+		OptimizedForFrequentAttach: pointer.To(d.Get("optimized_frequent_attach_enabled").(bool)),
+		OsType:                     &osType,
+		Encryption: &disks.Encryption{
+			Type: &encryptionTypePlatformKey,
+		},
+	}
+
+	diskSizeGB := d.Get("disk_size_gb").(int)
+	if diskSizeGB != 0 {
+		props.DiskSizeGB = utils.Int64(int64(diskSizeGB))
+	}
+
+	if maxShares != 0 {
+		props.MaxShares = utils.Int64(int64(maxShares))
+	}
+
+	if storageAccountType == string(disks.DiskStorageAccountTypesUltraSSDLRS) || storageAccountType == string(disks.DiskStorageAccountTypesPremiumVTwoLRS) {
+		if d.HasChange("disk_iops_read_write") {
+			v := d.Get("disk_iops_read_write")
+			diskIOPS := int64(v.(int))
+			props.DiskIOPSReadWrite = &diskIOPS
+		}
+
+		if d.HasChange("disk_mbps_read_write") {
+			v := d.Get("disk_mbps_read_write")
+			diskMBps := int64(v.(int))
+			props.DiskMBpsReadWrite = &diskMBps
+		}
+
+		if v, ok := d.GetOk("disk_iops_read_only"); ok {
+			if maxShares == 0 {
+				return fmt.Errorf("[ERROR] disk_iops_read_only is only available for UltraSSD disks and PremiumV2 disks with shared disk enabled")
+			}
+
+			props.DiskIOPSReadOnly = utils.Int64(int64(v.(int)))
+		}
+
+		if v, ok := d.GetOk("disk_mbps_read_only"); ok {
+			if maxShares == 0 {
+				return fmt.Errorf("[ERROR] disk_mbps_read_only is only available for UltraSSD disks and PremiumV2 disks with shared disk enabled")
+			}
+
+			props.DiskMBpsReadOnly = utils.Int64(int64(v.(int)))
+		}
+
+		if v, ok := d.GetOk("logical_sector_size"); ok {
+			props.CreationData.LogicalSectorSize = utils.Int64(int64(v.(int)))
+		}
+	} else if d.HasChange("disk_iops_read_write") || d.HasChange("disk_mbps_read_write") || d.HasChange("disk_iops_read_only") || d.HasChange("disk_mbps_read_only") || d.HasChange("logical_sector_size") {
+		return fmt.Errorf("[ERROR] disk_iops_read_write, disk_mbps_read_write, disk_iops_read_only, disk_mbps_read_only and logical_sector_size are only available for UltraSSD disks and PremiumV2 disks")
+	}
+
+	if createOption == disks.DiskCreateOptionImport || createOption == disks.DiskCreateOptionImportSecure {
+		sourceUri := d.Get("source_uri").(string)
+		if sourceUri == "" {
+			return fmt.Errorf("`source_uri` must be specified when `create_option` is set to `Import` or `ImportSecure`")
+		}
+
+		storageAccountId := d.Get("storage_account_id").(string)
+		if storageAccountId == "" {
+			return fmt.Errorf("`storage_account_id` must be specified when `create_option` is set to `Import` or `ImportSecure`")
+		}
+
+		props.CreationData.StorageAccountId = utils.String(storageAccountId)
+		props.CreationData.SourceUri = utils.String(sourceUri)
+	}
+	if createOption == disks.DiskCreateOptionCopy || createOption == disks.DiskCreateOptionRestore {
+		sourceResourceId := d.Get("source_resource_id").(string)
+		if sourceResourceId == "" {
+			return fmt.Errorf("`source_resource_id` must be specified when `create_option` is set to `Copy` or `Restore`")
+		}
+
+		props.CreationData.SourceResourceId = utils.String(sourceResourceId)
+	}
+	if createOption == disks.DiskCreateOptionFromImage {
+		if imageReferenceId := d.Get("image_reference_id").(string); imageReferenceId != "" {
+			props.CreationData.ImageReference = &disks.ImageDiskReference{
+				Id: utils.String(imageReferenceId),
+			}
+		} else if galleryImageReferenceId := d.Get("gallery_image_reference_id").(string); galleryImageReferenceId != "" {
+			props.CreationData.GalleryImageReference = &disks.ImageDiskReference{
+				Id: utils.String(galleryImageReferenceId),
+			}
+		} else {
+			return fmt.Errorf("`image_reference_id` or `gallery_image_reference_id` must be specified when `create_option` is set to `FromImage`")
+		}
+	}
+
+	if createOption == disks.DiskCreateOptionUpload {
+		if uploadSizeBytes := d.Get("upload_size_bytes").(int); uploadSizeBytes != 0 {
+			props.CreationData.UploadSizeBytes = utils.Int64(int64(uploadSizeBytes))
+		} else {
+			return fmt.Errorf("`upload_size_bytes` must be specified when `create_option` is set to `Upload`")
+		}
+	}
+
+	if v, ok := d.GetOk("encryption_settings"); ok {
+		props.EncryptionSettingsCollection = expandManagedDiskEncryptionSettings(v.([]interface{}))
+	}
+
+	if diskEncryptionSetId := d.Get("disk_encryption_set_id").(string); diskEncryptionSetId != "" {
+		encryptionType, err := retrieveDiskEncryptionSetEncryptionType(ctx, meta.(*clients.Client).Compute.DiskEncryptionSetsClient, diskEncryptionSetId)
+		if err != nil {
+			return err
+		}
+
+		props.Encryption = &disks.Encryption{
+			Type:                encryptionType,
+			DiskEncryptionSetId: utils.String(diskEncryptionSetId),
+		}
+	}
+
+	if networkAccessPolicy := d.Get("network_access_policy").(string); networkAccessPolicy != "" {
+		policy := disks.NetworkAccessPolicy(networkAccessPolicy)
+		props.NetworkAccessPolicy = &policy
+	} else {
+		allowAllPolicy := disks.NetworkAccessPolicyAllowAll
+		props.NetworkAccessPolicy = &allowAllPolicy
+	}
+
+	if diskAccessID := d.Get("disk_access_id").(string); d.HasChange("disk_access_id") {
+		switch {
+		case *props.NetworkAccessPolicy == disks.NetworkAccessPolicyAllowPrivate:
+			props.DiskAccessId = utils.String(diskAccessID)
+		case diskAccessID != "" && *props.NetworkAccessPolicy != disks.NetworkAccessPolicyAllowPrivate:
+			return fmt.Errorf("[ERROR] disk_access_id is only available when network_access_policy is set to AllowPrivate")
+		default:
+			props.DiskAccessId = nil
+		}
+	}
+
+	if d.Get("public_network_access_enabled").(bool) {
+		networkAccessEnabled := disks.PublicNetworkAccessEnabled
+		props.PublicNetworkAccess = &networkAccessEnabled
+	} else {
+		networkAccessDisabled := disks.PublicNetworkAccessDisabled
+		props.PublicNetworkAccess = &networkAccessDisabled
+	}
+
+	if tier := d.Get("tier").(string); tier != "" {
+		if storageAccountType != string(disks.DiskStorageAccountTypesPremiumZRS) && storageAccountType != string(disks.DiskStorageAccountTypesPremiumLRS) {
+			return fmt.Errorf("`tier` can only be specified when `storage_account_type` is set to `Premium_LRS` or `Premium_ZRS`")
+		}
+		props.Tier = &tier
+	}
+
+	if d.Get("trusted_launch_enabled").(bool) {
+		diskSecurityTypeTrustedLaunch := disks.DiskSecurityTypesTrustedLaunch
+		props.SecurityProfile = &disks.DiskSecurityProfile{
+			SecurityType: &diskSecurityTypeTrustedLaunch,
+		}
+
+		switch createOption {
+		case disks.DiskCreateOptionFromImage:
+		case disks.DiskCreateOptionImport:
+		case disks.DiskCreateOptionImportSecure:
+		default:
+			return fmt.Errorf("trusted_launch_enabled cannot be set to true with create_option %q. Supported Create Options when Trusted Launch is enabled are `FromImage`, `Import`, `ImportSecure`", createOption)
+		}
+	}
+
+	securityType := d.Get("security_type").(string)
+	secureVMDiskEncryptionId := d.Get("secure_vm_disk_encryption_set_id")
+	if securityType != "" {
+		if d.Get("trusted_launch_enabled").(bool) {
+			return fmt.Errorf("`security_type` cannot be specified when `trusted_launch_enabled` is set to `true`")
+		}
+
+		switch createOption {
+		case disks.DiskCreateOptionFromImage:
+		case disks.DiskCreateOptionImport:
+		case disks.DiskCreateOptionImportSecure:
+		default:
+			return fmt.Errorf("`security_type` can only be specified when `create_option` is set to `FromImage`, `Import` or `ImportSecure`")
+		}
+
+		if disks.DiskSecurityTypesConfidentialVMDiskEncryptedWithCustomerKey == disks.DiskSecurityTypes(securityType) && secureVMDiskEncryptionId == "" {
+			return fmt.Errorf("`secure_vm_disk_encryption_set_id` must be specified when `security_type` is set to `ConfidentialVM_DiskEncryptedWithCustomerKey`")
+		}
+
+		diskSecurityType := disks.DiskSecurityTypes(securityType)
+		props.SecurityProfile = &disks.DiskSecurityProfile{
+			SecurityType: &diskSecurityType,
+		}
+	}
+
+	if secureVMDiskEncryptionId != "" {
+		if disks.DiskSecurityTypesConfidentialVMDiskEncryptedWithCustomerKey != disks.DiskSecurityTypes(securityType) {
+			return fmt.Errorf("`secure_vm_disk_encryption_set_id` can only be specified when `security_type` is set to `ConfidentialVM_DiskEncryptedWithCustomerKey`")
+		}
+		props.SecurityProfile.SecureVMDiskEncryptionSetId = utils.String(secureVMDiskEncryptionId.(string))
+	}
+
+	if d.Get("on_demand_bursting_enabled").(bool) {
+		switch storageAccountType {
+		case string(disks.DiskStorageAccountTypesPremiumLRS):
+		case string(disks.DiskStorageAccountTypesPremiumZRS):
+		default:
+			return fmt.Errorf("`on_demand_bursting_enabled` can only be set to true when `storage_account_type` is set to `Premium_LRS` or `Premium_ZRS`")
+		}
+
+		if diskSizeGB != 0 && diskSizeGB <= 512 {
+			return fmt.Errorf("`on_demand_bursting_enabled` can only be set to true when `disk_size_gb` is larger than 512GB")
+		}
+
+		props.BurstingEnabled = utils.Bool(true)
+	}
+
+	if v, ok := d.GetOk("hyper_v_generation"); ok {
+		hyperVGeneration := disks.HyperVGeneration(v.(string))
+		props.HyperVGeneration = &hyperVGeneration
+	}
+
+	createDisk := disks.Disk{
+		Name:             &name,
+		ExtendedLocation: expandManagedDiskEdgeZone(d.Get("edge_zone").(string)),
+		Location:         location,
+		Properties:       props,
+		Sku: &disks.DiskSku{
+			Name: &skuName,
+		},
+		Tags: tags.Expand(t),
+	}
+
+	if zone, ok := d.GetOk("zone"); ok {
+		createDisk.Zones = &[]string{
+			zone.(string),
+		}
+	}
+
+	err := client.CreateOrUpdateThenPoll(ctx, id, createDisk)
+	if err != nil {
+		return fmt.Errorf("creating/updating Managed Disk %q (Resource Group %q): %+v", name, resourceGroup, err)
+	}
+
+	read, err := client.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("retrieving Managed Disk %q (Resource Group %q): %+v", name, resourceGroup, err)
+	}
+	if read.Model == nil {
+		return fmt.Errorf("reading Managed Disk %s (Resource Group %q): ID was nil", name, resourceGroup)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceManagedDiskRead(d, meta)
+}

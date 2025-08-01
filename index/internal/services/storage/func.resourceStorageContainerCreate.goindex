@@ -1,0 +1,140 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/blobcontainers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/containers"
+)
+func resourceStorageContainerCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	containerClient := meta.(*clients.Client).Storage.ResourceManager.BlobContainers
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	containerName := d.Get("name").(string)
+	accessLevelRaw := d.Get("container_access_type").(string)
+	accessLevel := expandStorageContainerAccessLevel(accessLevelRaw)
+	metaDataRaw := d.Get("metadata").(map[string]interface{})
+	metaData := ExpandMetaData(metaDataRaw)
+
+	if !features.FivePointOh() {
+		storageClient := meta.(*clients.Client).Storage
+		if accountName := d.Get("storage_account_name").(string); accountName != "" {
+			account, err := storageClient.FindAccount(ctx, subscriptionId, accountName)
+			if err != nil {
+				return fmt.Errorf("retrieving Account %q for Container %q: %v", accountName, containerName, err)
+			}
+			if account == nil {
+				return fmt.Errorf("locating Storage Account %q", accountName)
+			}
+
+			containersDataPlaneClient, err := storageClient.ContainersDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingAnyAuthMethod())
+			if err != nil {
+				return fmt.Errorf("building storage client: %v", err)
+			}
+
+			// Determine the blob endpoint, so we can build a data plane ID
+			endpoint, err := account.DataPlaneEndpoint(client.EndpointTypeBlob)
+			if err != nil {
+				return fmt.Errorf("determining Blob endpoint: %v", err)
+			}
+
+			// Parse the blob endpoint as a data plane account ID
+			accountId, err := accounts.ParseAccountID(*endpoint, storageClient.StorageDomainSuffix)
+			if err != nil {
+				return fmt.Errorf("parsing Account ID: %v", err)
+			}
+
+			id := containers.NewContainerID(*accountId, containerName)
+
+			exists, err := containersDataPlaneClient.Exists(ctx, containerName)
+			if err != nil {
+				return fmt.Errorf("checking for existing %s: %v", id, err)
+			}
+			if exists != nil && *exists {
+				return tf.ImportAsExistsError("azurerm_storage_container", id.ID())
+			}
+
+			log.Printf("[INFO] Creating %s", id)
+			input := containers.CreateInput{
+				AccessLevel: accessLevel,
+				MetaData:    metaData,
+			}
+
+			if encryptionScope := d.Get("default_encryption_scope"); encryptionScope.(string) != "" {
+				input.DefaultEncryptionScope = encryptionScope.(string)
+				input.EncryptionScopeOverrideDisabled = false
+
+				if encryptionScopeOverrideEnabled := d.Get("encryption_scope_override_enabled"); !encryptionScopeOverrideEnabled.(bool) {
+					input.EncryptionScopeOverrideDisabled = true
+				}
+			}
+
+			if err = containersDataPlaneClient.Create(ctx, containerName, input); err != nil {
+				return fmt.Errorf("creating %s: %v", id, err)
+			}
+			d.SetId(id.ID())
+
+			return resourceStorageContainerRead(d, meta)
+		}
+	}
+
+	accountId, err := commonids.ParseStorageAccountID(d.Get("storage_account_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := commonids.NewStorageContainerID(subscriptionId, accountId.ResourceGroupName, accountId.StorageAccountName, containerName)
+
+	existing, err := containerClient.Get(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for existing %q: %v", id, err)
+		}
+	}
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_storage_container", id.ID())
+	}
+
+	payload := blobcontainers.BlobContainer{
+		Properties: &blobcontainers.ContainerProperties{
+			PublicAccess: pointer.To(blobcontainers.PublicAccess(containerAccessTypeConversionMap[accessLevelRaw])),
+			Metadata:     pointer.To(metaData),
+		},
+	}
+
+	if encryptionScope := d.Get("default_encryption_scope"); encryptionScope.(string) != "" {
+		payload.Properties.DefaultEncryptionScope = pointer.To(encryptionScope.(string))
+		payload.Properties.DenyEncryptionScopeOverride = pointer.To(false)
+
+		if encryptionScopeOverrideEnabled := d.Get("encryption_scope_override_enabled"); !encryptionScopeOverrideEnabled.(bool) {
+			payload.Properties.DenyEncryptionScopeOverride = pointer.To(true)
+		}
+	}
+
+	if _, err = containerClient.Create(ctx, id, payload); err != nil {
+		return fmt.Errorf("creating %s: %v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceStorageContainerRead(d, meta)
+}

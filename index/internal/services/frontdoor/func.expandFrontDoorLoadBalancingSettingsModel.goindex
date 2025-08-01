@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFrontDoorLoadBalancingSettingsModel(input []interface{}, frontDoorId frontdoors.FrontDoorId) *[]frontdoors.LoadBalancingSettingsModel {
+	if len(input) == 0 {
+		return &[]frontdoors.LoadBalancingSettingsModel{}
+	}
+
+	output := make([]frontdoors.LoadBalancingSettingsModel, 0)
+
+	for _, lbs := range input {
+		loadBalanceSetting := lbs.(map[string]interface{})
+		name := loadBalanceSetting["name"].(string)
+		sampleSize := int64(loadBalanceSetting["sample_size"].(int))
+		successfulSamplesRequired := int64(loadBalanceSetting["successful_samples_required"].(int))
+		additionalLatencyMilliseconds := int64(loadBalanceSetting["additional_latency_milliseconds"].(int))
+		loadBalancingId := parse.NewLoadBalancingID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, name).ID()
+
+		result := frontdoors.LoadBalancingSettingsModel{
+			Id:   utils.String(loadBalancingId),
+			Name: utils.String(name),
+			Properties: &frontdoors.LoadBalancingSettingsProperties{
+				SampleSize:                    utils.Int64(sampleSize),
+				SuccessfulSamplesRequired:     utils.Int64(successfulSamplesRequired),
+				AdditionalLatencyMilliseconds: utils.Int64(additionalLatencyMilliseconds),
+			},
+		}
+		output = append(output, result)
+	}
+
+	return &output
+}

@@ -1,0 +1,163 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceNetAppVolume() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Read: dataSourceNetAppVolumeRead,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Read: pluginsdk.DefaultTimeout(5 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validate.VolumeName,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupNameForDataSource(),
+
+			"location": commonschema.LocationComputed(),
+
+			"zone": commonschema.ZoneSingleComputed(),
+
+			"account_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validate.AccountName,
+			},
+
+			"pool_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validate.PoolName,
+			},
+
+			"mount_ip_addresses": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"volume_path": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"service_level": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"subnet_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"network_features": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"storage_quota_in_gb": {
+				Type:     pluginsdk.TypeInt,
+				Computed: true,
+			},
+
+			"protocols": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+			},
+
+			"security_style": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"data_protection_replication": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"endpoint_type": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"remote_volume_location": commonschema.LocationComputed(),
+
+						"remote_volume_resource_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"replication_frequency": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"data_protection_backup_policy": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"backup_policy_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"policy_enabled": {
+							Type:     pluginsdk.TypeBool,
+							Computed: true,
+						},
+
+						"backup_vault_id": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+					},
+				},
+			},
+
+			"encryption_key_source": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"key_vault_private_endpoint_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"smb_non_browsable_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"smb_access_based_enumeration_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+		},
+	}
+}

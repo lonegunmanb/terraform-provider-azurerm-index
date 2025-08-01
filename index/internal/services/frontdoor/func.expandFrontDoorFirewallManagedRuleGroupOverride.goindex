@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFrontDoorFirewallManagedRuleGroupOverride(input []interface{}) *[]webapplicationfirewallpolicies.ManagedRuleGroupOverride {
+	if len(input) == 0 {
+		return nil
+	}
+
+	managedRuleGroupOverrides := make([]webapplicationfirewallpolicies.ManagedRuleGroupOverride, 0)
+	for _, v := range input {
+		override := v.(map[string]interface{})
+
+		ruleGroupName := override["rule_group_name"].(string)
+		rules := override["rule"].([]interface{})
+		exclusions := override["exclusion"].([]interface{})
+
+		managedRuleGroupOverride := webapplicationfirewallpolicies.ManagedRuleGroupOverride{
+			RuleGroupName: ruleGroupName,
+		}
+
+		if exclusions := expandFrontDoorFirewallManagedRuleGroupExclusion(exclusions); exclusions != nil {
+			managedRuleGroupOverride.Exclusions = exclusions
+		}
+
+		if managedRuleOverride := expandFrontDoorFirewallRuleOverride(rules); managedRuleOverride != nil {
+			managedRuleGroupOverride.Rules = managedRuleOverride
+		}
+
+		managedRuleGroupOverrides = append(managedRuleGroupOverrides, managedRuleGroupOverride)
+	}
+
+	return &managedRuleGroupOverrides
+}

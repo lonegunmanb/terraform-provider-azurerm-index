@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/client
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2023-07-01/managedhsms"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+)
+func (c *Client) BaseUriForManagedHSM(ctx context.Context, managedHsmId managedhsms.ManagedHSMId) (*string, error) {
+	cacheKey := c.cacheKeyForManagedHSM(managedHsmId.ManagedHSMName)
+	keysmith.Lock()
+	if lock[cacheKey] == nil {
+		lock[cacheKey] = &sync.RWMutex{}
+	}
+	keysmith.Unlock()
+	lock[cacheKey].Lock()
+	defer lock[cacheKey].Unlock()
+
+	if v, ok := cache[cacheKey]; ok {
+		return &v.dataPlaneBaseUri, nil
+	}
+
+	resp, err := c.ManagedHsmClient.Get(ctx, managedHsmId)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return nil, fmt.Errorf("%s was not found", managedHsmId)
+		}
+		return nil, fmt.Errorf("retrieving %s: %+v", managedHsmId, err)
+	}
+
+	dataPlaneUri := ""
+	if model := resp.Model; model != nil {
+		if model.Properties.HsmUri != nil {
+			dataPlaneUri = *model.Properties.HsmUri
+		}
+	}
+	if dataPlaneUri == "" {
+		return nil, fmt.Errorf("retrieving %s: `properties.HsmUri` was nil", managedHsmId)
+	}
+
+	c.AddToCache(managedHsmId, dataPlaneUri)
+	return &dataPlaneUri, nil
+}

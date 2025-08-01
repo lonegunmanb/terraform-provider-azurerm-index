@@ -1,0 +1,77 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFrontDoorRoutingRule(input []interface{}, frontDoorId frontdoors.FrontDoorId, rulesEngines *map[string]*frontdoors.SubResource) *[]frontdoors.RoutingRule {
+	if len(input) == 0 {
+		return nil
+	}
+
+	output := make([]frontdoors.RoutingRule, 0)
+
+	for _, rr := range input {
+		routingRule := rr.(map[string]interface{})
+		name := routingRule["name"].(string)
+		frontendEndpoints := routingRule["frontend_endpoints"].([]interface{})
+		acceptedProtocols := routingRule["accepted_protocols"].([]interface{})
+		ptm := routingRule["patterns_to_match"].([]interface{})
+		enabled := frontdoors.RoutingRuleEnabledState(expandFrontDoorEnabledState(routingRule["enabled"].(bool)))
+
+		patternsToMatch := make([]string, 0)
+		for _, p := range ptm {
+			patternsToMatch = append(patternsToMatch, p.(string))
+		}
+
+		var routingConfiguration frontdoors.RouteConfiguration
+		if rc := routingRule["redirect_configuration"].([]interface{}); len(rc) != 0 {
+			routingConfiguration = expandFrontDoorRedirectConfiguration(rc)
+		} else if fc := routingRule["forwarding_configuration"].([]interface{}); len(fc) != 0 {
+			routingConfiguration = expandFrontDoorForwardingConfiguration(fc, frontDoorId)
+		}
+		routingRuleId := parse.NewRoutingRuleID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, name).ID()
+
+		currentRoutingRule := frontdoors.RoutingRule{
+			Id:   utils.String(routingRuleId),
+			Name: utils.String(name),
+			Properties: &frontdoors.RoutingRuleProperties{
+				FrontendEndpoints:  expandFrontDoorFrontEndEndpoints(frontendEndpoints, frontDoorId),
+				AcceptedProtocols:  expandFrontDoorAcceptedProtocols(acceptedProtocols),
+				PatternsToMatch:    &patternsToMatch,
+				EnabledState:       &enabled,
+				RouteConfiguration: routingConfiguration,
+			},
+		}
+
+		// Preserve existing rules engine for this routing rule
+		// https://github.com/hashicorp/terraform-provider-azurerm/issues/7455#issuecomment-882769364
+		if rulesEngines != nil {
+			if rulesEngine, ok := (*rulesEngines)[name]; ok {
+				currentRoutingRule.Properties.RulesEngine = rulesEngine
+			}
+		}
+
+		output = append(output, currentRoutingRule)
+	}
+
+	return &output
+}

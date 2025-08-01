@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/routefilters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/expressroutecircuitconnections"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/expressroutecircuitpeerings"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func convertCircuitConnectionsToPeeringConnections(input *[]expressroutecircuitconnections.ExpressRouteCircuitConnection) *[]expressroutecircuitpeerings.ExpressRouteCircuitConnection {
+	output := make([]expressroutecircuitpeerings.ExpressRouteCircuitConnection, 0)
+
+	if input == nil || len(*input) == 0 {
+		return &output
+	}
+
+	for _, i := range *input {
+		o := expressroutecircuitpeerings.ExpressRouteCircuitConnection{
+			Etag: i.Etag,
+			Id:   i.Id,
+			Name: i.Name,
+			Type: i.Type,
+		}
+
+		if props := i.Properties; props != nil {
+			o.Properties = &expressroutecircuitpeerings.ExpressRouteCircuitConnectionPropertiesFormat{
+				AddressPrefix:           props.AddressPrefix,
+				AuthorizationKey:        props.AuthorizationKey,
+				CircuitConnectionStatus: (*expressroutecircuitpeerings.CircuitConnectionStatus)(props.CircuitConnectionStatus),
+				ExpressRouteCircuitPeering: &expressroutecircuitpeerings.SubResource{
+					Id: props.ExpressRouteCircuitPeering.Id,
+				},
+				IPv6CircuitConnectionConfig: &expressroutecircuitpeerings.IPv6CircuitConnectionConfig{
+					AddressPrefix:           props.IPv6CircuitConnectionConfig.AddressPrefix,
+					CircuitConnectionStatus: (*expressroutecircuitpeerings.CircuitConnectionStatus)(props.IPv6CircuitConnectionConfig.CircuitConnectionStatus),
+				},
+				PeerExpressRouteCircuitPeering: &expressroutecircuitpeerings.SubResource{
+					Id: props.PeerExpressRouteCircuitPeering.Id,
+				},
+				ProvisioningState: (*expressroutecircuitpeerings.ProvisioningState)(props.ProvisioningState),
+			}
+		}
+		output = append(output, o)
+	}
+	return &output
+}

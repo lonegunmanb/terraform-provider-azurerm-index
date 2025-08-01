@@ -1,0 +1,119 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewayRequestRoutingRules(d *pluginsdk.ResourceData, gatewayID string) (*[]applicationgateways.ApplicationGatewayRequestRoutingRule, error) {
+	vs := d.Get("request_routing_rule").(*pluginsdk.Set).List()
+	results := make([]applicationgateways.ApplicationGatewayRequestRoutingRule, 0)
+	priorityset := false
+
+	for _, raw := range vs {
+		v := raw.(map[string]interface{})
+
+		name := v["name"].(string)
+		ruleType := v["rule_type"].(string)
+		httpListenerName := v["http_listener_name"].(string)
+		httpListenerID := fmt.Sprintf("%s/httpListeners/%s", gatewayID, httpListenerName)
+		backendAddressPoolName := v["backend_address_pool_name"].(string)
+		backendHTTPSettingsName := v["backend_http_settings_name"].(string)
+		redirectConfigName := v["redirect_configuration_name"].(string)
+		priority := int64(v["priority"].(int))
+
+		rule := applicationgateways.ApplicationGatewayRequestRoutingRule{
+			Name: pointer.To(name),
+			Properties: &applicationgateways.ApplicationGatewayRequestRoutingRulePropertiesFormat{
+				RuleType: pointer.To(applicationgateways.ApplicationGatewayRequestRoutingRuleType(ruleType)),
+				HTTPListener: &applicationgateways.SubResource{
+					Id: pointer.To(httpListenerID),
+				},
+			},
+		}
+
+		if backendAddressPoolName != "" && redirectConfigName != "" {
+			return nil, fmt.Errorf("Conflict between `backend_address_pool_name` and `redirect_configuration_name` (back-end pool not applicable when redirection specified)")
+		}
+
+		if backendHTTPSettingsName != "" && redirectConfigName != "" {
+			return nil, fmt.Errorf("Conflict between `backend_http_settings_name` and `redirect_configuration_name` (back-end settings not applicable when redirection specified)")
+		}
+
+		if backendAddressPoolName != "" {
+			backendAddressPoolID := fmt.Sprintf("%s/backendAddressPools/%s", gatewayID, backendAddressPoolName)
+			rule.Properties.BackendAddressPool = &applicationgateways.SubResource{
+				Id: pointer.To(backendAddressPoolID),
+			}
+		}
+
+		if backendHTTPSettingsName != "" {
+			backendHTTPSettingsID := fmt.Sprintf("%s/backendHttpSettingsCollection/%s", gatewayID, backendHTTPSettingsName)
+			rule.Properties.BackendHTTPSettings = &applicationgateways.SubResource{
+				Id: pointer.To(backendHTTPSettingsID),
+			}
+		}
+
+		if redirectConfigName != "" {
+			redirectConfigID := fmt.Sprintf("%s/redirectConfigurations/%s", gatewayID, redirectConfigName)
+			rule.Properties.RedirectConfiguration = &applicationgateways.SubResource{
+				Id: pointer.To(redirectConfigID),
+			}
+		}
+
+		if urlPathMapName := v["url_path_map_name"].(string); urlPathMapName != "" {
+			urlPathMapID := fmt.Sprintf("%s/urlPathMaps/%s", gatewayID, urlPathMapName)
+			rule.Properties.UrlPathMap = &applicationgateways.SubResource{
+				Id: pointer.To(urlPathMapID),
+			}
+		}
+
+		if rewriteRuleSetName := v["rewrite_rule_set_name"].(string); rewriteRuleSetName != "" {
+			rewriteRuleSetID := fmt.Sprintf("%s/rewriteRuleSets/%s", gatewayID, rewriteRuleSetName)
+			rule.Properties.RewriteRuleSet = &applicationgateways.SubResource{
+				Id: pointer.To(rewriteRuleSetID),
+			}
+		}
+
+		if priority != 0 {
+			rule.Properties.Priority = &priority
+			priorityset = true
+		}
+
+		results = append(results, rule)
+	}
+
+	if priorityset {
+		for _, rule := range results {
+			if rule.Properties.Priority == nil {
+				return nil, fmt.Errorf("If you wish to use rule priority, you will have to specify rule-priority field values for all the existing request routing rules.")
+			}
+		}
+	}
+
+	return &results, nil
+}

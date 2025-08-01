@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dns
+import (
+	"context"
+	"fmt"
+	"math"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/recordsets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/dns/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/dns/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (DnsZoneResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			zonesClient := metadata.Client.Dns.Zones
+			recordSetsClient := metadata.Client.Dns.RecordSets
+
+			state := DnsZoneResourceModel{}
+
+			id, err := zones.ParseDnsZoneID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := zonesClient.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			soaRecord := recordsets.NewRecordTypeID(id.SubscriptionId, id.ResourceGroupName, id.DnsZoneName, recordsets.RecordTypeSOA, "@")
+			soaRecordResp, err := recordSetsClient.Get(ctx, soaRecord)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			state.SoaRecord = flattenDNSZoneSOARecord(soaRecordResp.Model)
+
+			state.Name = id.DnsZoneName
+			state.ResourceGroupName = id.ResourceGroupName
+
+			if model := resp.Model; model != nil {
+				if props := model.Properties; props != nil {
+					state.NumberOfRecordSets = pointer.From(props.NumberOfRecordSets)
+					state.MaxNumberOfRecordSets = pointer.From(props.MaxNumberOfRecordSets)
+					state.NameServers = pointer.From(props.NameServers)
+				}
+				state.Tags = pointer.From(model.Tags)
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

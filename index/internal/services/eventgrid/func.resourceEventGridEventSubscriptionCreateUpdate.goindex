@@ -1,0 +1,100 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventgrid
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2022-06-15/eventsubscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceEventGridEventSubscriptionCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).EventGrid.EventSubscriptions
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := eventsubscriptions.NewScopedEventSubscriptionID(d.Get("scope").(string), d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_eventgrid_event_subscription", id.ID())
+		}
+	}
+
+	destination := expandEventSubscriptionDestination(d)
+	if destination == nil {
+		return fmt.Errorf("one of the following endpoint types must be specificed to create an EventGrid Event Subscription: %q", possibleEventSubscriptionEndpointTypes())
+	}
+
+	filter, err := expandEventSubscriptionFilter(d)
+	if err != nil {
+		return fmt.Errorf("expanding filters for %s: %+v", id, err)
+	}
+
+	deadLetterDestination := expandEventSubscriptionStorageBlobDeadLetterDestination(d)
+
+	properties := eventsubscriptions.EventSubscriptionProperties{
+		ExpirationTimeUtc:   pointer.To(d.Get("expiration_time_utc").(string)),
+		EventDeliverySchema: pointer.To(eventsubscriptions.EventDeliverySchema(d.Get("event_delivery_schema").(string))),
+		Filter:              filter,
+		Labels:              utils.ExpandStringSlice(d.Get("labels").([]interface{})),
+		RetryPolicy:         expandEventSubscriptionRetryPolicy(d),
+	}
+
+	if v, ok := d.GetOk("delivery_identity"); ok {
+		deliveryIdentityRaw := v.([]interface{})
+		deliveryIdentity, err := expandEventSubscriptionIdentity(deliveryIdentityRaw)
+		if err != nil {
+			return fmt.Errorf("expanding `delivery_identity`: %+v", err)
+		}
+
+		properties.DeliveryWithResourceIdentity = &eventsubscriptions.DeliveryWithResourceIdentity{
+			Identity:    deliveryIdentity,
+			Destination: destination,
+		}
+	} else {
+		properties.Destination = destination
+	}
+
+	if v, ok := d.GetOk("dead_letter_identity"); ok {
+		if deadLetterDestination == nil {
+			return fmt.Errorf("`dead_letter_identity`: `storage_blob_dead_letter_destination` must be specified")
+		}
+		deadLetterIdentityRaw := v.([]interface{})
+		deadLetterIdentity, err := expandEventSubscriptionIdentity(deadLetterIdentityRaw)
+		if err != nil {
+			return fmt.Errorf("expanding `dead_letter_identity`: %+v", err)
+		}
+
+		properties.DeadLetterWithResourceIdentity = &eventsubscriptions.DeadLetterWithResourceIdentity{
+			Identity:              deadLetterIdentity,
+			DeadLetterDestination: deadLetterDestination,
+		}
+	} else {
+		properties.DeadLetterDestination = deadLetterDestination
+	}
+
+	payload := eventsubscriptions.EventSubscription{
+		Properties: &properties,
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, payload); err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceEventGridEventSubscriptionRead(d, meta)
+}

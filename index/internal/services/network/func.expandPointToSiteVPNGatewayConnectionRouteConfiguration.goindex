@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandPointToSiteVPNGatewayConnectionRouteConfiguration(input []interface{}) *virtualwans.RoutingConfiguration {
+	if len(input) == 0 {
+		return nil
+	}
+
+	v := input[0].(map[string]interface{})
+
+	routingConfiguration := &virtualwans.RoutingConfiguration{
+		AssociatedRouteTable: &virtualwans.SubResource{
+			Id: pointer.To(v["associated_route_table_id"].(string)),
+		},
+		PropagatedRouteTables: expandPointToSiteVPNGatewayConnectionRouteConfigurationPropagatedRouteTable(v["propagated_route_table"].([]interface{})),
+	}
+
+	if inboundRouteMapId := v["inbound_route_map_id"].(string); inboundRouteMapId != "" {
+		routingConfiguration.InboundRouteMap = &virtualwans.SubResource{
+			Id: pointer.To(inboundRouteMapId),
+		}
+	}
+
+	if outboundRouteMapId := v["outbound_route_map_id"].(string); outboundRouteMapId != "" {
+		routingConfiguration.OutboundRouteMap = &virtualwans.SubResource{
+			Id: pointer.To(outboundRouteMapId),
+		}
+	}
+
+	return routingConfiguration
+}

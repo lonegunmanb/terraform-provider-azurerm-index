@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apioperation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandApiManagementOperationParameterContract(d *pluginsdk.ResourceData, schemaPath string, input []interface{}) *[]apioperation.ParameterContract {
+	if len(input) == 0 {
+		return &[]apioperation.ParameterContract{}
+	}
+
+	outputs := make([]apioperation.ParameterContract, 0)
+
+	for i, v := range input {
+		vs := v.(map[string]interface{})
+
+		name := vs["name"].(string)
+		description := vs["description"].(string)
+		paramType := vs["type"].(string)
+		required := vs["required"].(bool)
+		valuesRaw := vs["values"].(*pluginsdk.Set).List()
+
+		schemaId := vs["schema_id"].(string)
+		typeName := vs["type_name"].(string)
+		examples := make(map[string]apioperation.ParameterExampleContract)
+		if vs["example"] != nil {
+			examplesRaw := vs["example"].([]interface{})
+			examples = ExpandApiManagementOperationParameterExampleContract(examplesRaw)
+		}
+
+		output := apioperation.ParameterContract{
+			Name:         name,
+			Description:  pointer.To(description),
+			Type:         paramType,
+			Required:     pointer.To(required),
+			DefaultValue: nil,
+			Values:       utils.ExpandStringSlice(valuesRaw),
+			SchemaId:     pointer.To(schemaId),
+			TypeName:     pointer.To(typeName),
+			Examples:     pointer.To(examples),
+		}
+
+		// DefaultValue must be included in Values, else it returns error
+		// when DefaultValue is unset, we need to set it nil
+		// "" is a valid DefaultValue
+		if v, ok := d.GetOk(fmt.Sprintf("%s.%d.default_value", schemaPath, i)); ok {
+			output.DefaultValue = pointer.To(v.(string))
+		}
+		outputs = append(outputs, output)
+	}
+
+	return &outputs
+}

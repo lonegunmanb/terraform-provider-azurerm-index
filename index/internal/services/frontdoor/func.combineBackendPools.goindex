@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func combineBackendPools(allPools []frontdoors.BackendPool, orderedIds []interface{}, frontDoorId frontdoors.FrontDoorId) ([]interface{}, error) {
+	output := make([]interface{}, 0)
+
+	// first find all the ones in the ordered mapping list and add them in the correct order
+	for _, v := range orderedIds {
+		for _, backend := range allPools {
+			if strings.EqualFold(v.(string), *backend.Id) {
+				orderedBackendPool, err := flattenSingleFrontDoorBackendPools(&backend, frontDoorId)
+				if err == nil {
+					output = append(output, orderedBackendPool)
+					break
+				} else {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	// Now check to see if items were added to the resource via the portal and add them to the state file
+	for _, backend := range allPools {
+		found := false
+		for _, orderedId := range orderedIds {
+			if strings.EqualFold(orderedId.(string), *backend.Id) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			newBackendPool, err := flattenSingleFrontDoorBackendPools(&backend, frontDoorId)
+			if err == nil {
+				output = append(output, newBackendPool)
+			} else {
+				return nil, err
+			}
+		}
+	}
+
+	return output, nil
+}

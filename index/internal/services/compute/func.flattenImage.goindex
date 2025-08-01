@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/images"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenImage(input images.Image) map[string]interface{} {
+	name := ""
+	if input.Name != nil {
+		name = *input.Name
+	}
+
+	zoneResilient := false
+	osDisk := make([]interface{}, 0)
+	dataDisks := make([]interface{}, 0)
+	if props := input.Properties; props != nil {
+		osDisk = flattenImagesOSDisk(props.StorageProfile)
+		dataDisks = flattenImagesDataDisks(props.StorageProfile)
+
+		if props.StorageProfile != nil && props.StorageProfile.ZoneResilient != nil {
+			zoneResilient = *props.StorageProfile.ZoneResilient
+		}
+	}
+
+	return map[string]interface{}{
+		"location":       location.Normalize(input.Location),
+		"data_disk":      dataDisks,
+		"name":           name,
+		"os_disk":        osDisk,
+		"tags":           tags.Flatten(input.Tags),
+		"zone_resilient": zoneResilient,
+	}
+}

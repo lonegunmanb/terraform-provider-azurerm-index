@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/chaosstudio
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/chaosstudio/2023-11-01/experiments"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/chaosstudio/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenSteps(input []experiments.Step) (*[]StepSchema, error) {
+	output := make([]StepSchema, 0)
+
+	if len(input) == 0 {
+		return &output, nil
+	}
+
+	for _, step := range input {
+		branches := make([]BranchSchema, 0)
+		for _, branch := range step.Branches {
+			actions, err := flattenActions(branch.Actions)
+			if err != nil {
+				return nil, fmt.Errorf("flattening `actions`: %+v", err)
+			}
+			branches = append(branches, BranchSchema{
+				Actions: *actions,
+				Name:    branch.Name,
+			})
+		}
+		output = append(output, StepSchema{
+			Branch: branches,
+			Name:   step.Name,
+		})
+	}
+
+	return &output, nil
+}

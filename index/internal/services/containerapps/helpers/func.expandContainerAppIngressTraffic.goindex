@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/daprcomponents"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/containerapps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandContainerAppIngressTraffic(input []TrafficWeight, appName string) *[]containerapps.TrafficWeight {
+	if len(input) == 0 {
+		return nil
+	}
+
+	result := make([]containerapps.TrafficWeight, 0)
+
+	for _, v := range input {
+		traffic := containerapps.TrafficWeight{
+			LatestRevision: pointer.To(v.LatestRevision),
+			Weight:         pointer.To(v.Weight),
+		}
+
+		if !v.LatestRevision {
+			traffic.RevisionName = pointer.To(fmt.Sprintf("%s--%s", appName, v.RevisionSuffix))
+		}
+
+		if v.Label != "" {
+			traffic.Label = pointer.To(v.Label)
+		}
+
+		result = append(result, traffic)
+	}
+
+	return &result
+}

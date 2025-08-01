@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func dataSourceFlattenVpnServerConfigurationRadius(input *virtualwans.VpnServerConfigurationProperties) []RadiusModel {
+	if input == nil || (input.RadiusServerAddress == nil && (input.RadiusServers == nil || len(*input.RadiusServers) == 0)) {
+		return []RadiusModel{}
+	}
+
+	clientRootCertificates := make([]RadiusClientRootCertificateModel, 0)
+	if input.RadiusClientRootCertificates != nil {
+		for _, v := range *input.RadiusClientRootCertificates {
+			if v.Name == nil {
+				continue
+			}
+			clientRootCertificates = append(clientRootCertificates, RadiusClientRootCertificateModel{
+				Name:       pointer.ToString(v.Name),
+				Thumbprint: pointer.ToString(v.Thumbprint),
+			})
+		}
+	}
+
+	serverRootCertificates := make([]ClientRootCertificateModel, 0)
+	if input.RadiusServerRootCertificates != nil {
+		for _, v := range *input.RadiusServerRootCertificates {
+			if v.Name == nil {
+				continue
+			}
+
+			serverRootCertificates = append(serverRootCertificates, ClientRootCertificateModel{
+				Name:           pointer.ToString(v.Name),
+				PublicCertData: pointer.ToString(v.PublicCertData),
+			})
+		}
+	}
+
+	servers := make([]ServerModel, 0)
+	if input.RadiusServers != nil && len(*input.RadiusServers) > 0 {
+		for _, v := range *input.RadiusServers {
+			servers = append(servers, ServerModel{
+				Address: v.RadiusServerAddress,
+				Secret:  pointer.ToString(v.RadiusServerSecret),
+				Score:   pointer.ToInt64(v.RadiusServerScore),
+			})
+		}
+	}
+
+	return []RadiusModel{
+		{
+			Server:                servers,
+			ClientRootCertificate: clientRootCertificates,
+			ServerRootCertificate: serverRootCertificates,
+		},
+	}
+}

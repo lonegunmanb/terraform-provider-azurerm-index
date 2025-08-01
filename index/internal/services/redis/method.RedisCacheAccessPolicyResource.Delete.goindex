@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redis
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redis/2024-03-01/redis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r RedisCacheAccessPolicyResource) Delete() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model RedisCacheAccessPolicyResourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding %+v", err)
+			}
+			client := metadata.Client.Redis.Redis
+			id, err := redis.ParseAccessPolicyID(metadata.ResourceData.Id())
+			if err != nil {
+				return fmt.Errorf("while parsing resource ID: %+v", err)
+			}
+
+			locks.ByID(model.RedisCacheID)
+			defer locks.UnlockByID(model.RedisCacheID)
+
+			if err := client.AccessPolicyDeleteThenPoll(ctx, *id); err != nil {
+				return fmt.Errorf("deleting Redis Cache Access Policy %s in Redis Cache %s in resource group %s: %s", id.AccessPolicyName, id.RedisName, id.ResourceGroupName, err)
+			}
+
+			return nil
+		},
+	}
+}

@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/signalr/2023-02-01/signalr"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/migration"
+	signalrValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSignalRLiveTraceConfig(input *signalr.LiveTraceConfiguration) []interface{} {
+	result := make([]interface{}, 0)
+	if input == nil {
+		return result
+	}
+
+	var enabled bool
+	if input.Enabled != nil {
+		enabled = strings.EqualFold(*input.Enabled, "true")
+	}
+
+	var (
+		messagingLogEnabled    bool
+		connectivityLogEnabled bool
+		httpLogsEnabled        bool
+	)
+
+	if input.Categories != nil {
+		for _, item := range *input.Categories {
+			name := ""
+			if item.Name != nil {
+				name = *item.Name
+			}
+
+			var cateEnabled string
+			if item.Enabled != nil {
+				cateEnabled = *item.Enabled
+			}
+
+			switch name {
+			case "MessagingLogs":
+				messagingLogEnabled = strings.EqualFold(cateEnabled, "true")
+			case "ConnectivityLogs":
+				connectivityLogEnabled = strings.EqualFold(cateEnabled, "true")
+			case "HttpRequestLogs":
+				httpLogsEnabled = strings.EqualFold(cateEnabled, "true")
+			default:
+				continue
+			}
+		}
+	}
+	return []interface{}{map[string]interface{}{
+		"enabled":                   enabled,
+		"messaging_logs_enabled":    messagingLogEnabled,
+		"connectivity_logs_enabled": connectivityLogEnabled,
+		"http_request_logs_enabled": httpLogsEnabled,
+	}}
+}

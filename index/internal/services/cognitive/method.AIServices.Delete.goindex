@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2024-10-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	cognitiveValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (AIServices) Delete() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 180 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Cognitive.AccountsClient
+
+			id, err := cognitiveservicesaccounts.ParseAccountID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			log.Printf("[DEBUG] Retrieving %s..", *id)
+			account, err := client.AccountsGet(ctx, *id)
+			if err != nil || account.Model == nil || account.Model.Location == nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			deletedAzureAIServicesId := cognitiveservicesaccounts.NewDeletedAccountID(id.SubscriptionId, *account.Model.Location, id.ResourceGroupName, id.AccountName)
+			if err != nil {
+				return err
+			}
+
+			log.Printf("[DEBUG] Deleting %s..", *id)
+			if err := client.AccountsDeleteThenPoll(ctx, *id); err != nil {
+				return fmt.Errorf("deleting %s: %+v", *id, err)
+			}
+			if metadata.Client.Features.CognitiveAccount.PurgeSoftDeleteOnDestroy {
+				log.Printf("[DEBUG] Purging %s..", *id)
+				if err := client.DeletedAccountsPurgeThenPoll(ctx, deletedAzureAIServicesId); err != nil {
+					return fmt.Errorf("purging %s: %+v", *id, err)
+				}
+			} else {
+				log.Printf("[DEBUG] Skipping Purge of %s", *id)
+			}
+
+			return nil
+		},
+	}
+}

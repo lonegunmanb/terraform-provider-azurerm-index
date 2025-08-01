@@ -1,0 +1,80 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	workbooktemplates "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-11-20/workbooktemplatesapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r ApplicationInsightsWorkbookTemplateResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model ApplicationInsightsWorkbookTemplateModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			client := metadata.Client.AppInsights.WorkbookTemplateClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+			id := workbooktemplates.NewWorkbookTemplateID(subscriptionId, model.ResourceGroupName, model.Name)
+			existing, err := client.WorkbookTemplatesGet(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for existing %s: %+v", id, err)
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			var templateDataValue interface{}
+			err = json.Unmarshal([]byte(model.TemplateData), &templateDataValue)
+			if err != nil {
+				return err
+			}
+
+			properties := &workbooktemplates.WorkbookTemplate{
+				Location: location.Normalize(model.Location),
+				Properties: &workbooktemplates.WorkbookTemplateProperties{
+					Priority:     &model.Priority,
+					TemplateData: templateDataValue,
+				},
+
+				Tags: &model.Tags,
+			}
+
+			if model.Author != "" {
+				properties.Properties.Author = &model.Author
+			}
+
+			if model.Localized != "" {
+				var localizedValue map[string][]workbooktemplates.WorkbookTemplateLocalizedGallery
+				if err := json.Unmarshal([]byte(model.Localized), &localizedValue); err != nil {
+					return err
+				}
+
+				properties.Properties.Localized = &localizedValue
+			}
+
+			galleriesValue := expandWorkbookTemplateGalleryModel(model.Galleries)
+			if galleriesValue != nil {
+				properties.Properties.Galleries = *galleriesValue
+			}
+
+			if _, err := client.WorkbookTemplatesCreateOrUpdate(ctx, id, *properties); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

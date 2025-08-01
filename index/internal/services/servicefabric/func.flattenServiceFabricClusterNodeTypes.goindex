@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicefabric
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicefabric/2021-06-01/cluster"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	serviceFabricValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicefabric/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenServiceFabricClusterNodeTypes(input []cluster.NodeTypeDescription) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	results := make([]interface{}, 0)
+
+	for _, v := range input {
+		output := make(map[string]interface{})
+
+		output["name"] = v.Name
+		output["instance_count"] = v.VMInstanceCount
+		output["is_primary"] = v.IsPrimary
+		output["client_endpoint_port"] = v.ClientConnectionEndpointPort
+		output["http_endpoint_port"] = v.HTTPGatewayEndpointPort
+
+		if placementProperties := v.PlacementProperties; placementProperties != nil {
+			output["placement_properties"] = *placementProperties
+		}
+
+		if capacities := v.Capacities; capacities != nil {
+			output["capacities"] = *capacities
+		}
+
+		if port := v.ReverseProxyEndpointPort; port != nil {
+			output["reverse_proxy_endpoint_port"] = *port
+		}
+
+		if isStateless := v.IsStateless; isStateless != nil {
+			output["is_stateless"] = *isStateless
+		}
+
+		if multipleAvailabilityZones := v.MultipleAvailabilityZones; multipleAvailabilityZones != nil {
+			output["multiple_availability_zones"] = *multipleAvailabilityZones
+		}
+
+		if durabilityLevel := v.DurabilityLevel; durabilityLevel != nil {
+			output["durability_level"] = string(*v.DurabilityLevel)
+		}
+
+		applicationPorts := make([]interface{}, 0)
+		if ports := v.ApplicationPorts; ports != nil {
+			r := make(map[string]interface{})
+			r["start_port"] = int(ports.StartPort)
+			r["end_port"] = int(ports.EndPort)
+			applicationPorts = append(applicationPorts, r)
+		}
+		output["application_ports"] = applicationPorts
+
+		ephemeralPorts := make([]interface{}, 0)
+		if ports := v.EphemeralPorts; ports != nil {
+			r := make(map[string]interface{})
+			r["start_port"] = int(ports.StartPort)
+			r["end_port"] = int(ports.EndPort)
+			ephemeralPorts = append(ephemeralPorts, r)
+		}
+		output["ephemeral_ports"] = ephemeralPorts
+
+		results = append(results, output)
+	}
+
+	return results
+}

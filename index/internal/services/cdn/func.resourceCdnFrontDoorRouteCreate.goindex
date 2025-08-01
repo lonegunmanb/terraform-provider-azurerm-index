@@ -1,0 +1,138 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCdnFrontDoorRouteCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Cdn.FrontDoorRoutesClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	endpointRaw := d.Get("cdn_frontdoor_endpoint_id").(string)
+	endpoint, err := parse.FrontDoorEndpointID(endpointRaw)
+	if err != nil {
+		return err
+	}
+
+	id := parse.NewFrontDoorRouteID(endpoint.SubscriptionId, endpoint.ResourceGroup, endpoint.ProfileName, endpoint.AfdEndpointName, d.Get("name").(string))
+
+	existing, err := client.Get(ctx, id.ResourceGroup, id.ProfileName, id.AfdEndpointName, id.RouteName)
+	if err != nil {
+		if !utils.ResponseWasNotFound(existing.Response) {
+			return fmt.Errorf("checking for existing %s: %+v", id, err)
+		}
+	}
+
+	if !utils.ResponseWasNotFound(existing.Response) {
+		return tf.ImportAsExistsError("azurerm_cdn_frontdoor_route", id.ID())
+	}
+
+	protocolsRaw := d.Get("supported_protocols").(*pluginsdk.Set).List()
+	originGroupRaw := d.Get("cdn_frontdoor_origin_group_id").(string)
+	ruleSetIdsRaw := d.Get("cdn_frontdoor_rule_set_ids").(*pluginsdk.Set).List()
+	originsRaw := d.Get("cdn_frontdoor_origin_ids").([]interface{})
+	customDomainsRaw := d.Get("cdn_frontdoor_custom_domain_ids").(*pluginsdk.Set).List()
+	httpsRedirect := d.Get("https_redirect_enabled").(bool)
+	linkToDefaultDomain := d.Get("link_to_default_domain").(bool)
+
+	// NOTE: If HTTPS Redirect is enabled the Supported Protocols must support both HTTP and HTTPS
+	// This configuration does not cause an error when provisioned, however the http requests that
+	// are supposed to be redirected to https remain http requests
+	if httpsRedirect {
+		if err := validate.SupportsBothHttpAndHttps(protocolsRaw, "https_redirect_enabled"); err != nil {
+			return err
+		}
+	}
+
+	normalizedCustomDomains, err := expandCustomDomains(customDomainsRaw)
+	if err != nil {
+		return err
+	}
+
+	if !linkToDefaultDomain && len(normalizedCustomDomains) == 0 {
+		return fmt.Errorf("it is invalid to disable the 'LinkToDefaultDomain' for the CDN Front Door Route(Name: %s) since the route does not have any CDN Front Door Custom Domains associated with it", id.RouteName)
+	} else if len(normalizedCustomDomains) != 0 {
+		if err := sliceHasDuplicates(normalizedCustomDomains, "CDN FrontDoor Custom Domain"); err != nil {
+			return err
+		}
+
+		if err := validateRoutesCustomDomainProfile(normalizedCustomDomains, id.ProfileName); err != nil {
+			return err
+		}
+	}
+
+	var originGroup *cdn.ResourceReference
+	if originGroupRaw != "" {
+		id, err := parse.FrontDoorOriginGroupID(originGroupRaw)
+		if err != nil {
+			return err
+		}
+
+		originGroup = expandResourceReference(id.ID())
+	}
+
+	normalizedRuleSets, err := expandRuleSetIds(ruleSetIdsRaw)
+	if err != nil {
+		return err
+	}
+
+	props := cdn.Route{
+		RouteProperties: &cdn.RouteProperties{
+			CustomDomains:       expandCustomDomainActivatedResourceArray(normalizedCustomDomains),
+			CacheConfiguration:  expandCdnFrontdoorRouteCacheConfiguration(d.Get("cache").([]interface{})),
+			EnabledState:        expandEnabledBool(d.Get("enabled").(bool)),
+			ForwardingProtocol:  cdn.ForwardingProtocol(d.Get("forwarding_protocol").(string)),
+			HTTPSRedirect:       expandEnabledBoolToRouteHttpsRedirect(httpsRedirect),
+			LinkToDefaultDomain: expandEnabledBoolToLinkToDefaultDomain(linkToDefaultDomain),
+			OriginGroup:         originGroup,
+			PatternsToMatch:     utils.ExpandStringSlice(d.Get("patterns_to_match").([]interface{})),
+			RuleSets:            expandRuleSetReferenceArray(normalizedRuleSets),
+			SupportedProtocols:  expandEndpointProtocolsArray(protocolsRaw),
+		},
+	}
+
+	if originPath := d.Get("cdn_frontdoor_origin_path").(string); originPath != "" {
+		props.RouteProperties.OriginPath = utils.String(originPath)
+	}
+
+	future, err := client.Create(ctx, id.ResourceGroup, id.ProfileName, id.AfdEndpointName, id.RouteName, props)
+	if err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("waiting for the creation of %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	// NOTE: These are not sent to the API, they are only here so Terraform
+	// can provision/destroy the resources in the correct order.
+	origins := make([]string, 0, len(originsRaw))
+	for _, origin := range originsRaw {
+		id, err := parse.FrontDoorOriginID(origin.(string))
+		if err != nil {
+			return err
+		}
+
+		origins = append(origins, id.ID())
+	}
+
+	if len(origins) != 0 {
+		d.Set("cdn_frontdoor_origin_ids", origins)
+	}
+
+	return resourceCdnFrontDoorRouteRead(d, meta)
+}

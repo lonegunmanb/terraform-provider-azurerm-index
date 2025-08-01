@@ -1,0 +1,112 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceArmLoadBalancerBackendAddressPoolRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	lbClient := meta.(*clients.Client).LoadBalancers.LoadBalancersClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := loadbalancers.ParseLoadBalancerBackendAddressPoolID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	lbId := loadbalancers.NewLoadBalancerID(id.SubscriptionId, id.ResourceGroupName, id.LoadBalancerName)
+
+	resp, err := lbClient.LoadBalancerBackendAddressPoolsGet(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			d.SetId("")
+			log.Printf("[INFO] %s was not found - removing from state", *id)
+			return nil
+		}
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.BackendAddressPoolName)
+	d.Set("loadbalancer_id", lbId.ID())
+
+	if model := resp.Model; model != nil {
+		if properties := model.Properties; properties != nil {
+			if err := d.Set("tunnel_interface", flattenGatewayLoadBalancerTunnelInterfaces(properties.TunnelInterfaces)); err != nil {
+				return fmt.Errorf("setting `tunnel_interface`: %v", err)
+			}
+
+			var backendIPConfigurations []string
+			if configs := properties.BackendIPConfigurations; configs != nil {
+				for _, backendConfig := range *configs {
+					if backendConfig.Id == nil {
+						continue
+					}
+					backendIPConfigurations = append(backendIPConfigurations, *backendConfig.Id)
+				}
+			}
+			if err := d.Set("backend_ip_configurations", backendIPConfigurations); err != nil {
+				return fmt.Errorf("setting `backend_ip_configurations`: %v", err)
+			}
+
+			d.Set("synchronous_mode", pointer.From(properties.SyncMode))
+
+			network := ""
+			if vnet := properties.VirtualNetwork; vnet != nil && vnet.Id != nil {
+				network = *vnet.Id
+			}
+			d.Set("virtual_network_id", network)
+
+			var loadBalancingRules []string
+			if rules := properties.LoadBalancingRules; rules != nil {
+				for _, rule := range *rules {
+					if rule.Id == nil {
+						continue
+					}
+					loadBalancingRules = append(loadBalancingRules, *rule.Id)
+				}
+			}
+			if err := d.Set("load_balancing_rules", loadBalancingRules); err != nil {
+				return fmt.Errorf("setting `load_balancing_rules`: %v", err)
+			}
+
+			var outboundRules []string
+			if rules := properties.OutboundRules; rules != nil {
+				for _, rule := range *rules {
+					if rule.Id == nil {
+						continue
+					}
+					outboundRules = append(outboundRules, *rule.Id)
+				}
+			}
+			if err := d.Set("outbound_rules", outboundRules); err != nil {
+				return fmt.Errorf("setting `outbound_rules`: %v", err)
+			}
+
+			var inboundNATRules []string
+			if rules := properties.InboundNatRules; rules != nil {
+				for _, rule := range *rules {
+					if rule.Id == nil {
+						continue
+					}
+					inboundNATRules = append(inboundNATRules, *rule.Id)
+				}
+			}
+			if err := d.Set("inbound_nat_rules", inboundNATRules); err != nil {
+				return fmt.Errorf("setting `inbound_nat_rules`: %v", err)
+			}
+		}
+	}
+
+	return nil
+}

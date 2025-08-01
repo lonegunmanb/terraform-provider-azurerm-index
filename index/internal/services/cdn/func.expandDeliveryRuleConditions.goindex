@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/deliveryruleactions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/deliveryruleconditions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandDeliveryRuleConditions(input map[string]interface{}) *[]cdn.BasicDeliveryRuleCondition {
+	conditions := make([]cdn.BasicDeliveryRuleCondition, 0)
+
+	// @tombuildsstuff: we'd generally avoid over generalization, but this is /very/ repetitive so makes sense
+	type expandFunc func(input []interface{}) []cdn.BasicDeliveryRuleCondition
+	conditionTypes := map[string]expandFunc{
+		"cookies_condition":            deliveryruleconditions.ExpandArmCdnEndpointConditionCookies,
+		"device_condition":             deliveryruleconditions.ExpandArmCdnEndpointConditionDevice,
+		"http_version_condition":       deliveryruleconditions.ExpandArmCdnEndpointConditionHTTPVersion,
+		"query_string_condition":       deliveryruleconditions.ExpandArmCdnEndpointConditionQueryString,
+		"post_arg_condition":           deliveryruleconditions.ExpandArmCdnEndpointConditionPostArg,
+		"request_body_condition":       deliveryruleconditions.ExpandArmCdnEndpointConditionRequestBody,
+		"request_header_condition":     deliveryruleconditions.ExpandArmCdnEndpointConditionRequestHeader,
+		"request_method_condition":     deliveryruleconditions.ExpandArmCdnEndpointConditionRequestMethod,
+		"remote_address_condition":     deliveryruleconditions.ExpandArmCdnEndpointConditionRemoteAddress,
+		"request_scheme_condition":     deliveryruleconditions.ExpandArmCdnEndpointConditionRequestScheme,
+		"request_uri_condition":        deliveryruleconditions.ExpandArmCdnEndpointConditionRequestURI,
+		"url_file_extension_condition": deliveryruleconditions.ExpandArmCdnEndpointConditionURLFileExtension,
+		"url_file_name_condition":      deliveryruleconditions.ExpandArmCdnEndpointConditionURLFileName,
+		"url_path_condition":           deliveryruleconditions.ExpandArmCdnEndpointConditionURLPath,
+	}
+
+	for schemaKey, expandFunc := range conditionTypes {
+		raw := input[schemaKey].([]interface{})
+		expanded := expandFunc(raw)
+		conditions = append(conditions, expanded...)
+	}
+
+	return &conditions
+}

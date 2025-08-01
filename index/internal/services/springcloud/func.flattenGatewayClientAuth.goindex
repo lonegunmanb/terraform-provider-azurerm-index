@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appplatform/2024-01-01-preview/appplatform"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenGatewayClientAuth(input *appplatform.GatewayPropertiesClientAuth) []ClientAuthorizationModel {
+	if input == nil || input.Certificates == nil || len(*input.Certificates) == 0 {
+		return make([]ClientAuthorizationModel, 0)
+	}
+	certificateIds := make([]string, 0)
+	if input.Certificates != nil {
+		for _, v := range *input.Certificates {
+			certId, err := appplatform.ParseCertificateIDInsensitively(v)
+			if err == nil {
+				certificateIds = append(certificateIds, certId.ID())
+			}
+		}
+	}
+	verificationEnabled := false
+	if input.CertificateVerification != nil && *input.CertificateVerification == appplatform.GatewayCertificateVerificationEnabled {
+		verificationEnabled = true
+	}
+	return []ClientAuthorizationModel{
+		{
+			CertificateIds:      certificateIds,
+			VerificationEnabled: verificationEnabled,
+		},
+	}
+}

@@ -1,0 +1,104 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachinegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSqlVirtualMachineAutoBackup(autoBackup *sqlvirtualmachines.AutoBackupSettings, d *pluginsdk.ResourceData) []interface{} {
+	if autoBackup == nil || autoBackup.Enable == nil || !*autoBackup.Enable {
+		return []interface{}{}
+	}
+
+	manualSchedule := make([]interface{}, 0)
+	if autoBackup.BackupScheduleType != nil && strings.EqualFold(string(*autoBackup.BackupScheduleType), string(sqlvirtualmachines.BackupScheduleTypeManual)) {
+		var fullBackupStartHour int
+		if autoBackup.FullBackupStartTime != nil {
+			fullBackupStartHour = int(*autoBackup.FullBackupStartTime)
+		}
+
+		var fullBackupWindowHours int
+		if autoBackup.FullBackupWindowHours != nil {
+			fullBackupWindowHours = int(*autoBackup.FullBackupWindowHours)
+		}
+
+		var logBackupFrequency int
+		if autoBackup.LogBackupFrequency != nil {
+			logBackupFrequency = int(*autoBackup.LogBackupFrequency)
+			// API returns 60 minutes as zero
+			if logBackupFrequency == 0 {
+				logBackupFrequency = 60
+			}
+		}
+
+		var fullBackupFrequency string
+		if autoBackup.FullBackupFrequency != nil {
+			fullBackupFrequency = string(*autoBackup.FullBackupFrequency)
+		}
+
+		manualSchedule = []interface{}{
+			map[string]interface{}{
+				"full_backup_frequency":           fullBackupFrequency,
+				"full_backup_start_hour":          fullBackupStartHour,
+				"full_backup_window_in_hours":     fullBackupWindowHours,
+				"log_backup_frequency_in_minutes": logBackupFrequency,
+				"days_of_week":                    flattenSqlVirtualMachineAutoBackupDaysOfWeek(autoBackup.DaysOfWeek),
+			},
+		}
+	}
+
+	var retentionPeriod int
+	if autoBackup.RetentionPeriod != nil {
+		retentionPeriod = int(*autoBackup.RetentionPeriod)
+	}
+
+	// Password, StorageAccessKey, StorageAccountURL are not returned, so we try to copy them
+	// from existing config as a best effort.
+	storageKey := d.Get("auto_backup.0.storage_account_access_key").(string)
+	blobEndpoint := d.Get("auto_backup.0.storage_blob_endpoint").(string)
+	encryptionPassword := ""
+
+	// Copy password from config only if encryption is enabled in Azure
+	if pointer.From(autoBackup.EnableEncryption) {
+		encryptionPassword = d.Get("auto_backup.0.encryption_password").(string)
+	}
+
+	ret := []interface{}{
+		map[string]interface{}{
+			"encryption_password":             encryptionPassword,
+			"manual_schedule":                 manualSchedule,
+			"retention_period_in_days":        retentionPeriod,
+			"storage_account_access_key":      storageKey,
+			"storage_blob_endpoint":           blobEndpoint,
+			"system_databases_backup_enabled": autoBackup.BackupSystemDbs != nil && *autoBackup.BackupSystemDbs,
+		},
+	}
+
+	if !features.FivePointOh() {
+		ret[0].(map[string]interface{})["encryption_enabled"] = pointer.From(autoBackup.EnableEncryption)
+	}
+
+	return ret
+}

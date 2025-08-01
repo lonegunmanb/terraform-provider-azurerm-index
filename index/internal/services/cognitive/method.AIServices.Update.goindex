@@ -1,0 +1,138 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2024-10-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	cognitiveValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (AIServices) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 180 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Cognitive.AccountsClient
+
+			var model AIServicesModel
+
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			id, err := cognitiveservicesaccounts.ParseAccountID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.AccountsGet(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			props := resp.Model
+			if metadata.ResourceData.HasChange("network_acls") {
+				networkACLs, subnetIds := expandNetworkACLs(model.NetworkACLs)
+				locks.MultipleByName(&subnetIds, network.VirtualNetworkResourceName)
+				defer locks.UnlockMultipleByName(&subnetIds, network.VirtualNetworkResourceName)
+
+				// also lock on the Virtual Network ID's since modifications in the networking stack are exclusive
+				virtualNetworkNames := make([]string, 0)
+				for _, v := range subnetIds {
+					subnetId, err := commonids.ParseSubnetIDInsensitively(v)
+					if err != nil {
+						return err
+					}
+					if !utils.SliceContainsValue(virtualNetworkNames, subnetId.VirtualNetworkName) {
+						virtualNetworkNames = append(virtualNetworkNames, subnetId.VirtualNetworkName)
+					}
+				}
+
+				locks.MultipleByName(&virtualNetworkNames, network.VirtualNetworkResourceName)
+				defer locks.UnlockMultipleByName(&virtualNetworkNames, network.VirtualNetworkResourceName)
+
+				props.Properties.NetworkAcls = networkACLs
+			}
+
+			if metadata.ResourceData.HasChange("sku_name") {
+				props.Sku = &cognitiveservicesaccounts.Sku{
+					Name: model.SkuName,
+				}
+			}
+
+			if metadata.ResourceData.HasChange("custom_subdomain_name") {
+				props.Properties.CustomSubDomainName = pointer.To(model.CustomSubdomainName)
+			}
+
+			if metadata.ResourceData.HasChange("fqdns") {
+				props.Properties.AllowedFqdnList = pointer.To(model.Fqdns)
+			}
+
+			if metadata.ResourceData.HasChange("public_network_access") {
+				props.Properties.PublicNetworkAccess = pointer.To(cognitiveservicesaccounts.PublicNetworkAccess(model.PublicNetworkAccess))
+			}
+
+			if metadata.ResourceData.HasChange("outbound_network_access_restricted") {
+				props.Properties.RestrictOutboundNetworkAccess = pointer.To(model.OutboundNetworkAccessRestricted)
+			}
+
+			if metadata.ResourceData.HasChange("local_authentication_enabled") {
+				props.Properties.DisableLocalAuth = pointer.To(!model.LocalAuthorizationEnabled)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				props.Tags = pointer.To(model.Tags)
+			}
+
+			if metadata.ResourceData.HasChange("customer_managed_key") {
+				customerManagedKey, err := expandCustomerManagedKey(model.CustomerManagedKey)
+				if err != nil {
+					return fmt.Errorf("expanding `customer_managed_key`: %+v", err)
+				}
+
+				if customerManagedKey != nil {
+					props.Properties.Encryption = customerManagedKey
+				}
+			}
+
+			if metadata.ResourceData.HasChange("identity") {
+				expandIdentity, err := identity.ExpandSystemAndUserAssignedMapFromModel(model.Identity)
+				if err != nil {
+					return fmt.Errorf("expanding `identity`: %+v", err)
+				}
+				props.Identity = expandIdentity
+			}
+
+			if err := client.AccountsUpdateThenPoll(ctx, *id, *props); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

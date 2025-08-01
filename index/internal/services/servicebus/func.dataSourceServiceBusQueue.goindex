@@ -1,0 +1,156 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/queues"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2022-10-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceServiceBusQueue() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		Read: dataSourceServiceBusQueueRead,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Read: pluginsdk.DefaultTimeout(5 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: azValidate.QueueName(),
+			},
+
+			"namespace_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: namespaces.ValidateNamespaceID,
+			},
+
+			"auto_delete_on_idle": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"dead_lettering_on_message_expiration": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"default_message_ttl": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"duplicate_detection_history_time_window": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"batched_operations_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"express_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"partitioning_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"forward_dead_lettered_messages_to": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"forward_to": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"lock_duration": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"max_delivery_count": {
+				Type:     pluginsdk.TypeInt,
+				Computed: true,
+			},
+
+			"max_size_in_megabytes": {
+				Type:     pluginsdk.TypeInt,
+				Computed: true,
+			},
+
+			"requires_duplicate_detection": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"requires_session": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"status": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+		},
+	}
+
+	if !features.FivePointOh() {
+		resource.Schema["namespace_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: namespaces.ValidateNamespaceID,
+			AtLeastOneOf: []string{"namespace_id", "namespace_name", "resource_group_name"},
+		}
+
+		resource.Schema["resource_group_name"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: resourcegroups.ValidateName,
+			AtLeastOneOf: []string{"namespace_id", "namespace_name", "resource_group_name"},
+			Deprecated:   "`resource_group_name` will be removed in favour of the property `namespace_id` in version 5.0 of the AzureRM Provider.",
+		}
+
+		resource.Schema["namespace_name"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: azValidate.NamespaceName,
+			AtLeastOneOf: []string{"namespace_id", "namespace_name", "resource_group_name"},
+			Deprecated:   "`namespace_name` will be removed in favour of the property `namespace_id` in version 5.0 of the AzureRM Provider.",
+		}
+
+		resource.Schema["enable_batched_operations"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeBool,
+			Computed: true,
+		}
+
+		resource.Schema["enable_express"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeBool,
+			Computed: true,
+		}
+
+		resource.Schema["enable_partitioning"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeBool,
+			Computed: true,
+		}
+	}
+
+	return resource
+}

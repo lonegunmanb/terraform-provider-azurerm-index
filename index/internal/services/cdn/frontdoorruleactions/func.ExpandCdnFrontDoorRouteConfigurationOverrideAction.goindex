@@ -1,0 +1,119 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdooractions
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-09-01/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandCdnFrontDoorRouteConfigurationOverrideAction(input []interface{}) (*[]rules.DeliveryRuleAction, error) {
+	output := make([]rules.DeliveryRuleAction, 0)
+	m := InitializeCdnFrontDoorActionMappings()
+
+	for _, v := range input {
+		item := v.(map[string]interface{})
+
+		var originGroupOverride rules.OriginGroupOverride
+		var cacheConfiguration rules.CacheConfiguration
+
+		originGroupIdRaw := item["cdn_frontdoor_origin_group_id"].(string)
+		protocol := item["forwarding_protocol"].(string)
+		cacheBehavior := item["cache_behavior"].(string)
+		compressionEnabled := rules.RuleIsCompressionEnabledEnabled
+		queryStringCachingBehavior := item["query_string_caching_behavior"].(string)
+		cacheDuration := item["cache_duration"].(string)
+
+		if !item["compression_enabled"].(bool) {
+			compressionEnabled = rules.RuleIsCompressionEnabledDisabled
+		}
+
+		// NOTE: It is valid to not define the originGroupOverride in the Route Configuration Override Action
+		// however, if you do not define the Origin Group ID you also cannot define the Forwarding Protocol either
+		if originGroupIdRaw != "" {
+			if protocol == "" {
+				return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, the 'forwarding_protocol' field must be set")
+			}
+
+			originGroupOverride = rules.OriginGroupOverride{
+				OriginGroup: &rules.ResourceReference{
+					Id: pointer.To(originGroupIdRaw),
+				},
+				ForwardingProtocol: pointer.To(rules.ForwardingProtocol(protocol)),
+			}
+		} else if originGroupIdRaw == "" && item["forwarding_protocol"].(string) != "" {
+			return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, if the 'cdn_frontdoor_origin_group_id' is not set you cannot define the 'forwarding_protocol', got %q", protocol)
+		}
+
+		if cacheBehavior == string(rules.RuleIsCompressionEnabledDisabled) {
+			if queryStringCachingBehavior != "" {
+				return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, if the 'cache_behavior' is set to 'Disabled' you cannot define the 'query_string_caching_behavior', got %q", queryStringCachingBehavior)
+			}
+
+			if queryParameters := item["query_string_parameters"].([]interface{}); len(queryParameters) != 0 {
+				return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, if the 'cache_behavior' is set to 'Disabled' you cannot define the 'query_string_parameters', got %d", len(queryParameters))
+			}
+
+			if cacheDuration != "" {
+				return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, if the 'cache_behavior' is set to 'Disabled' you cannot define the 'cache_duration', got %q", cacheDuration)
+			}
+		} else {
+			if cacheBehavior == "" {
+				return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, the 'cache_behavior' field must be set")
+			}
+
+			if queryStringCachingBehavior == "" {
+				return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, the 'query_string_caching_behavior' field must be set")
+			}
+
+			// NOTE: if the cacheBehavior is 'HonorOrigin' cacheDuration must be null, issue #19311
+			if cacheBehavior != string(rules.RuleCacheBehaviorHonorOrigin) {
+				if cacheDuration == "" {
+					return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, the 'cache_duration' field must be set")
+				}
+			} else if cacheDuration != "" {
+				return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, the 'cache_duration' field must not be set if the 'cache_behavior' is 'HonorOrigin'")
+			}
+
+			cacheConfiguration = rules.CacheConfiguration{
+				QueryStringCachingBehavior: pointer.To(rules.RuleQueryStringCachingBehavior(queryStringCachingBehavior)),
+				QueryParameters:            expandStringSliceToCsvFormat(item["query_string_parameters"].([]interface{})),
+				IsCompressionEnabled:       pointer.To(compressionEnabled),
+				CacheBehavior:              pointer.To(rules.RuleCacheBehavior(cacheBehavior)),
+			}
+
+			if cacheDuration != "" {
+				cacheConfiguration.CacheDuration = utils.String(cacheDuration)
+			}
+
+			if queryParameters := cacheConfiguration.QueryParameters; queryParameters == nil {
+				if pointer.From(cacheConfiguration.QueryStringCachingBehavior) == rules.RuleQueryStringCachingBehaviorIncludeSpecifiedQueryStrings || pointer.From(cacheConfiguration.QueryStringCachingBehavior) == rules.RuleQueryStringCachingBehaviorIgnoreSpecifiedQueryStrings {
+					return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, 'query_string_parameters' cannot be empty if the 'query_string_caching_behavior' is set to 'IncludeSpecifiedQueryStrings' or 'IgnoreSpecifiedQueryStrings'")
+				}
+			} else {
+				if pointer.From(cacheConfiguration.QueryStringCachingBehavior) == rules.RuleQueryStringCachingBehaviorUseQueryString || pointer.From(cacheConfiguration.QueryStringCachingBehavior) == rules.RuleQueryStringCachingBehaviorIgnoreQueryString {
+					return nil, fmt.Errorf("the 'route_configuration_override_action' block is not valid, 'query_string_parameters' must not be set if the'query_string_caching_behavior' is set to 'UseQueryStrings' or 'IgnoreQueryStrings'")
+				}
+			}
+		}
+
+		routeConfigurationOverrideAction := rules.DeliveryRuleRouteConfigurationOverrideAction{
+			Parameters: rules.RouteConfigurationOverrideActionParameters{
+				TypeName: rules.DeliveryRuleActionParametersType(m.RouteConfigurationOverride.TypeName),
+			},
+		}
+
+		if originGroupOverride.OriginGroup != nil {
+			routeConfigurationOverrideAction.Parameters.OriginGroupOverride = &originGroupOverride
+		}
+
+		if cacheConfiguration.CacheDuration != nil || pointer.From(cacheConfiguration.CacheBehavior) == rules.RuleCacheBehaviorHonorOrigin {
+			routeConfigurationOverrideAction.Parameters.CacheConfiguration = &cacheConfiguration
+		}
+
+		output = append(output, routeConfigurationOverrideAction)
+	}
+
+	return &output, nil
+}

@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2023-04-01/devboxdefinitions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2023-04-01/images"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r DevCenterDevBoxDefinitionResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DevCenter.V20230401.DevBoxDefinitions
+
+			id, err := devboxdefinitions.ParseDevCenterDevBoxDefinitionID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var model DevCenterDevBoxDefinitionResourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			parameters := devboxdefinitions.DevBoxDefinitionUpdate{
+				Properties: &devboxdefinitions.DevBoxDefinitionUpdateProperties{},
+			}
+
+			if metadata.ResourceData.HasChange("image_reference_id") {
+				parameters.Properties.ImageReference = &devboxdefinitions.ImageReference{
+					Id: pointer.To(model.ImageReferenceId),
+				}
+			}
+
+			if metadata.ResourceData.HasChange("sku_name") {
+				parameters.Properties.Sku = expandDevCenterDevBoxDefinitionSku(model.SkuName)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				parameters.Tags = pointer.To(model.Tags)
+			}
+
+			if err := client.UpdateThenPoll(ctx, *id, parameters); err != nil {
+				return fmt.Errorf("updating %s: %+v", *id, err)
+			}
+
+			return nil
+		},
+	}
+}

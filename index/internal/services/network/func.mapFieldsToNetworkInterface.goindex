@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func mapFieldsToNetworkInterface(input *[]networkinterfaces.NetworkInterfaceIPConfiguration, info networkInterfaceUpdateInformation) *[]networkinterfaces.NetworkInterfaceIPConfiguration {
+	output := input
+
+	applicationSecurityGroups := make([]networkinterfaces.ApplicationSecurityGroup, 0)
+	for _, id := range info.applicationSecurityGroupIDs {
+		applicationSecurityGroups = append(applicationSecurityGroups, networkinterfaces.ApplicationSecurityGroup{
+			Id: utils.String(id),
+		})
+	}
+
+	applicationGatewayBackendAddressPools := make([]networkinterfaces.ApplicationGatewayBackendAddressPool, 0)
+	for _, id := range info.applicationGatewayBackendAddressPoolIDs {
+		applicationGatewayBackendAddressPools = append(applicationGatewayBackendAddressPools, networkinterfaces.ApplicationGatewayBackendAddressPool{
+			Id: utils.String(id),
+		})
+	}
+
+	loadBalancerInboundNatRules := make([]networkinterfaces.InboundNatRule, 0)
+	for _, id := range info.loadBalancerInboundNatRuleIDs {
+		loadBalancerInboundNatRules = append(loadBalancerInboundNatRules, networkinterfaces.InboundNatRule{
+			Id: utils.String(id),
+		})
+	}
+
+	for _, config := range *output {
+		if config.Properties == nil || config.Properties.PrivateIPAddressVersion == nil || *config.Properties.PrivateIPAddressVersion != networkinterfaces.IPVersionIPvFour {
+			continue
+		}
+
+		loadBalancerBackendAddressPools := make([]networkinterfaces.BackendAddressPool, 0)
+		for id, name := range info.loadBalancerBackendAddressPoolIDs {
+			if config.Name != nil && *config.Name == name {
+				loadBalancerBackendAddressPools = append(loadBalancerBackendAddressPools, networkinterfaces.BackendAddressPool{
+					Id: utils.String(id),
+				})
+			}
+
+			config.Properties.LoadBalancerBackendAddressPools = &loadBalancerBackendAddressPools
+		}
+
+		config.Properties.ApplicationSecurityGroups = &applicationSecurityGroups
+		config.Properties.ApplicationGatewayBackendAddressPools = &applicationGatewayBackendAddressPools
+		config.Properties.LoadBalancerInboundNatRules = &loadBalancerInboundNatRules
+	}
+
+	return output
+}

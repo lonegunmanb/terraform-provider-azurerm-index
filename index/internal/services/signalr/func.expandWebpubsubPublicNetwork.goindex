@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/privateendpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2023-02-01/webpubsub"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandWebpubsubPublicNetwork(input []interface{}) *webpubsub.NetworkACL {
+	allowRTs := make([]webpubsub.WebPubSubRequestType, 0)
+	deniedRTs := make([]webpubsub.WebPubSubRequestType, 0)
+
+	if len(input) == 0 || input[0] == nil {
+		return &webpubsub.NetworkACL{}
+	}
+
+	v := input[0].(map[string]interface{})
+
+	for _, item := range *(utils.ExpandStringSlice(v["allowed_request_types"].(*pluginsdk.Set).List())) {
+		allowRTs = append(allowRTs, webpubsub.WebPubSubRequestType(item))
+	}
+
+	for _, item := range *(utils.ExpandStringSlice(v["denied_request_types"].(*pluginsdk.Set).List())) {
+		deniedRTs = append(deniedRTs, webpubsub.WebPubSubRequestType(item))
+	}
+
+	return &webpubsub.NetworkACL{
+		Allow: &allowRTs,
+		Deny:  &deniedRTs,
+	}
+}

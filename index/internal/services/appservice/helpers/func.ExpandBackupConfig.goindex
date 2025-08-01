@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandBackupConfig(backupConfigs []Backup) (*webapps.BackupRequest, error) {
+	result := &webapps.BackupRequest{}
+	if len(backupConfigs) == 0 {
+		return result, nil
+	}
+
+	backupConfig := backupConfigs[0]
+	backupSchedule := backupConfig.Schedule[0]
+	result.Properties = &webapps.BackupRequestProperties{
+		Enabled:           pointer.To(backupConfig.Enabled),
+		BackupName:        pointer.To(backupConfig.Name),
+		StorageAccountURL: backupConfig.StorageAccountURL,
+		BackupSchedule: &webapps.BackupSchedule{
+			FrequencyInterval:     backupSchedule.FrequencyInterval,
+			FrequencyUnit:         webapps.FrequencyUnit(backupSchedule.FrequencyUnit),
+			KeepAtLeastOneBackup:  backupSchedule.KeepAtLeastOneBackup,
+			RetentionPeriodInDays: backupSchedule.RetentionPeriodDays,
+		},
+	}
+
+	if backupSchedule.StartTime != "" {
+		dateTimeToStart, err := time.Parse(time.RFC3339, backupSchedule.StartTime)
+		if err != nil {
+			return nil, fmt.Errorf("parsing back up start_time: %+v", err)
+		}
+		result.Properties.BackupSchedule.StartTime = pointer.To(dateTimeToStart.String())
+	}
+
+	return result, nil
+}

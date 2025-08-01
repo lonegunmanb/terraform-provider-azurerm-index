@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+)
+func (id ResourceIdGenerator) codeForDescription() string {
+	makeHumanReadable := func(input string) string {
+		chars := make([]rune, 0)
+		for i, c := range input {
+			if unicode.IsUpper(c) && i+1 < len(input) && unicode.IsLower(rune(input[i+1])) {
+				chars = append(chars, ' ')
+			}
+
+			chars = append(chars, c)
+		}
+		out := string(chars)
+		return strings.TrimSpace(out)
+	}
+
+	formatKeys := make([]string, 0)
+	for _, segment := range id.Segments {
+		if segment.FieldName == "SubscriptionId" {
+			continue
+		}
+
+		humanReadableKey := makeHumanReadable(segment.FieldName)
+		formatKeys = append(formatKeys, fmt.Sprintf("\t\tfmt.Sprintf(\"%[1]s %%q\", id.%[2]s),", humanReadableKey, segment.FieldName))
+	}
+
+	reversedKeys := make([]string, 0)
+	for i := len(formatKeys); i != 0; i-- {
+		reversedKeys = append(reversedKeys, formatKeys[i-1])
+	}
+
+	formatKeysString := strings.Join(reversedKeys, "\n")
+	return fmt.Sprintf(`
+func (id %[1]sId) String() string {
+	segments := []string{
+%s
+	}
+	segmentsStr := strings.Join(segments, " / ")
+	return fmt.Sprintf("%%s: (%%s)", %[3]q, segmentsStr)
+}
+`, id.TypeName, formatKeysString, makeHumanReadable(id.TypeName))
+}

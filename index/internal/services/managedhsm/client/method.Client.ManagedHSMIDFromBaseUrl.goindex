@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/client
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2023-07-01/managedhsms"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+)
+func (c *Client) ManagedHSMIDFromBaseUrl(ctx context.Context, subscriptionId commonids.SubscriptionId, managedHsmBaseUrl string, domainSuffix *string) (*managedhsms.ManagedHSMId, error) {
+	endpoint, err := parse.ManagedHSMEndpoint(managedHsmBaseUrl, domainSuffix)
+	if err != nil {
+		return nil, err
+	}
+
+	cacheKey := c.cacheKeyForManagedHSM(endpoint.ManagedHSMName)
+	keysmith.Lock()
+	if lock[cacheKey] == nil {
+		lock[cacheKey] = &sync.RWMutex{}
+	}
+	keysmith.Unlock()
+	lock[cacheKey].Lock()
+	defer lock[cacheKey].Unlock()
+
+	// Check the cache to determine if we have an entry for this Managed HSM
+	if v, ok := cache[cacheKey]; ok {
+		return &v.managedHSMId, nil
+	}
+
+	// Populate the cache if not found
+	if err = c.populateCache(ctx, subscriptionId); err != nil {
+		return nil, err
+	}
+
+	// Now that the cache has been repopulated, check if we have the Managed HSM or not
+	if v, ok := cache[cacheKey]; ok {
+		return &v.managedHSMId, nil
+	}
+
+	// We haven't found it, but Data Sources and Resources need to handle this error separately
+	return nil, nil
+}

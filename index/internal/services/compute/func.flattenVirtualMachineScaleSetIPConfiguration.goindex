@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryapplicationversions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenVirtualMachineScaleSetIPConfiguration(input virtualmachinescalesets.VirtualMachineScaleSetIPConfiguration) map[string]interface{} {
+	var subnetId string
+	var primary bool
+	var publicIPAddresses []interface{}
+
+	if props := input.Properties; props != nil {
+		if props.Subnet != nil && props.Subnet.Id != nil {
+			subnetId = *props.Subnet.Id
+		}
+
+		if props.Primary != nil {
+			primary = *props.Primary
+		}
+
+		if props.PublicIPAddressConfiguration != nil {
+			publicIPAddresses = append(publicIPAddresses, flattenVirtualMachineScaleSetPublicIPAddress(*props.PublicIPAddressConfiguration))
+		}
+
+		applicationGatewayBackendAddressPoolIds := flattenSubResourcesToIDs(props.ApplicationGatewayBackendAddressPools)
+		applicationSecurityGroupIds := flattenSubResourcesToIDs(props.ApplicationSecurityGroups)
+		loadBalancerBackendAddressPoolIds := flattenSubResourcesToIDs(props.LoadBalancerBackendAddressPools)
+		loadBalancerInboundNatRuleIds := flattenSubResourcesToIDs(props.LoadBalancerInboundNatPools)
+
+		return map[string]interface{}{
+			"name":              input.Name,
+			"primary":           primary,
+			"public_ip_address": publicIPAddresses,
+			"subnet_id":         subnetId,
+			"version":           string(pointer.From(props.PrivateIPAddressVersion)),
+			"application_gateway_backend_address_pool_ids": applicationGatewayBackendAddressPoolIds,
+			"application_security_group_ids":               applicationSecurityGroupIds,
+			"load_balancer_backend_address_pool_ids":       loadBalancerBackendAddressPoolIds,
+			"load_balancer_inbound_nat_rules_ids":          loadBalancerInboundNatRuleIds,
+		}
+	}
+	return map[string]interface{}{}
+}

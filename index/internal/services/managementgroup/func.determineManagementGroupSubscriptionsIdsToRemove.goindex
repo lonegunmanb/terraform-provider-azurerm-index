@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/managementgroups/2020-05-01/managementgroups"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func determineManagementGroupSubscriptionsIdsToRemove(existing *[]managementgroups.ManagementGroupChildInfo, updated []string) (*[]string, error) {
+	subscriptionIdsToRemove := make([]string, 0)
+	if existing == nil {
+		return &subscriptionIdsToRemove, nil
+	}
+
+	for _, v := range *existing {
+		if v.Type == nil || *v.Type != managementgroups.ManagementGroupChildTypeSubscriptions || v.Id == nil {
+			continue
+		}
+
+		id, err := commonids.ParseSubscriptionID(*v.Id)
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse Subscription ID %q: %+v", *v.Id, err)
+		}
+
+		// not a Subscription - so let's skip it
+		if id == nil {
+			continue
+		}
+
+		found := false
+		for _, subId := range updated {
+			if id.SubscriptionId == subId {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			subscriptionIdsToRemove = append(subscriptionIdsToRemove, id.SubscriptionId)
+		}
+	}
+
+	return &subscriptionIdsToRemove, nil
+}

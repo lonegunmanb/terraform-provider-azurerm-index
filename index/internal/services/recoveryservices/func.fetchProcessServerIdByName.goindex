@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/recoveryservices/mgmt/2018-07-10/siterecovery" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	vmwaremachines "github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/machines"
+	vmwarerunasaccounts "github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/runasaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservices/2024-01-01/vaults"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotecteditems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotectioncontainers"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func fetchProcessServerIdByName(ctx context.Context, fabricClient *replicationfabrics.ReplicationFabricsClient, fabricId replicationfabrics.ReplicationFabricId, processServerName string) (string, error) {
+	resp, err := fabricClient.Get(ctx, fabricId, replicationfabrics.DefaultGetOperationOptions())
+	if err != nil {
+		return "", err
+	}
+
+	if resp.Model == nil {
+		return "", fmt.Errorf("retrieving %q: Model is nil", fabricId)
+	}
+
+	if resp.Model.Properties == nil {
+		return "", fmt.Errorf("retrieving %q: Properties is nil", fabricId)
+	}
+
+	if resp.Model.Properties.CustomDetails == nil {
+		return "", fmt.Errorf("retrieving %q: CustomDetails is nil", fabricId)
+	}
+
+	if detail, ok := resp.Model.Properties.CustomDetails.(replicationfabrics.InMageRcmFabricSpecificDetails); ok {
+		if detail.ProcessServers == nil {
+			return "", fmt.Errorf("retrieving %q: ProcessServers is nil", fabricId)
+		}
+		for _, server := range *detail.ProcessServers {
+			if strings.EqualFold(*server.Name, processServerName) {
+				return *server.Id, nil
+			}
+		}
+		return "", fmt.Errorf("retrieving %q: process server %s not found", fabricId, processServerName)
+	}
+	return "", fmt.Errorf("retrieving %q: Detail Type mismatch", fabricId)
+}

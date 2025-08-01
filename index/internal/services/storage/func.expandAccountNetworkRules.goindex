@@ -1,0 +1,29 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandAccountNetworkRules(input []interface{}, tenantId string) *storageaccounts.NetworkRuleSet {
+	if len(input) == 0 {
+		// Default access is enabled when no network rules are set.
+		return &storageaccounts.NetworkRuleSet{
+			Bypass:              pointer.To(storageaccounts.BypassAzureServices),
+			DefaultAction:       storageaccounts.DefaultActionAllow,
+			IPRules:             &[]storageaccounts.IPRule{},
+			ResourceAccessRules: &[]storageaccounts.ResourceAccessRule{},
+			VirtualNetworkRules: &[]storageaccounts.VirtualNetworkRule{},
+		}
+	}
+
+	item := input[0].(map[string]interface{})
+	return &storageaccounts.NetworkRuleSet{
+		Bypass:              expandAccountNetworkRuleBypass(item["bypass"].(*pluginsdk.Set).List()),
+		DefaultAction:       storageaccounts.DefaultAction(item["default_action"].(string)),
+		IPRules:             expandAccountNetworkRuleIPRules(item["ip_rules"].(*pluginsdk.Set).List()),
+		ResourceAccessRules: expandAccountNetworkRulePrivateLinkAccess(item["private_link_access"].([]interface{}), tenantId),
+		VirtualNetworkRules: expandAccountNetworkRuleVirtualNetworkRules(item["virtual_network_subnet_ids"].(*pluginsdk.Set).List()),
+	}
+}

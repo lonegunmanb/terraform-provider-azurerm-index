@@ -1,0 +1,114 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/kermit/sdk/web/2022-09-01/web"
+)
+func authV2LoginSchema() *pluginsdk.Schema {
+	return &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		MaxItems: 1,
+		Required: true,
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"logout_endpoint": {
+					Type:        pluginsdk.TypeString,
+					Optional:    true,
+					Description: "The endpoint to which logout requests should be made.",
+				},
+
+				"token_store_enabled": {
+					Type:        pluginsdk.TypeBool,
+					Optional:    true,
+					Default:     false,
+					Description: "Should the Token Store configuration Enabled. Defaults to `false`",
+				},
+
+				"token_refresh_extension_time": {
+					Type:         pluginsdk.TypeFloat,
+					Optional:     true,
+					Default:      72,
+					ValidateFunc: validation.FloatAtLeast(0),
+					Description:  "The number of hours after session token expiration that a session token can be used to call the token refresh API. Defaults to `72` hours.",
+				},
+
+				"token_store_path": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.StringIsNotEmpty,
+					ConflictsWith: []string{
+						"auth_settings_v2.0.login.0.token_store_sas_setting_name",
+					},
+					Description: "The directory path in the App Filesystem in which the tokens will be stored.",
+				},
+
+				"token_store_sas_setting_name": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					ConflictsWith: []string{
+						"auth_settings_v2.0.login.0.token_store_path",
+					},
+					ValidateFunc: validation.StringIsNotEmpty,
+					Description:  "The name of the app setting which contains the SAS URL of the blob storage containing the tokens.",
+				},
+
+				"preserve_url_fragments_for_logins": {
+					Type:        pluginsdk.TypeBool,
+					Optional:    true,
+					Default:     false,
+					Description: "Should the fragments from the request be preserved after the login request is made. Defaults to `false`.",
+				},
+
+				"allowed_external_redirect_urls": {
+					Type:     pluginsdk.TypeList,
+					Optional: true,
+					Elem: &pluginsdk.Schema{
+						Type:         pluginsdk.TypeString,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					Description: "External URLs that can be redirected to as part of logging in or logging out of the app. This is an advanced setting typically only needed by Windows Store application backends. **Note:** URLs within the current domain are always implicitly allowed.",
+				},
+
+				"cookie_expiration_convention": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Default:  string(web.CookieExpirationConventionFixedTime),
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.CookieExpirationConventionIdentityProviderDerived),
+						string(web.CookieExpirationConventionFixedTime),
+					}, false),
+					Description: "The method by which cookies expire. Possible values include: `FixedTime`, and `IdentityProviderDerived`. Defaults to `FixedTime`.",
+				},
+
+				"cookie_expiration_time": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					Default:      "08:00:00",
+					ValidateFunc: validate.TimeInterval,
+					Description:  "The time after the request is made when the session cookie should expire. Defaults to `08:00:00`.",
+				},
+
+				"validate_nonce": {
+					Type:        pluginsdk.TypeBool,
+					Optional:    true,
+					Default:     true,
+					Description: "Should the nonce be validated while completing the login flow. Defaults to `true`.",
+				},
+
+				"nonce_expiration_time": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					Default:      "00:05:00",
+					ValidateFunc: validate.TimeInterval,
+					Description:  "The time after the request is made when the nonce should expire. Defaults to `00:05:00`.",
+				},
+			},
+		},
+	}
+}

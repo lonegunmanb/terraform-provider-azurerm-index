@@ -1,0 +1,114 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/privateendpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2023-02-01/webpubsub"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceWebpubsubNetworkACL() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceWebPubsubNetworkACLCreateUpdate,
+		Read:   resourceWebPubsubNetworkACLRead,
+		Update: resourceWebPubsubNetworkACLCreateUpdate,
+		Delete: resourceWebpubsubNetworkACLDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := webpubsub.ParseWebPubSubID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"web_pubsub_id": commonschema.ResourceIDReferenceRequiredForceNew(&webpubsub.WebPubSubId{}),
+
+			"default_action": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  webpubsub.ACLActionDeny,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(webpubsub.ACLActionAllow),
+					string(webpubsub.ACLActionDeny),
+				}, false),
+			},
+
+			"public_network": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"allowed_request_types": {
+							Type:          pluginsdk.TypeSet,
+							Optional:      true,
+							ConflictsWith: []string{"public_network.0.denied_request_types"},
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice(webpubsub.PossibleValuesForWebPubSubRequestType(), false),
+							},
+						},
+
+						"denied_request_types": {
+							Type:          pluginsdk.TypeSet,
+							Optional:      true,
+							ConflictsWith: []string{"public_network.0.allowed_request_types"},
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice(webpubsub.PossibleValuesForWebPubSubRequestType(), false),
+							},
+						},
+					},
+				},
+			},
+
+			"private_endpoint": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: privateendpoints.ValidatePrivateEndpointID,
+						},
+
+						"allowed_request_types": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice(webpubsub.PossibleValuesForWebPubSubRequestType(), false),
+							},
+						},
+
+						"denied_request_types": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice(webpubsub.PossibleValuesForWebPubSubRequestType(), false),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

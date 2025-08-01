@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandOrchestratedVirtualMachineScaleSetOsProfileWithLinuxConfiguration(input map[string]interface{}, customData string) *virtualmachinescalesets.VirtualMachineScaleSetOSProfile {
+	osProfile := virtualmachinescalesets.VirtualMachineScaleSetOSProfile{}
+	linConfig := virtualmachinescalesets.LinuxConfiguration{}
+	patchSettings := virtualmachinescalesets.LinuxPatchSettings{}
+
+	if len(input) > 0 {
+		osProfile.CustomData = pointer.To(customData)
+		osProfile.AdminUsername = pointer.To(input["admin_username"].(string))
+
+		if adminPassword := input["admin_password"].(string); adminPassword != "" {
+			osProfile.AdminPassword = pointer.To(adminPassword)
+		}
+
+		if computerPrefix := input["computer_name_prefix"].(string); computerPrefix != "" {
+			osProfile.ComputerNamePrefix = pointer.To(computerPrefix)
+		}
+
+		if secrets := input["secret"].([]interface{}); len(secrets) > 0 {
+			osProfile.Secrets = expandLinuxSecretsVMSS(secrets)
+		}
+
+		if sshPublicKeys := expandSSHKeysVMSS(input["admin_ssh_key"].(*pluginsdk.Set).List()); len(sshPublicKeys) > 0 {
+			if linConfig.Ssh == nil {
+				linConfig.Ssh = &virtualmachinescalesets.SshConfiguration{}
+			}
+			linConfig.Ssh.PublicKeys = &sshPublicKeys
+		}
+
+		linConfig.DisablePasswordAuthentication = pointer.To(input["disable_password_authentication"].(bool))
+		linConfig.ProvisionVMAgent = pointer.To(input["provision_vm_agent"].(bool))
+
+		// Automatic VM Guest Patching
+		patchSettings.AssessmentMode = pointer.To(virtualmachinescalesets.LinuxPatchAssessmentMode(input["patch_assessment_mode"].(string)))
+		patchSettings.PatchMode = pointer.To(virtualmachinescalesets.LinuxVMGuestPatchMode(input["patch_mode"].(string)))
+		linConfig.PatchSettings = &patchSettings
+	}
+
+	osProfile.LinuxConfiguration = &linConfig
+
+	return &osProfile
+}

@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagemover
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagemover/2023-03-01/jobdefinitions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagemover/2023-03-01/projects"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r StorageMoverJobDefinitionResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.StorageMover.JobDefinitionsClient
+
+			id, err := jobdefinitions.ParseJobDefinitionID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			state := StorageMoverJobDefinitionResourceModel{
+				Name:                  id.JobDefinitionName,
+				StorageMoverProjectId: projects.NewProjectID(id.SubscriptionId, id.ResourceGroupName, id.StorageMoverName, id.ProjectName).ID(),
+			}
+
+			if v := resp.Model; v != nil {
+				state.AgentName = pointer.From(v.Properties.AgentName)
+
+				state.CopyMode = v.Properties.CopyMode
+
+				state.Description = pointer.From(v.Properties.Description)
+
+				state.SourceName = v.Properties.SourceName
+
+				state.SourceSubpath = pointer.From(v.Properties.SourceSubpath)
+
+				state.TargetName = v.Properties.TargetName
+
+				state.TargetSubpath = pointer.From(v.Properties.TargetSubpath)
+			}
+			return metadata.Encode(&state)
+		},
+	}
+}

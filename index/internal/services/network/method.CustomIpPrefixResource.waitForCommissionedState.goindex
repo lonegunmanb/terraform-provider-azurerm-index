@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/customipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r CustomIpPrefixResource) waitForCommissionedState(ctx context.Context, id customipprefixes.CustomIPPrefixId, pendingStates, targetStates commissionedStates) (*customipprefixes.CommissionedState, error) {
+	log.Printf("[DEBUG] Polling for the CommissionedState field for %s..", id)
+	timeout, ok := ctx.Deadline()
+	if !ok {
+		return nil, fmt.Errorf("internal-error: context has no deadline")
+	}
+
+	stateConf := &pluginsdk.StateChangeConf{
+		Delay:        10 * time.Minute,
+		Pending:      pendingStates.strings(),
+		Target:       targetStates.strings(),
+		Refresh:      r.commissionedStateRefreshFunc(ctx, id),
+		PollInterval: 5 * time.Minute,
+		Timeout:      time.Until(timeout),
+
+		// `Provisioned` is known to flip-flop
+		ContinuousTargetOccurence: 3,
+	}
+
+	result, err := stateConf.WaitForStateContext(ctx)
+
+	if result == nil {
+		return nil, fmt.Errorf("retrieving %s: response was nil", id)
+	}
+
+	prefix, ok := result.(customipprefixes.CustomIPPrefix)
+	if !ok {
+		return nil, fmt.Errorf("retrieving %s: response was not a valid Custom IP Prefix", id)
+	}
+
+	if prefix.Properties == nil {
+		return prefix.Properties.CommissionedState, fmt.Errorf("retrieving %s: `properties` was nil", id)
+	}
+
+	if err != nil {
+		return prefix.Properties.CommissionedState, fmt.Errorf("waiting for CommissionedState of %s: %+v", id, err)
+	}
+
+	return prefix.Properties.CommissionedState, nil
+}

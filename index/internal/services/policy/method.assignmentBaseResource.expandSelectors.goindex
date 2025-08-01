@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-06-01/policyassignments"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (br assignmentBaseResource) expandSelectors(i []interface{}, isOverride bool) *[]policyassignments.Selector {
+	if len(i) == 0 {
+		return nil
+	}
+
+	var res []policyassignments.Selector
+	for _, v := range i {
+		if m, ok := v.(map[string]interface{}); ok {
+			var item policyassignments.Selector
+			if isOverride {
+				item.Kind = pointer.To(policyassignments.SelectorKindPolicyDefinitionReferenceId)
+			} else {
+				item.Kind = pointer.To(policyassignments.SelectorKind(m["kind"].(string)))
+			}
+			if in := br.expandStringSlice(m["in"]); len(in) > 0 {
+				item.In = pointer.To(in)
+			}
+			if notIn := br.expandStringSlice(m["not_in"]); len(notIn) > 0 {
+				item.NotIn = pointer.To(notIn)
+			}
+			res = append(res, item)
+		}
+	}
+
+	return &res
+}

@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/jobcredentials"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/jobs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/jobtargetgroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandJobTargets(input []MsSqlJobTarget) []jobtargetgroups.JobTarget {
+	targets := make([]jobtargetgroups.JobTarget, 0)
+	if len(input) == 0 {
+		return targets
+	}
+
+	for _, v := range input {
+		t := jobtargetgroups.JobTarget{
+			MembershipType: pointer.To(jobtargetgroups.JobTargetGroupMembershipType(v.MembershipType)),
+			ServerName:     pointer.To(v.ServerName),
+		}
+
+		targetType := determineJobTargetType(v)
+		t.Type = targetType
+
+		if isCredentialRequired(jobtargetgroups.JobTargetGroupMembershipType(v.MembershipType), targetType) {
+			t.RefreshCredential = pointer.To(v.JobCredentialId)
+		}
+
+		if targetType == jobtargetgroups.JobTargetTypeSqlDatabase {
+			t.DatabaseName = pointer.To(v.DatabaseName)
+		}
+
+		if targetType == jobtargetgroups.JobTargetTypeSqlElasticPool {
+			t.ElasticPoolName = pointer.To(v.ElasticPoolName)
+		}
+
+		targets = append(targets, t)
+	}
+
+	return targets
+}

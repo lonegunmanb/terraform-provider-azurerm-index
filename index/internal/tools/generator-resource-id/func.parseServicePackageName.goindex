@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+)
+func parseServicePackageName(relativePath string) (*string, error) {
+	path := relativePath
+	if !filepath.IsAbs(path) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return nil, err
+		}
+
+		path = abs
+	}
+
+	// we do this replacement to avoid the case that on windows machine, the absolute path are using the path separator of \ instead of /
+	path = strings.ReplaceAll(path, "\\", "/")
+	segments := strings.Split(path, "/")
+	serviceIndex := -1
+	for i, v := range segments {
+		if strings.EqualFold(v, "services") {
+			serviceIndex = i
+			break
+		}
+	}
+
+	if serviceIndex == -1 {
+		return nil, fmt.Errorf("`services` segment was not found")
+	}
+
+	if len(segments) <= serviceIndex {
+		return nil, fmt.Errorf("not enough segments")
+	}
+
+	servicePackageName := segments[serviceIndex+1]
+	return &servicePackageName, nil
+}

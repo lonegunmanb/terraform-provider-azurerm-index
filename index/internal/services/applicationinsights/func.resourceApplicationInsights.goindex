@@ -1,0 +1,169 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/alertsmanagement/2019-06-01/smartdetectoralertrules"
+	billing "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2015-05-01/componentfeaturesandpricingapis"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceApplicationInsights() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		Create: resourceApplicationInsightsCreateUpdate,
+		Read:   resourceApplicationInsightsRead,
+		Update: resourceApplicationInsightsCreateUpdate,
+		Delete: resourceApplicationInsightsDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := components.ParseComponentID(id)
+			return err
+		}),
+
+		SchemaVersion: 2,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.ComponentUpgradeV0ToV1{},
+			1: migration.ComponentUpgradeV1ToV2{},
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"location": commonschema.Location(),
+
+			"application_type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"web",
+					"other",
+					"java",
+					"MobileCenter",
+					"phone",
+					"store",
+					"ios",
+					"Node.JS",
+				}, false),
+			},
+
+			"workspace_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: workspaces.ValidateWorkspaceID,
+			},
+
+			"retention_in_days": {
+				Type:     pluginsdk.TypeInt,
+				Optional: true,
+				Default:  90,
+				ValidateFunc: validation.IntInSlice([]int{
+					30,
+					60,
+					90,
+					120,
+					180,
+					270,
+					365,
+					550,
+					730,
+				}),
+			},
+
+			"sampling_percentage": {
+				Type:         pluginsdk.TypeFloat,
+				Optional:     true,
+				Default:      100,
+				ValidateFunc: validation.FloatBetween(0, 100),
+			},
+
+			"disable_ip_masking": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"tags": commonschema.Tags(),
+
+			"daily_data_cap_in_gb": {
+				Type:         pluginsdk.TypeFloat,
+				Optional:     true,
+				Default:      100,
+				ValidateFunc: validation.FloatAtLeast(0),
+			},
+
+			"daily_data_cap_notifications_disabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+			},
+
+			"app_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"instrumentation_key": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"local_authentication_disabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"internet_ingestion_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"internet_query_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+			"force_customer_storage_for_profiler": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+		},
+	}
+
+	return resource
+}

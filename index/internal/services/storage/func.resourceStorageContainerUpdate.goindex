@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/blobcontainers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/containers"
+)
+func resourceStorageContainerUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	containerClient := meta.(*clients.Client).Storage.ResourceManager.BlobContainers
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	if !features.FivePointOh() && !strings.HasPrefix(d.Id(), "/subscriptions/") {
+		storageClient := meta.(*clients.Client).Storage
+		id, err := containers.ParseContainerID(d.Id(), storageClient.StorageDomainSuffix)
+		if err != nil {
+			return err
+		}
+
+		account, err := storageClient.FindAccount(ctx, subscriptionId, id.AccountId.AccountName)
+		if err != nil {
+			return fmt.Errorf("retrieving Account %q for Container %q: %v", id.AccountId.AccountName, id.ContainerName, err)
+		}
+		if account == nil {
+			return fmt.Errorf("locating Storage Account %q", id.AccountId.AccountName)
+		}
+		if d.HasChange("container_access_type") {
+			log.Printf("[DEBUG] Updating Access Level for %s...", id)
+
+			// Updating metadata does not work with AAD authentication, returns a cryptic 404
+			client, err := storageClient.ContainersDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingOnlySharedKeyAuth())
+			if err != nil {
+				return fmt.Errorf("building Containers Client: %v", err)
+			}
+
+			accessLevelRaw := d.Get("container_access_type").(string)
+			accessLevel := expandStorageContainerAccessLevel(accessLevelRaw)
+
+			if err = client.UpdateAccessLevel(ctx, id.ContainerName, accessLevel); err != nil {
+				return fmt.Errorf("updating Access Level for %s: %v", id, err)
+			}
+
+			log.Printf("[DEBUG] Updated Access Level for %s", id)
+		}
+
+		if d.HasChange("metadata") {
+			log.Printf("[DEBUG] Updating Metadata for %s...", id)
+
+			client, err := storageClient.ContainersDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingAnyAuthMethod())
+			if err != nil {
+				return fmt.Errorf("building Containers Client: %v", err)
+			}
+
+			metaDataRaw := d.Get("metadata").(map[string]interface{})
+			metaData := ExpandMetaData(metaDataRaw)
+
+			if err = client.UpdateMetaData(ctx, id.ContainerName, metaData); err != nil {
+				return fmt.Errorf("updating Metadata for %s: %v", id, err)
+			}
+
+			log.Printf("[DEBUG] Updated Metadata for %s", id)
+		}
+
+		return resourceStorageContainerRead(d, meta)
+	}
+
+	id, err := commonids.ParseStorageContainerID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	update := blobcontainers.BlobContainer{
+		Properties: &blobcontainers.ContainerProperties{},
+	}
+
+	if d.HasChange("container_access_type") {
+		accessLevelRaw := d.Get("container_access_type").(string)
+		update.Properties.PublicAccess = pointer.To(blobcontainers.PublicAccess(containerAccessTypeConversionMap[accessLevelRaw]))
+	}
+
+	if d.HasChange("metadata") {
+		metaDataRaw := d.Get("metadata").(map[string]interface{})
+		update.Properties.Metadata = pointer.To(ExpandMetaData(metaDataRaw))
+	}
+
+	if _, err := containerClient.Update(ctx, *id, update); err != nil {
+		return fmt.Errorf("updating %s: %v", id, err)
+	}
+
+	return resourceStorageContainerRead(d, meta)
+}

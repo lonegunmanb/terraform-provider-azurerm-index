@@ -1,0 +1,23 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/migration
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (m ManagedHSMRoleDefinitionV0ToV1) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		oldIdRaw := rawState["id"].(string)
+		oldId, err := parseLegacyV0RoleDefinitionId(oldIdRaw)
+		if err != nil {
+			return rawState, fmt.Errorf("parsing the old Role Definition ID %q: %+v", oldId, err)
+		}
+
+		newId := parse.NewManagedHSMDataPlaneRoleDefinitionID(oldId.managedHSMName, oldId.domainSuffix, oldId.scope, oldId.roleDefinitionName).ID()
+		log.Printf("[DEBUG] Updating ID from %q to %q", oldIdRaw, newId)
+		rawState["id"] = newId
+		return rawState, nil
+	}
+}

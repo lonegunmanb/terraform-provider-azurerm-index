@@ -1,0 +1,101 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/magodo/terraform-provider-azurerm-example-gen/examplegen"
+)
+func (gen documentationGenerator) argumentsBlock() string {
+	documentationForArguments := func(input map[string]*schema.Schema, onlyRequired, onlyOptional bool, blockName string) string {
+		fields := ""
+
+		for _, fieldName := range gen.sortFields(input) {
+			field := input[fieldName]
+
+			// nothing to see here, move along
+			if !field.Optional && !field.Required {
+				continue
+			}
+
+			if onlyRequired && !field.Required {
+				continue
+			}
+
+			if onlyOptional && !field.Optional {
+				continue
+			}
+
+			status := "Optional"
+			if field.Required {
+				status = "Required"
+			}
+
+			value := gen.buildDescriptionForArgument(fieldName, field, blockName)
+			if len(field.ConflictsWith) > 0 {
+				conflictingValues := make([]string, 0)
+				for _, v := range field.ConflictsWith {
+					conflictingValues = append(conflictingValues, fmt.Sprintf("`%s`", v))
+				}
+
+				value += fmt.Sprintf("Conflicts with %s.", strings.Join(conflictingValues, ","))
+			}
+
+			if field.Default != nil {
+				value += fmt.Sprintf(" Defaults to `%v`.", field.Default)
+			}
+
+			if field.ForceNew {
+				value += fmt.Sprintf(" Changing this forces a new %s to be created.", gen.brandName)
+			}
+			fields += fmt.Sprintf("* `%s` - (%s) %s\n\n", fieldName, status, value)
+		}
+
+		return fields
+	}
+
+	// first output the Required fields
+	fields := documentationForArguments(gen.resource.Schema, true, false, "")
+	// then prepare the Optional fields
+	optionalFields := documentationForArguments(gen.resource.Schema, false, true, "")
+
+	// assuming we have both optional & required fields - let's add a separarer
+	if len(fields) > 0 && len(optionalFields) > 0 {
+		fields += "---\n\n"
+	}
+	fields += optionalFields
+
+	// first list all of the top-level fields / blocks alphabetically
+
+	// then we need to collect a list of all block names, everywhere
+	blockNames, blocks := gen.uniqueBlockNamesForArgument(gen.resource.Schema)
+
+	for _, blockName := range blockNames {
+		block := blocks[blockName]
+
+		fields += "---\n\n"
+		fields += fmt.Sprintf("A `%s` block supports the following:\n\n", blockName)
+		// required
+		fields += documentationForArguments(block, true, false, blockName)
+		// optional
+		fields += documentationForArguments(block, false, true, blockName)
+	}
+
+	fields = strings.TrimSuffix(fields, "\n\n")
+
+	return fmt.Sprintf(`## Arguments Reference
+
+The following arguments are supported:
+
+%s`, fields)
+}

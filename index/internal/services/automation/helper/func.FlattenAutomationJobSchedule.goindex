@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation/helper
+import (
+	"bytes"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/gofrs/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/jobschedule"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func FlattenAutomationJobSchedule(jsMap map[uuid.UUID]jobschedule.JobScheduleProperties) *pluginsdk.Set {
+	res := &pluginsdk.Set{
+		F: ResourceAutomationJobScheduleHash,
+	}
+	for jsId, js := range jsMap {
+		var scheduleName, runOn string
+		if js.Schedule != nil && js.Schedule.Name != nil {
+			scheduleName = *js.Schedule.Name
+		}
+
+		if js.RunOn != nil {
+			runOn = *js.RunOn
+		}
+
+		// for API casing issue: https://github.com/Azure/azure-sdk-for-go/issues/4780
+		parameters := map[string]string{}
+		if js.Parameters != nil {
+			for key, value := range *js.Parameters {
+				parameters[strings.ToLower(key)] = value
+			}
+		}
+
+		res.Add(map[string]interface{}{
+			"schedule_name":   scheduleName,
+			"parameters":      parameters,
+			"run_on":          runOn,
+			"job_schedule_id": jsId.String(),
+		})
+	}
+
+	return res
+}

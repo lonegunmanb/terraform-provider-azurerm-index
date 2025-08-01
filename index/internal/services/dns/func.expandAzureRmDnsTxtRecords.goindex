@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dns
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/recordsets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/dns/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandAzureRmDnsTxtRecords(d *pluginsdk.ResourceData) *[]recordsets.TxtRecord {
+	recordStrings := d.Get("record").(*pluginsdk.Set).List()
+	records := make([]recordsets.TxtRecord, len(recordStrings))
+
+	segmentLen := 254
+	for i, v := range recordStrings {
+		record := v.(map[string]interface{})
+		v := record["value"].(string)
+
+		var value []string
+		for len(v) > segmentLen {
+			value = append(value, v[:segmentLen])
+			v = v[segmentLen:]
+		}
+		value = append(value, v)
+
+		records[i] = recordsets.TxtRecord{
+			Value: &value,
+		}
+	}
+
+	return &records
+}

@@ -1,0 +1,80 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/availabilitygrouplisteners"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
+	sqlValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	networkParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r MsSqlVirtualMachineAvailabilityGroupListenerResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MSSQL.VirtualMachinesAvailabilityGroupListenersClient
+
+			id, err := availabilitygrouplisteners.ParseAvailabilityGroupListenerID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id, availabilitygrouplisteners.GetOperationOptions{Expand: pointer.To("AvailabilityGroupConfiguration")})
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("reading %s: %+v", *id, err)
+			}
+
+			state := MsSqlVirtualMachineAvailabilityGroupListenerModel{
+				Name:                     id.AvailabilityGroupListenerName,
+				SqlVirtualMachineGroupId: availabilitygrouplisteners.NewSqlVirtualMachineGroupID(id.SubscriptionId, id.ResourceGroupName, id.SqlVirtualMachineGroupName).ID(),
+			}
+
+			if model := resp.Model; model != nil {
+				if props := model.Properties; props != nil {
+					state.AvailabilityGroupName = pointer.From(props.AvailabilityGroupName)
+					state.Port = pointer.From(props.Port)
+
+					avGroupListenerLbConfigs, err := flattenMsSqlVirtualMachineAvailabilityGroupListenerLoadBalancerConfigurations(props.LoadBalancerConfigurations, id.SubscriptionId)
+					if err != nil {
+						return fmt.Errorf("setting `load_balancer_configuration`: %+v", err)
+					}
+					state.LoadBalancerConfiguration = avGroupListenerLbConfigs
+
+					multiSubnetIpConfiguration, err := flattenMsSqlVirtualMachineAvailabilityGroupListenerMultiSubnetIpConfiguration(props.MultiSubnetIPConfigurations, id.SubscriptionId)
+					if err != nil {
+						return fmt.Errorf("setting `multi_subnet_ip_configuration`: %+v", err)
+					}
+					state.MultiSubnetIpConfiguration = multiSubnetIpConfiguration
+
+					if props.AvailabilityGroupConfiguration != nil {
+						if props.AvailabilityGroupConfiguration.Replicas != nil {
+							replicas, err := flattenMsSqlVirtualMachineAvailabilityGroupListenerReplicas(props.AvailabilityGroupConfiguration.Replicas, id.SubscriptionId)
+							if err != nil {
+								return fmt.Errorf("setting `replica`: %+v", err)
+							}
+							state.Replica = replicas
+						}
+					}
+				}
+			}
+			return metadata.Encode(&state)
+		},
+	}
+}

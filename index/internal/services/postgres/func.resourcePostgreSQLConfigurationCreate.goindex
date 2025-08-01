@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/configurations"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePostgreSQLConfigurationCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Postgres.ConfigurationsClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := configurations.NewConfigurationID(subscriptionId, d.Get("resource_group_name").(string), d.Get("server_name").(string), d.Get("name").(string))
+	// TODO: support RequiresImport - this is possible to tell if it's the non-default value from the API (see Delete)
+
+	locks.ByName(id.ServerName, postgreSQLServerResourceName)
+	defer locks.UnlockByName(id.ServerName, postgreSQLServerResourceName)
+
+	properties := configurations.Configuration{
+		Properties: &configurations.ConfigurationProperties{
+			Value: utils.String(d.Get("value").(string)),
+		},
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, properties); err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourcePostgreSQLConfigurationRead(d, meta)
+}

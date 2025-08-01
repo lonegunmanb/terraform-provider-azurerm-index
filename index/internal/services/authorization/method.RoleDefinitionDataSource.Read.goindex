@@ -1,0 +1,97 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2022-05-01-preview/roledefinitions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (a RoleDefinitionDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Authorization.ScopedRoleDefinitionsClient
+
+			var config RoleDefinitionDataSourceModel
+			if err := metadata.Decode(&config); err != nil {
+				return err
+			}
+
+			defId := config.RoleDefinitionId
+
+			// search by name
+			var id roledefinitions.ScopedRoleDefinitionId
+			var role roledefinitions.RoleDefinition
+			if config.Name != "" {
+				// Accounting for eventual consistency
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					return fmt.Errorf("internal error: context had no deadline")
+				}
+				err := pluginsdk.Retry(time.Until(deadline), func() *pluginsdk.RetryError {
+					roleDefinitions, err := client.List(ctx, commonids.NewScopeID(config.Scope), roledefinitions.ListOperationOptions{
+						Filter: pointer.To(fmt.Sprintf("roleName eq '%s'", config.Name)),
+					})
+					if err != nil {
+						return pluginsdk.NonRetryableError(fmt.Errorf("loading Role Definition List: %+v", err))
+					}
+					if roleDefinitions.Model == nil {
+						return pluginsdk.RetryableError(fmt.Errorf("loading Role Definition List: model was nil"))
+					}
+					if len(*roleDefinitions.Model) != 1 {
+						return pluginsdk.RetryableError(fmt.Errorf("loading Role Definition List: could not find role '%s'", config.Name))
+					}
+					if (*roleDefinitions.Model)[0].Name == nil {
+						return pluginsdk.NonRetryableError(fmt.Errorf("loading Role Definition List: values[0].NameD is nil '%s'", config.Name))
+					}
+
+					defId = *(*roleDefinitions.Model)[0].Id
+					id = roledefinitions.NewScopedRoleDefinitionID(config.Scope, *(*roleDefinitions.Model)[0].Name)
+					return nil
+				})
+				if err != nil {
+					return err
+				}
+			} else {
+				id = roledefinitions.NewScopedRoleDefinitionID(config.Scope, defId)
+			}
+
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+			if resp.Model == nil {
+				return fmt.Errorf("retrieving %s: `Model` was nil", id)
+			}
+
+			role = *resp.Model
+
+			if role.Id == nil {
+				return fmt.Errorf("retrieving %s: `Id` was nil", id)
+			}
+
+			state := RoleDefinitionDataSourceModel{
+				Scope:            id.Scope,
+				RoleDefinitionId: defId,
+			}
+			if props := role.Properties; props != nil {
+				state.Name = pointer.From(props.RoleName)
+				state.Type = pointer.From(props.Type)
+				state.Description = pointer.From(props.Description)
+				state.Permissions = flattenDataSourceRoleDefinitionPermissions(props.Permissions)
+				state.AssignableScopes = pointer.From(props.AssignableScopes)
+			}
+
+			// The sdk managed id start with two "/" when scope is tenant level (empty).
+			// So we use the id from response without parsing and reformatting it.
+			// Tracked on https://github.com/hashicorp/pandora/issues/3257
+			metadata.ResourceData.SetId(*role.Id)
+			return metadata.Encode(&state)
+		},
+	}
+}

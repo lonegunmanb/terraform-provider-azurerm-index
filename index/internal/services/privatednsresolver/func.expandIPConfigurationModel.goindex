@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/privatednsresolver
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dnsresolver/2022-07-01/dnsresolvers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dnsresolver/2022-07-01/inboundendpoints"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandIPConfigurationModel(inputList []IPConfigurationModel) (*[]inboundendpoints.IPConfiguration, error) {
+	outputList := make([]inboundendpoints.IPConfiguration, 0, len(inputList))
+	for _, v := range inputList {
+		input := v
+		output := inboundendpoints.IPConfiguration{}
+
+		if input.PrivateIPAllocationMethod == inboundendpoints.IPAllocationMethodDynamic && input.PrivateIPAddress != "" {
+			return nil, fmt.Errorf("`private_ip_address` cannot be set when `private_ip_allocation_method` is `Dynamic`")
+		}
+
+		if input.PrivateIPAllocationMethod == inboundendpoints.IPAllocationMethodStatic && input.PrivateIPAddress == "" {
+			return nil, fmt.Errorf("`private_ip_address` must be set when `private_ip_allocation_method` is `Static`")
+		}
+
+		if input.PrivateIPAllocationMethod != "" {
+			output.PrivateIPAllocationMethod = &input.PrivateIPAllocationMethod
+		}
+
+		if input.PrivateIPAddress != "" {
+			output.PrivateIPAddress = &input.PrivateIPAddress
+		}
+
+		output.Subnet = inboundendpoints.SubResource{
+			Id: input.SubnetId,
+		}
+
+		outputList = append(outputList, output)
+	}
+
+	return &outputList, nil
+}

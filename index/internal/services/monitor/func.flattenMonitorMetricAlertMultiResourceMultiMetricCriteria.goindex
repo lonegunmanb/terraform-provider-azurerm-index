@@ -1,0 +1,109 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	webtests "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2022-06-15/webtestsapis"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2018-03-01/metricalerts"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenMonitorMetricAlertMultiResourceMultiMetricCriteria(input *[]metricalerts.MultiMetricCriteria) []interface{} {
+	if input == nil {
+		return nil
+	}
+	result := make([]interface{}, 0)
+
+	for _, criteria := range *input {
+		v := make(map[string]interface{})
+		var (
+			metricName           string
+			metricNamespace      string
+			timeAggregation      interface{}
+			dimensions           []metricalerts.MetricDimension
+			skipMetricValidation bool
+		)
+
+		switch criteria := criteria.(type) {
+		case metricalerts.MetricCriteria:
+			metricName = criteria.MetricName
+
+			if criteria.MetricNamespace != nil {
+				metricNamespace = *criteria.MetricNamespace
+			}
+			timeAggregation = criteria.TimeAggregation
+			if criteria.Dimensions != nil {
+				dimensions = *criteria.Dimensions
+			}
+
+			// MetricCriteria specific properties
+			v["operator"] = string(criteria.Operator)
+			v["threshold"] = criteria.Threshold
+			if criteria.SkipMetricValidation != nil {
+				skipMetricValidation = *criteria.SkipMetricValidation
+			}
+		case metricalerts.DynamicMetricCriteria:
+			metricName = criteria.MetricName
+
+			if criteria.MetricNamespace != nil {
+				metricNamespace = *criteria.MetricNamespace
+			}
+			timeAggregation = criteria.TimeAggregation
+			if criteria.Dimensions != nil {
+				dimensions = *criteria.Dimensions
+			}
+			if criteria.SkipMetricValidation != nil {
+				skipMetricValidation = *criteria.SkipMetricValidation
+			}
+			// DynamicMetricCriteria specific properties
+			v["operator"] = string(criteria.Operator)
+			v["alert_sensitivity"] = string(criteria.AlertSensitivity)
+
+			v["evaluation_total_count"] = int(criteria.FailingPeriods.NumberOfEvaluationPeriods)
+			v["evaluation_failure_count"] = int(criteria.FailingPeriods.MinFailingPeriodsToAlert)
+
+			ignoreDataBefore := ""
+			if criteria.IgnoreDataBefore != nil {
+				ignoreDataBefore = *criteria.IgnoreDataBefore
+			}
+			v["ignore_data_before"] = ignoreDataBefore
+		}
+
+		// Common properties
+		v["metric_name"] = metricName
+		v["metric_namespace"] = metricNamespace
+		v["aggregation"] = timeAggregation
+		v["skip_metric_validation"] = skipMetricValidation
+		if dimensions != nil {
+			dimResult := make([]map[string]interface{}, 0)
+			for _, dimension := range dimensions {
+				dVal := make(map[string]interface{})
+				dVal["name"] = dimension.Name
+				dVal["operator"] = dimension.Operator
+				dVal["values"] = dimension.Values
+				dimResult = append(dimResult, dVal)
+			}
+			v["dimension"] = dimResult
+		}
+
+		result = append(result, v)
+	}
+	return result
+}

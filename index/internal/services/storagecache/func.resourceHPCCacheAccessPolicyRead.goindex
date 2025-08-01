@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/caches"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceHPCCacheAccessPolicyRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).StorageCache.Caches
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.CacheAccessPolicyID(d.Id())
+	if err != nil {
+		return err
+	}
+	cacheId := caches.NewCacheID(id.SubscriptionId, id.ResourceGroup, id.CacheName)
+
+	resp, err := client.Get(ctx, cacheId)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] The containing HPC Cache %q was not found- removing from state!", cacheId)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	m := resp.Model
+	if m == nil {
+		return fmt.Errorf("nil Model of HPC Cache %s", cacheId)
+	}
+
+	prop := m.Properties
+	if prop == nil {
+		return fmt.Errorf("nil CacheProperties of HPC Cache %s", cacheId)
+	}
+
+	setting := prop.SecuritySettings
+	if setting == nil {
+		log.Printf("[DEBUG] The containing HPC Cache %q has nil SecuritySettings- removing from state!", cacheId)
+		d.SetId("")
+		return nil
+	}
+
+	policies := setting.AccessPolicies
+	if policies == nil {
+		log.Printf("[DEBUG] The containing HPC Cache %q has nil AccessPolicies- removing from state!", cacheId)
+		d.SetId("")
+		return nil
+	}
+
+	p := CacheGetAccessPolicyByName(*policies, id.Name)
+	if p == nil {
+		log.Printf("[DEBUG] The %q was not found- removing from state!", cacheId)
+		d.SetId("")
+		return nil
+	}
+
+	d.Set("name", id.Name)
+	d.Set("hpc_cache_id", cacheId.ID())
+	rules, err := flattenStorageCacheNfsAccessRules(p.AccessRules)
+	if err != nil {
+		return err
+	}
+	if err := d.Set("access_rule", rules); err != nil {
+		return fmt.Errorf("setting `access_rule`: %v", err)
+	}
+
+	return nil
+}

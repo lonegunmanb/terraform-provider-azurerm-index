@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/queues"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2022-10-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func serviceBusQueueStatusRefreshFunc(ctx context.Context, client *queues.QueuesClient, id queues.QueueId, userConfig map[string]interface{}) pluginsdk.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+		log.Printf("[DEBUG] Checking servicebus queue %s status...", id)
+
+		resp, err := client.Get(ctx, id)
+		if err != nil {
+			return nil, "Error", fmt.Errorf("checking servicebus queue %s error: %+v", id, err)
+		}
+
+		queueStatus := "Updating"
+
+		if model := resp.Model; model != nil {
+			if props := model.Properties; props != nil {
+				if props.Status != nil && *props.Status == userConfig["status"] &&
+					props.MaxDeliveryCount != nil && int(*props.MaxDeliveryCount) == userConfig["maxDeliveryCount"].(int) &&
+					props.EnableExpress != nil && *props.EnableExpress == userConfig["enableExpress"].(bool) &&
+					props.EnablePartitioning != nil && *props.EnablePartitioning == userConfig["enablePartitioning"].(bool) &&
+					props.EnableBatchedOperations != nil && *props.EnableBatchedOperations == userConfig["enableBatchOps"].(bool) {
+					queueStatus = "Succeeded"
+				}
+
+				if props.DeadLetteringOnMessageExpiration != nil && userConfig["deadLetteringOnMesExp"] != "" {
+					if *props.DeadLetteringOnMessageExpiration != userConfig["deadLetteringOnMesExp"].(bool) {
+						queueStatus = "Updating"
+					}
+				}
+
+				if props.LockDuration != nil && userConfig["lockDuration"] != "" {
+					if *props.LockDuration != userConfig["lockDuration"].(string) {
+						queueStatus = "Updating"
+					}
+				}
+
+				if props.ForwardTo != nil && userConfig["forwardTo"] != "" {
+					if *props.ForwardTo != userConfig["forwardTo"].(string) {
+						queueStatus = "Updating"
+					}
+				}
+
+				if props.ForwardDeadLetteredMessagesTo != nil && userConfig["forwardDeadLetteredMessagesTo"] != nil {
+					if *props.ForwardDeadLetteredMessagesTo != userConfig["forwardDeadLetteredMessagesTo"].(string) {
+						queueStatus = "Updating"
+					}
+				}
+			}
+		}
+		return resp, queueStatus, nil
+	}
+}

@@ -1,0 +1,113 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/vnetpeering"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceDatabricksVirtualNetworkPeering() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceDatabricksVirtualNetworkPeeringCreate,
+		Read:   resourceDatabricksVirtualNetworkPeeringRead,
+		Update: resourceDatabricksVirtualNetworkPeeringUpdate,
+		Delete: resourceDatabricksVirtualNetworkPeeringDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := vnetpeering.ParseVirtualNetworkPeeringID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.DatabricksVirtualNetworkPeeringName,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"workspace_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: workspaces.ValidateWorkspaceID,
+			},
+
+			"remote_address_space_prefixes": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				ForceNew: true,
+
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validate.CIDRIsIPv4OrIPv6,
+				},
+			},
+
+			"remote_virtual_network_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: commonids.ValidateVirtualNetworkID,
+			},
+
+			"address_space_prefixes": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"virtual_network_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"allow_virtual_network_access": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"allow_forwarded_traffic": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"allow_gateway_transit": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"use_remote_gateways": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+		},
+	}
+}

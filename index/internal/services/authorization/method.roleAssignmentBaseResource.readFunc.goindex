@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2022-04-01/roleassignments"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2022-05-01-preview/roledefinitions"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (br roleAssignmentBaseResource) readFunc(scope string, isTenantLevel bool) sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Authorization.ScopedRoleAssignmentsClient
+			roleDefinitionsClient := metadata.Client.Authorization.ScopedRoleDefinitionsClient
+
+			id, err := parse.ScopedRoleAssignmentID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			options := roleassignments.DefaultGetByIdOperationOptions()
+			if id.TenantId != "" {
+				options.TenantId = &id.TenantId
+			}
+
+			resp, err := client.GetById(ctx, commonids.NewScopeID(id.ScopedId.ID()), options)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					log.Printf("[DEBUG] %s was not found - removing from state", id)
+					metadata.ResourceData.SetId("")
+					return nil
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				metadata.ResourceData.Set("name", model.Name)
+				if props := model.Properties; props != nil {
+					metadata.ResourceData.Set("role_definition_id", props.RoleDefinitionId)
+					metadata.ResourceData.Set("principal_id", props.PrincipalId)
+					metadata.ResourceData.Set("delegated_managed_identity_resource_id", props.DelegatedManagedIdentityResourceId)
+					metadata.ResourceData.Set("description", props.Description)
+					metadata.ResourceData.Set("condition", props.Condition)
+					metadata.ResourceData.Set("condition_version", props.ConditionVersion)
+
+					if props.PrincipalType != nil {
+						metadata.ResourceData.Set("principal_type", pointer.From(props.PrincipalType))
+					}
+
+					// allows for import when role name is used (also if the role name changes a plan will show a diff)
+					roleId := props.RoleDefinitionId
+					// The tenant level role definitions do not have a scope
+					if isTenantLevel {
+						roleId = fmt.Sprintf("%s%s", scope, props.RoleDefinitionId)
+					}
+
+					roleDefinitionId, err := roledefinitions.ParseScopedRoleDefinitionID(roleId)
+					if err != nil {
+						return err
+					}
+
+					roleResp, err := roleDefinitionsClient.Get(ctx, *roleDefinitionId)
+					if err != nil {
+						return fmt.Errorf("retrieving %s: %s", roleDefinitionId, err)
+					}
+
+					if roleModel := roleResp.Model; roleModel != nil {
+						if roleProps := roleModel.Properties; roleProps != nil {
+							metadata.ResourceData.Set("role_definition_name", roleProps.RoleName)
+						}
+					}
+				}
+			}
+
+			return nil
+		},
+		Timeout: 5 * time.Minute,
+	}
+}

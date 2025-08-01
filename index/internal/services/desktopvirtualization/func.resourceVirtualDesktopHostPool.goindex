@@ -1,0 +1,209 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/desktopvirtualization
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/desktopvirtualization/2022-02-10-preview/hostpool"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/desktopvirtualization/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceVirtualDesktopHostPool() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceVirtualDesktopHostPoolCreate,
+		Read:   resourceVirtualDesktopHostPoolRead,
+		Update: resourceVirtualDesktopHostPoolUpdate,
+		Delete: resourceVirtualDesktopHostPoolDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(60 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := hostpool.ParseHostPoolID(id)
+			return err
+		}),
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.HostPoolV0ToV1{},
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"location": commonschema.Location(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(hostpool.HostPoolTypePersonal),
+					string(hostpool.HostPoolTypePooled),
+				}, false),
+			},
+
+			"load_balancer_type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(hostpool.LoadBalancerTypeBreadthFirst),
+					string(hostpool.LoadBalancerTypeDepthFirst),
+					string(hostpool.LoadBalancerTypePersistent),
+				}, false),
+			},
+
+			"friendly_name": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringLenBetween(1, 64),
+			},
+
+			"description": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringLenBetween(1, 512),
+			},
+
+			"validate_environment": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"custom_rdp_properties": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"personal_desktop_assignment_type": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(hostpool.PersonalDesktopAssignmentTypeAutomatic),
+					string(hostpool.PersonalDesktopAssignmentTypeDirect),
+				}, false),
+			},
+
+			"public_network_access": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringInSlice(hostpool.PossibleValuesForHostpoolPublicNetworkAccess(), false),
+				Default:      string(hostpool.HostpoolPublicNetworkAccessEnabled),
+			},
+
+			"maximum_sessions_allowed": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      999999,
+				ValidateFunc: validation.IntBetween(0, 999999),
+			},
+
+			"start_vm_on_connect": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"preferred_app_group_type": {
+				Type:        pluginsdk.TypeString,
+				Optional:    true,
+				Description: "Preferred App Group type to display",
+				ValidateFunc: validation.StringInSlice([]string{
+					string(hostpool.PreferredAppGroupTypeDesktop),
+					string(hostpool.PreferredAppGroupTypeNone),
+					string(hostpool.PreferredAppGroupTypeRailApplications),
+				}, false),
+				Default: string(hostpool.PreferredAppGroupTypeDesktop),
+			},
+
+			"scheduled_agent_updates": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"enabled": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+
+						"timezone": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+							Default:  "UTC",
+						},
+
+						"use_session_host_timezone": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+
+						"schedule": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MaxItems: 2,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"day_of_week": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(hostpool.DayOfWeekMonday),
+											string(hostpool.DayOfWeekTuesday),
+											string(hostpool.DayOfWeekWednesday),
+											string(hostpool.DayOfWeekThursday),
+											string(hostpool.DayOfWeekFriday),
+											string(hostpool.DayOfWeekSaturday),
+											string(hostpool.DayOfWeekSunday),
+										}, false),
+									},
+
+									"hour_of_day": {
+										Type:         pluginsdk.TypeInt,
+										Required:     true,
+										ValidateFunc: validation.IntBetween(0, 23),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"vm_template": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				ValidateFunc:     validation.StringIsJSON,
+				DiffSuppressFunc: pluginsdk.SuppressJsonDiff,
+			},
+
+			"tags": commonschema.Tags(),
+		},
+	}
+}

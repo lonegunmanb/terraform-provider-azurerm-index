@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/synapse/mgmt/v2.0/synapse" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSynapseWorkspaceKey() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSynapseWorkspaceKeysCreateUpdate,
+		Read:   resourceSynapseWorkspaceKeyRead,
+		Update: resourceSynapseWorkspaceKeysCreateUpdate,
+		Delete: resourceSynapseWorkspaceKeysDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.WorkspaceKeysID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"synapse_workspace_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validate.WorkspaceID,
+			},
+
+			"customer_managed_key_name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+			},
+
+			"customer_managed_key_versionless_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: keyVaultValidate.VersionlessNestedItemId,
+			},
+
+			"active": {
+				Type:     pluginsdk.TypeBool,
+				Required: true,
+			},
+		},
+	}
+}

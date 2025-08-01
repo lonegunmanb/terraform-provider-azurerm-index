@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/azurestackhci
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/azurestackhci/2024-01-01/deploymentsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/azurestackhci/2024-01-01/storagecontainers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resourceconnector/2022-10-27/appliances"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+type ScaleUnitModel struct {
+	ActiveDirectoryOrganizationalUnitPath string                       `tfschema:"active_directory_organizational_unit_path"`
+	Cluster                               []ClusterModel               `tfschema:"cluster"`
+	DomainFqdn                            string                       `tfschema:"domain_fqdn"`
+	HostNetwork                           []HostNetworkModel           `tfschema:"host_network"`
+	InfrastructureNetwork                 []InfrastructureNetworkModel `tfschema:"infrastructure_network"`
+	NamePrefix                            string                       `tfschema:"name_prefix"`
+	OptionalService                       []OptionalServiceModel       `tfschema:"optional_service"`
+	PhysicalNode                          []PhysicalNodeModel          `tfschema:"physical_node"`
+	SecretsLocation                       string                       `tfschema:"secrets_location"`
+	Storage                               []StorageModel               `tfschema:"storage"`
+
+	// flatten 'observability' block, for API always return them
+	StreamingDataClientEnabled bool `tfschema:"streaming_data_client_enabled"`
+	EuLocationEnabled          bool `tfschema:"eu_location_enabled"`
+	EpisodicDataUploadEnabled  bool `tfschema:"episodic_data_upload_enabled"`
+
+	// flatten 'securitySetting' block, for API always return them
+	BitlockerBootVolumeEnabled   bool `tfschema:"bitlocker_boot_volume_enabled"`
+	BitlockerDataVolumeEnabled   bool `tfschema:"bitlocker_data_volume_enabled"`
+	CredentialGuardEnabled       bool `tfschema:"credential_guard_enabled"`
+	DriftControlEnabled          bool `tfschema:"drift_control_enabled"`
+	DrtmProtectionEnabled        bool `tfschema:"drtm_protection_enabled"`
+	HvciProtectionEnabled        bool `tfschema:"hvci_protection_enabled"`
+	SideChannelMitigationEnabled bool `tfschema:"side_channel_mitigation_enabled"`
+	SmbSigningEnabled            bool `tfschema:"smb_signing_enabled"`
+	SmbClusterEncryptionEnabled  bool `tfschema:"smb_cluster_encryption_enabled"`
+	WdacEnabled                  bool `tfschema:"wdac_enabled"`
+}

@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/subscription
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-12-01/subscriptions"
+	tagsSdk "github.com/hashicorp/go-azure-sdk/resource-manager/resources/2023-07-01/tags"
+	subscriptionAlias "github.com/hashicorp/go-azure-sdk/resource-manager/subscription/2021-10-01/subscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	billingValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/billing/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/subscription/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/subscription/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSubscriptionRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	aliasClient := meta.(*clients.Client).Subscription.AliasClient
+	client := meta.(*clients.Client).Subscription.SubscriptionsClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := subscriptionAlias.ParseAliasID(d.Id())
+	if err != nil {
+		return err
+	}
+	d.Set("alias", id.AliasName)
+
+	alias, err := aliasClient.AliasGet(ctx, *id)
+	if err != nil || alias.Model == nil {
+		if response.WasNotFound(alias.HttpResponse) {
+			log.Printf("[INFO] Error reading Subscription %q - removing from state", d.Id())
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("reading Subscription Alias %q: %+v", id.AliasName, err)
+	}
+
+	subscriptionId := ""
+	subscriptionName := ""
+	tenantId := ""
+	var t *map[string]string
+	if props := alias.Model.Properties; props != nil && props.SubscriptionId != nil {
+		subscriptionId = *props.SubscriptionId
+		subscriptionResourceId := commonids.NewSubscriptionID(subscriptionId)
+		resp, err := client.Get(ctx, subscriptionResourceId)
+		if err != nil {
+			return fmt.Errorf("retrieving %s (Alias %q) to obtain the Tenant Information: %+v", subscriptionResourceId, id.AliasName, err)
+		}
+		if resp.Model == nil {
+			return fmt.Errorf("retrieving %s: `model` was nil", subscriptionResourceId)
+		}
+
+		if model := resp.Model; model != nil {
+			subscriptionName = pointer.From(model.DisplayName)
+			tenantId = pointer.From(model.TenantId)
+			t = model.Tags
+		}
+	}
+
+	// (@jackofallops) A subscription's billing scope is not exposed in any way in the API/SDK so we cannot read it back here
+
+	d.Set("subscription_id", subscriptionId)
+	d.Set("subscription_name", subscriptionName)
+	d.Set("tenant_id", tenantId)
+	if err := tags.FlattenAndSet(d, t); err != nil {
+		return err
+	}
+
+	return nil
+}

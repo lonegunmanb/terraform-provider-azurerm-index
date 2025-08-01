@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mobilenetwork
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/attacheddatanetwork"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/packetcoredataplane"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r AttachedDataNetworkResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 180 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model AttachedDataNetworkModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			client := metadata.Client.MobileNetwork.AttachedDataNetworkClient
+			packetCoreDataPlaneId, err := packetcoredataplane.ParsePacketCoreDataPlaneID(model.MobileNetworkPacketCoreDataPlaneId)
+			if err != nil {
+				return err
+			}
+
+			id := attacheddatanetwork.NewAttachedDataNetworkID(packetCoreDataPlaneId.SubscriptionId, packetCoreDataPlaneId.ResourceGroupName, packetCoreDataPlaneId.PacketCoreControlPlaneName, packetCoreDataPlaneId.PacketCoreDataPlaneName, model.MobileNetworkDataNetworkName)
+			existing, err := client.Get(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for existing %s: %+v", id, err)
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			attachedDataNetwork := attacheddatanetwork.AttachedDataNetwork{
+				Location: location.Normalize(model.Location),
+				Properties: attacheddatanetwork.AttachedDataNetworkPropertiesFormat{
+					DnsAddresses:           model.DnsAddresses,
+					UserPlaneDataInterface: attacheddatanetwork.InterfaceProperties{},
+					NaptConfiguration:      expandNaptConfiguration(model.NaptConfiguration),
+				},
+				Tags: tags.Expand(model.Tags),
+			}
+
+			// if we pass an empty array the service will return an error
+			// Array is too short (0), minimum 1.
+			if len(model.UserEquipmentStaticAddressPoolPrefix) > 0 {
+				attachedDataNetwork.Properties.UserEquipmentStaticAddressPoolPrefix = &model.UserEquipmentStaticAddressPoolPrefix
+			}
+
+			if len(model.UserEquipmentAddressPoolPrefix) > 0 {
+				attachedDataNetwork.Properties.UserEquipmentAddressPoolPrefix = &model.UserEquipmentAddressPoolPrefix
+			}
+
+			if model.UserPlaneAccessName != "" {
+				attachedDataNetwork.Properties.UserPlaneDataInterface.Name = &model.UserPlaneAccessName
+			}
+
+			if model.UserPlaneAccessIPv4Address != "" {
+				attachedDataNetwork.Properties.UserPlaneDataInterface.IPv4Address = &model.UserPlaneAccessIPv4Address
+			}
+
+			if model.UserPlaneAccessIPv4Subnet != "" {
+				attachedDataNetwork.Properties.UserPlaneDataInterface.IPv4Subnet = &model.UserPlaneAccessIPv4Subnet
+			}
+
+			if model.UserPlaneAccessIPv4Gateway != "" {
+				attachedDataNetwork.Properties.UserPlaneDataInterface.IPv4Gateway = &model.UserPlaneAccessIPv4Gateway
+			}
+
+			if err := client.CreateOrUpdateThenPoll(ctx, id, attachedDataNetwork); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r OrchestratedVirtualMachineScaleSetDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Compute.VirtualMachineScaleSetsClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var orchestratedVMSS OrchestratedVirtualMachineScaleSetDataSourceModel
+			if err := metadata.Decode(&orchestratedVMSS); err != nil {
+				return err
+			}
+
+			id := virtualmachinescalesets.NewVirtualMachineScaleSetID(subscriptionId, orchestratedVMSS.ResourceGroup, orchestratedVMSS.Name)
+
+			options := virtualmachinescalesets.DefaultGetOperationOptions()
+			options.Expand = pointer.To(virtualmachinescalesets.ExpandTypesForGetVMScaleSetsUserData)
+			existing, err := client.Get(ctx, id, options)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("%s not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if model := existing.Model; model != nil {
+				orchestratedVMSS.Location = location.Normalize(model.Location)
+
+				identityFlattened, err := identity.FlattenSystemAndUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return err
+				}
+				orchestratedVMSS.Identity = pointer.From(identityFlattened)
+				if props := model.Properties; props != nil {
+					if profile := props.VirtualMachineProfile; profile != nil {
+						if nwProfile := profile.NetworkProfile; nwProfile != nil {
+							orchestratedVMSS.NetworkInterface = flattenVirtualMachineScaleSetNetworkInterface(nwProfile.NetworkInterfaceConfigurations)
+						}
+					}
+				}
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&orchestratedVMSS)
+		},
+	}
+}

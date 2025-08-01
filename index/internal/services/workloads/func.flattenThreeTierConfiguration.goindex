@@ -1,0 +1,74 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/workloads
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/workloads/2023-04-01/sapvirtualinstances"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/workloads/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenThreeTierConfiguration(input sapvirtualinstances.ThreeTierConfiguration, d *pluginsdk.ResourceData, subscriptionId string) ([]ThreeTierConfiguration, error) {
+	result := make([]ThreeTierConfiguration, 0)
+
+	threeTierConfig := ThreeTierConfiguration{
+		AppResourceGroupName:           input.AppResourceGroup,
+		ApplicationServerConfiguration: flattenApplicationServer(input.ApplicationServer, d, "three_tier_configuration"),
+		CentralServerConfiguration:     flattenCentralServer(input.CentralServer, d, "three_tier_configuration"),
+		DatabaseServerConfiguration:    flattenDatabaseServer(input.DatabaseServer, d, "three_tier_configuration"),
+	}
+
+	if customResourceNames := input.CustomResourceNames; customResourceNames != nil {
+		if v, ok := customResourceNames.(sapvirtualinstances.ThreeTierFullResourceNames); ok {
+			threeTierConfig.ResourceNames = flattenResourceNames(v)
+		}
+	}
+
+	if v := input.HighAvailabilityConfig; v != nil && v.HighAvailabilityType != "" {
+		threeTierConfig.HighAvailabilityType = string(v.HighAvailabilityType)
+	}
+
+	if v := input.NetworkConfiguration; v != nil && v.IsSecondaryIPEnabled != nil {
+		threeTierConfig.IsSecondaryIpEnabled = *v.IsSecondaryIPEnabled
+	}
+
+	if storageConfiguration := input.StorageConfiguration; storageConfiguration != nil {
+		if transportFileShareConfiguration := storageConfiguration.TransportFileShareConfiguration; transportFileShareConfiguration != nil {
+			if createAndMountFileShareConfiguration, ok := transportFileShareConfiguration.(sapvirtualinstances.CreateAndMountFileShareConfiguration); ok {
+				transportCreateAndMount := TransportCreateAndMount{
+					StorageAccountName: pointer.From(createAndMountFileShareConfiguration.StorageAccountName),
+				}
+
+				var resourceGroupId string
+				if v := createAndMountFileShareConfiguration.ResourceGroup; v != nil {
+					resourceGroupId = commonids.NewResourceGroupID(subscriptionId, *createAndMountFileShareConfiguration.ResourceGroup).ID()
+				}
+				transportCreateAndMount.ResourceGroupId = resourceGroupId
+
+				threeTierConfig.TransportCreateAndMount = []TransportCreateAndMount{
+					transportCreateAndMount,
+				}
+			}
+
+			if _, ok := transportFileShareConfiguration.(sapvirtualinstances.MountFileShareConfiguration); ok {
+				return nil, errors.New("currently, the last segment of the Storage File Share resource manager ID in Swagger is defined as `/shares/` but it's unexpected. The last segment of the Storage File Share resource manager ID should be `/fileshares/` not `/shares/` in Swagger since the backend service is using `/fileshares/`. See more details from https://github.com/Azure/azure-rest-api-specs/issues/25209. So the feature of `TransportMount` isn't supported by TF for now due to this service API bug")
+			}
+		}
+	}
+
+	return append(result, threeTierConfig), nil
+}

@@ -1,0 +1,92 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/api"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apimanagementservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/delegationsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/deletedservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/policy"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/product"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signinsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signupsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	apimValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandAzureRmApiManagementAdditionalLocations(d *pluginsdk.ResourceData, sku apimanagementservice.ApiManagementServiceSkuProperties) (*[]apimanagementservice.AdditionalLocation, error) {
+	inputLocations := d.Get("additional_location").([]interface{})
+	parentVnetConfig := d.Get("virtual_network_configuration").([]interface{})
+
+	additionalLocations := make([]apimanagementservice.AdditionalLocation, 0)
+
+	for _, v := range inputLocations {
+		config := v.(map[string]interface{})
+		location := azure.NormalizeLocation(config["location"].(string))
+
+		if config["capacity"].(int) > 0 {
+			sku.Capacity = int64(config["capacity"].(int))
+		}
+
+		additionalLocation := apimanagementservice.AdditionalLocation{
+			Location:       location,
+			Sku:            sku,
+			DisableGateway: pointer.To(config["gateway_disabled"].(bool)),
+		}
+
+		childVnetConfig := config["virtual_network_configuration"].([]interface{})
+		switch {
+		case len(childVnetConfig) == 0 && len(parentVnetConfig) > 0:
+			return nil, errors.New("`virtual_network_configuration` must be specified in any `additional_location` block when top-level `virtual_network_configuration` is supplied")
+		case len(childVnetConfig) > 0 && len(parentVnetConfig) == 0:
+			return nil, errors.New("`virtual_network_configuration` must be empty in all `additional_location` blocks when top-level `virtual_network_configuration` is not supplied")
+		case len(childVnetConfig) > 0 && len(parentVnetConfig) > 0:
+			v := childVnetConfig[0].(map[string]interface{})
+			subnetResourceId := v["subnet_id"].(string)
+			additionalLocation.VirtualNetworkConfiguration = &apimanagementservice.VirtualNetworkConfiguration{
+				SubnetResourceId: pointer.To(subnetResourceId),
+			}
+		}
+
+		publicIPAddressID := config["public_ip_address_id"].(string)
+		if publicIPAddressID != "" {
+			if sku.Name != apimanagementservice.SkuTypePremium {
+				if len(childVnetConfig) == 0 {
+					return nil, errors.New("`public_ip_address_id` for an additional location is only supported when sku type is `Premium`, and the APIM instance is deployed in a virtual network.")
+				}
+			}
+			additionalLocation.PublicIPAddressId = &publicIPAddressID
+		}
+
+		zones := zones.ExpandUntyped(config["zones"].(*schema.Set).List())
+		if len(zones) > 0 {
+			additionalLocation.Zones = &zones
+		}
+
+		additionalLocations = append(additionalLocations, additionalLocation)
+	}
+
+	return &additionalLocations, nil
+}

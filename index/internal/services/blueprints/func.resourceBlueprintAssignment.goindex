@@ -1,0 +1,137 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/blueprints
+import (
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/blueprints/2018-11-01-preview/assignment"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/blueprints/2018-11-01-preview/publishedblueprint"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceBlueprintAssignment() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceBlueprintAssignmentCreateUpdate,
+		Update: resourceBlueprintAssignmentCreateUpdate,
+		Read:   resourceBlueprintAssignmentRead,
+		Delete: resourceBlueprintAssignmentDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := assignment.ParseScopedBlueprintAssignmentID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(5 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"target_subscription_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: azure.ValidateResourceID,
+			},
+
+			"location": commonschema.Location(),
+
+			"identity": commonschema.SystemOrUserAssignedIdentityRequired(),
+
+			"version_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: publishedblueprint.ValidateScopedVersionID,
+			},
+
+			"parameter_values": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				StateFunc:        normalizeAssignmentParameterValuesJSON,
+				ValidateFunc:     validation.StringIsJSON,
+				DiffSuppressFunc: pluginsdk.SuppressJsonDiff,
+			},
+
+			"resource_groups": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				StateFunc:        normalizeAssignmentResourceGroupValuesJSON,
+				ValidateFunc:     validation.StringIsJSON,
+				DiffSuppressFunc: pluginsdk.SuppressJsonDiff,
+			},
+
+			"lock_mode": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(assignment.AssignmentLockModeNone),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(assignment.AssignmentLockModeNone),
+					string(assignment.AssignmentLockModeAllResourcesReadOnly),
+					string(assignment.AssignmentLockModeAllResourcesDoNotDelete),
+				}, false),
+				// The first character of value returned by the service is always in lower case.
+				DiffSuppressFunc: suppress.CaseDifference,
+			},
+
+			"lock_exclude_principals": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 5,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.IsUUID,
+				},
+			},
+
+			"lock_exclude_actions": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 200,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"description": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"display_name": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"blueprint_name": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"type": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+		},
+	}
+}

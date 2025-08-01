@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-sdk/sdk/auth"
+	"github.com/hashicorp/go-azure-sdk/sdk/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/shim"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/containers"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/datalakestore/filesystems"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/datalakestore/paths"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/file/directories"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/file/files"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/file/shares"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/queue/queues"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/entities"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
+)
+func (c Client) configureDataPlane(ctx context.Context, clientName, resourceIdentifier string, baseClient client.BaseClient, account AccountDetails, operation DataPlaneOperation) error {
+	if operation.SupportsAadAuthentication && c.authConfigForAzureAD != nil {
+		api := c.authConfigForAzureAD.Environment.Storage.WithResourceIdentifier(resourceIdentifier)
+		storageAuth, err := auth.NewAuthorizerFromCredentials(ctx, *c.authConfigForAzureAD, api)
+		if err != nil {
+			return fmt.Errorf("unable to build authorizer for Storage API: %+v", err)
+		}
+
+		baseClient.SetAuthorizer(storageAuth)
+		return nil
+	}
+
+	if operation.SupportsSharedKeyAuthentication {
+		accountKey, err := account.AccountKey(ctx, c)
+		if err != nil {
+			return fmt.Errorf("retrieving Storage Account Key: %s", err)
+		}
+
+		storageAuth, err := auth.NewSharedKeyAuthorizer(account.StorageAccountId.StorageAccountName, *accountKey, operation.sharedKeyAuthenticationType)
+		if err != nil {
+			return fmt.Errorf("building Shared Key Authorizer for %s client: %+v", clientName, err)
+		}
+
+		baseClient.SetAuthorizer(storageAuth)
+		return nil
+	}
+
+	return fmt.Errorf("building %s client: no configured authentication types are supported", clientName)
+}

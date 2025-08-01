@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func PublishZipDeployLocalFileKuduPush(ctx context.Context, host string, user string, passwd string, userAgent string, zipSource string) error {
+	f, err := os.Open(zipSource)
+	if err != nil {
+		return err
+	}
+
+	publishEndpoint := fmt.Sprintf("%s/api/zipdeploy?isAsync=true", host)
+	statusEndpoint := fmt.Sprintf("%s/api/deployments/latest", host)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, publishEndpoint, f)
+	if err != nil {
+		return fmt.Errorf("preparing publish request: %+v", err)
+	}
+
+	req.SetBasicAuth(user, passwd)
+	req.Header["Cache-Control"] = []string{"no-cache"}
+	req.Header["User-Agent"] = []string{userAgent}
+	req.Header["Content-Type"] = []string{"application/octet-stream"}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sending publish request: %+v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		if resp.StatusCode == http.StatusConflict {
+			return fmt.Errorf("publising Zip Deployment failed with %s - Another operation is in progress or your application is not configured for Zip deployments", resp.Status)
+		}
+		return fmt.Errorf("publishing failed with status code %s", resp.Status)
+	}
+
+	statusReq, err := http.NewRequestWithContext(ctx, http.MethodGet, statusEndpoint, http.NoBody)
+	if err != nil {
+		return err
+	}
+
+	statusReq.SetBasicAuth(user, passwd)
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return fmt.Errorf("publish request context had no deadline")
+	}
+
+	deployWait := &pluginsdk.StateChangeConf{
+		Pending:      []string{"pending"},
+		Target:       []string{"complete"},
+		PollInterval: 10 * time.Second,
+		Delay:        10 * time.Second,
+		Timeout:      time.Until(deadline),
+		Refresh:      checkZipDeploymentStatusRefresh(statusReq),
+	}
+
+	if _, err := deployWait.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for Zip Deployment to complete")
+	}
+
+	return nil
+}

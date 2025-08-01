@@ -1,0 +1,139 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCdnFrontDoorOriginGroup() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceCdnFrontDoorOriginGroupCreate,
+		Read:   resourceCdnFrontDoorOriginGroupRead,
+		Update: resourceCdnFrontDoorOriginGroupUpdate,
+		Delete: resourceCdnFrontDoorOriginGroupDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.FrontDoorOriginGroupID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.FrontDoorOriginGroupName,
+			},
+
+			"cdn_frontdoor_profile_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.FrontDoorProfileID,
+			},
+
+			"load_balancing": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MaxItems: 1,
+
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"additional_latency_in_milliseconds": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Default:      50,
+							ValidateFunc: validation.IntBetween(0, 1000),
+						},
+
+						"sample_size": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Default:      4,
+							ValidateFunc: validation.IntBetween(0, 255),
+						},
+
+						"successful_samples_required": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Default:      3,
+							ValidateFunc: validation.IntBetween(0, 255),
+						},
+					},
+				},
+			},
+
+			// Optional
+			"health_probe": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"protocol": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(cdn.ProbeProtocolHTTP),
+								string(cdn.ProbeProtocolHTTPS),
+							}, false),
+						},
+
+						"request_type": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+							Default:  string(cdn.HealthProbeRequestTypeHEAD),
+							ValidateFunc: validation.StringInSlice([]string{
+								string(cdn.HealthProbeRequestTypeGET),
+								string(cdn.HealthProbeRequestTypeHEAD),
+							}, false),
+						},
+
+						"interval_in_seconds": {
+							Type:         pluginsdk.TypeInt,
+							Required:     true,
+							ValidateFunc: validation.IntBetween(1, 255),
+						},
+
+						"path": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							Default:      "/",
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+					},
+				},
+			},
+
+			"session_affinity_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"restore_traffic_time_to_healed_or_new_endpoint_in_minutes": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      10,
+				ValidateFunc: validation.IntBetween(0, 50),
+			},
+		},
+	}
+}

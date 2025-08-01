@@ -1,0 +1,102 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerinstance/2023-05-01/containerinstance"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandSingleContainerVolume(input interface{}) (*[]containerinstance.VolumeMount, *[]containerinstance.Volume, error) {
+	volumesRaw := input.([]interface{})
+
+	if len(volumesRaw) == 0 {
+		return nil, nil, nil
+	}
+
+	volumeMounts := make([]containerinstance.VolumeMount, 0)
+	containerGroupVolumes := make([]containerinstance.Volume, 0)
+
+	for _, volumeRaw := range volumesRaw {
+		volumeConfig := volumeRaw.(map[string]interface{})
+
+		name := volumeConfig["name"].(string)
+		mountPath := volumeConfig["mount_path"].(string)
+		readOnly := volumeConfig["read_only"].(bool)
+		emptyDir := volumeConfig["empty_dir"].(bool)
+		shareName := volumeConfig["share_name"].(string)
+		storageAccountName := volumeConfig["storage_account_name"].(string)
+		storageAccountKey := volumeConfig["storage_account_key"].(string)
+
+		vm := containerinstance.VolumeMount{
+			Name:      name,
+			MountPath: mountPath,
+			ReadOnly:  pointer.FromBool(readOnly),
+		}
+
+		volumeMounts = append(volumeMounts, vm)
+
+		cv := containerinstance.Volume{
+			Name: name,
+		}
+
+		secret := expandSecrets(volumeConfig["secret"].(map[string]interface{}))
+
+		gitRepoVolume := expandGitRepoVolume(volumeConfig["git_repo"].([]interface{}))
+
+		switch {
+		case emptyDir:
+			if shareName != "" || storageAccountName != "" || storageAccountKey != "" || secret != nil || gitRepoVolume != nil {
+				return nil, nil, fmt.Errorf("only one of `empty_dir` volume, `git_repo` volume, `secret` volume or storage account volume (`share_name`, `storage_account_name`, and `storage_account_key`) can be specified")
+			}
+			var m interface{} = map[string]string{}
+			cv.EmptyDir = &m
+		case gitRepoVolume != nil:
+			if shareName != "" || storageAccountName != "" || storageAccountKey != "" || secret != nil {
+				return nil, nil, fmt.Errorf("only one of `empty_dir` volume, `git_repo` volume, `secret` volume or storage account volume (`share_name`, `storage_account_name`, and `storage_account_key`) can be specified")
+			}
+			cv.GitRepo = gitRepoVolume
+		case secret != nil:
+			if shareName != "" || storageAccountName != "" || storageAccountKey != "" {
+				return nil, nil, fmt.Errorf("only one of `empty_dir` volume, `git_repo` volume, `secret` volume or storage account volume (`share_name`, `storage_account_name`, and `storage_account_key`) can be specified")
+			}
+			cv.Secret = &secret
+		default:
+			if shareName == "" && storageAccountName == "" && storageAccountKey == "" {
+				return nil, nil, fmt.Errorf("exactly one of `empty_dir` volume, `git_repo` volume, `secret` volume or storage account volume (`share_name`, `storage_account_name`, and `storage_account_key`) must be specified")
+			} else if shareName == "" || storageAccountName == "" || storageAccountKey == "" {
+				return nil, nil, fmt.Errorf("when using a storage account volume, all of `share_name`, `storage_account_name`, `storage_account_key` must be specified")
+			}
+			cv.AzureFile = &containerinstance.AzureFileVolume{
+				ShareName:          shareName,
+				ReadOnly:           pointer.FromBool(readOnly),
+				StorageAccountName: storageAccountName,
+				StorageAccountKey:  pointer.To(storageAccountKey),
+			}
+		}
+
+		containerGroupVolumes = append(containerGroupVolumes, cv)
+	}
+
+	return &volumeMounts, &containerGroupVolumes, nil
+}

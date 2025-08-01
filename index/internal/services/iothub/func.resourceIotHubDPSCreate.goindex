@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/deviceprovisioningservices/2022-02-05/iotdpsresource"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func resourceIotHubDPSCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).IoTHub.DPSResourceClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := commonids.NewProvisioningServiceID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+
+	existing, err := client.Get(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for presence of existing IoT Device Provisioning Service %s: %+v", id, err)
+		}
+	}
+
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_iothub_dps", id.ID())
+	}
+
+	publicNetworkAccess := iotdpsresource.PublicNetworkAccessEnabled
+	if !d.Get("public_network_access_enabled").(bool) {
+		publicNetworkAccess = iotdpsresource.PublicNetworkAccessDisabled
+	}
+
+	allocationPolicy := iotdpsresource.AllocationPolicy(d.Get("allocation_policy").(string))
+	iotdps := iotdpsresource.ProvisioningServiceDescription{
+		Location: azure.NormalizeLocation(d.Get("location").(string)),
+		Name:     utils.String(id.ProvisioningServiceName),
+		Sku:      expandIoTHubDPSSku(d),
+		Properties: iotdpsresource.IotDpsPropertiesDescription{
+			IotHubs:             expandIoTHubDPSIoTHubs(d.Get("linked_hub").([]interface{})),
+			AllocationPolicy:    &allocationPolicy,
+			EnableDataResidency: utils.Bool(d.Get("data_residency_enabled").(bool)),
+			IPFilterRules:       expandDpsIPFilterRules(d),
+			PublicNetworkAccess: &publicNetworkAccess,
+		},
+		Tags: expandTags(d.Get("tags").(map[string]interface{})),
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, iotdps); err != nil {
+		return fmt.Errorf("creating IoT Device Provisioning Service %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceIotHubDPSRead(d, meta)
+}

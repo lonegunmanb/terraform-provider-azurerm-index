@@ -1,0 +1,79 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2024-06-01/cloudvmclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2024-06-01/dbnodes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (d DBNodesDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Oracle.OracleClient.DbNodes
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			state := DBNodesDataModel{
+				DBNodes: make([]DBNodeDataModel, 0),
+			}
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			parsedCloudVmClusterId, err := cloudvmclusters.ParseCloudVMClusterID(state.CloudVmClusterId)
+			if err != nil {
+				return fmt.Errorf("decoding id: %+v", err)
+			}
+			id := dbnodes.NewCloudVMClusterID(subscriptionId, parsedCloudVmClusterId.ResourceGroupName, parsedCloudVmClusterId.CloudVmClusterName)
+
+			resp, err := client.ListByCloudVMCluster(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				for _, element := range *model {
+					if props := element.Properties; props != nil {
+						dbNode := DBNodeDataModel{
+							AdditionalDetails:          pointer.From(props.AdditionalDetails),
+							BackupIPId:                 pointer.From(props.BackupIPId),
+							BackupVnicId:               pointer.From(props.BackupVnicId),
+							BackupVnic2Id:              pointer.From(props.BackupVnic2Id),
+							CpuCoreCount:               pointer.From(props.CpuCoreCount),
+							DbNodeStorageSizeInGbs:     pointer.From(props.DbNodeStorageSizeInGbs),
+							DbServerId:                 pointer.From(props.DbServerId),
+							DbSystemId:                 props.DbSystemId,
+							FaultDomain:                pointer.From(props.FaultDomain),
+							HostIPId:                   pointer.From(props.HostIPId),
+							Hostname:                   pointer.From(props.Hostname),
+							LifecycleDetails:           pointer.From(props.LifecycleDetails),
+							LifecycleState:             string(props.LifecycleState),
+							MaintenanceType:            string(pointer.From(props.MaintenanceType)),
+							MemorySizeInGbs:            pointer.From(props.MemorySizeInGbs),
+							Ocid:                       props.Ocid,
+							SoftwareStorageSizeInGb:    pointer.From(props.SoftwareStorageSizeInGb),
+							TimeCreated:                props.TimeCreated,
+							TimeMaintenanceWindowEnd:   pointer.From(props.TimeMaintenanceWindowEnd),
+							TimeMaintenanceWindowStart: pointer.From(props.TimeMaintenanceWindowStart),
+							VnicId:                     props.VnicId,
+							Vnic2Id:                    pointer.From(props.Vnic2Id),
+						}
+						state.DBNodes = append(state.DBNodes, dbNode)
+					}
+				}
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&state)
+		},
+	}
+}

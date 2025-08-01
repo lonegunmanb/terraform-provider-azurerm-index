@@ -1,0 +1,33 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/migration
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/signalr/2023-02-01/signalr"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (n NetworkAclV0ToV1) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		log.Println("[DEBUG] Migrating SignalR Network ACL from v0 to v1 format")
+
+		// the old segment is `SignalR` but should be `signalR`
+		oldId := rawState["id"].(string)
+		parsed, err := signalr.ParseSignalRIDInsensitively(oldId)
+		if err != nil {
+			return rawState, fmt.Errorf("parsing Old Resource ID %q: %+v", oldId, err)
+		}
+
+		newId := parsed.ID()
+		log.Printf("[DEBUG] Updating ID from %q to %q", oldId, newId)
+		rawState["id"] = newId
+
+		// SignalR Service ID is the same as ID, but let's call the values out specifically
+		oldServiceId := rawState["signalr_service_id"].(string)
+		newServiceId := parsed.ID()
+		log.Printf("[DEBUG] Updating SignalR Service ID from %q to %q", oldServiceId, newServiceId)
+		rawState["signalr_service_id"] = newId
+
+		return rawState, nil
+	}
+}

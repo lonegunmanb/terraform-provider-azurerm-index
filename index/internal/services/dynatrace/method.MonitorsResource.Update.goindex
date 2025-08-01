@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dynatrace
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dynatrace/2023-04-27/monitors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r MonitorsResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Dynatrace.MonitorsClient
+			id, err := monitors.ParseMonitorID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var state MonitorsResourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding %+v", err)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				props := monitors.MonitorResourceUpdate{
+					Tags: pointer.To(state.Tags),
+				}
+
+				if _, err := client.Update(ctx, *id, props); err != nil {
+					return fmt.Errorf("updating %s: %+v", *id, err)
+				}
+			}
+
+			return nil
+		},
+	}
+}

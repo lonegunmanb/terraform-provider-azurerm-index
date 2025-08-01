@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceArmLoadBalancerProbeRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).LoadBalancers.LoadBalancersClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := loadbalancers.ParseProbeID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	plbId := loadbalancers.ProviderLoadBalancerId{SubscriptionId: id.SubscriptionId, ResourceGroupName: id.ResourceGroupName, LoadBalancerName: id.LoadBalancerName}
+	loadBalancer, err := client.Get(ctx, plbId, loadbalancers.GetOperationOptions{})
+	if err != nil {
+		if response.WasNotFound(loadBalancer.HttpResponse) {
+			d.SetId("")
+			log.Printf("[INFO] Load Balancer %q not found. Removing from state", id.LoadBalancerName)
+			return nil
+		}
+		return fmt.Errorf("retrieving %s: %+v", plbId, err)
+	}
+
+	if model := loadBalancer.Model; model != nil {
+		config, _, exists := FindLoadBalancerProbeByName(model, id.ProbeName)
+		if !exists {
+			d.SetId("")
+			log.Printf("[INFO] Load Balancer Probe %q not found. Removing from state", id.ProbeName)
+			return nil
+		}
+
+		d.Set("name", config.Name)
+
+		if props := config.Properties; props != nil {
+			d.Set("interval_in_seconds", int(pointer.From(props.IntervalInSeconds)))
+			d.Set("number_of_probes", int(pointer.From(props.NumberOfProbes)))
+			d.Set("port", int(props.Port))
+			d.Set("protocol", string(props.Protocol))
+			d.Set("request_path", pointer.From(props.RequestPath))
+			d.Set("probe_threshold", int(pointer.From(props.ProbeThreshold)))
+
+			// TODO: parse/make these consistent
+			var loadBalancerRules []string
+			if rules := props.LoadBalancingRules; rules != nil {
+				for _, ruleConfig := range *rules {
+					if id := ruleConfig.Id; id != nil {
+						loadBalancerRules = append(loadBalancerRules, *id)
+					}
+				}
+			}
+			if err := d.Set("load_balancer_rules", loadBalancerRules); err != nil {
+				return fmt.Errorf("setting `load_balancer_rules` (Load Balancer %q Probe %q): %+v", id.LoadBalancerName, id.ProbeName, err)
+			}
+		}
+	}
+	return nil
+}

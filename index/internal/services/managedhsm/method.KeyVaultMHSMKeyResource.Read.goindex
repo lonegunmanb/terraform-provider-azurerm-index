@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2023-07-01/managedhsms"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func (r KeyVaultMHSMKeyResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ManagedHSMs.DataPlaneKeysClient
+			domainSuffix, ok := metadata.Client.Account.Environment.ManagedHSM.DomainSuffix()
+			if !ok {
+				return fmt.Errorf("could not determine Managed HSM domain suffix for environment %q", metadata.Client.Account.Environment.Name)
+			}
+
+			schema := KeyVaultMHSMKeyResourceSchema{}
+
+			id, err := parse.ManagedHSMDataPlaneVersionlessKeyID(metadata.ResourceData.Id(), domainSuffix)
+			if err != nil {
+				return err
+			}
+
+			subscriptionId := commonids.NewSubscriptionID(metadata.Client.Account.SubscriptionId)
+			resourceManagerId, err := metadata.Client.ManagedHSMs.ManagedHSMIDFromBaseUrl(ctx, subscriptionId, id.BaseUri(), domainSuffix)
+			if err != nil {
+				return fmt.Errorf("determining Resource Manager ID for %q: %+v", id, err)
+			}
+			if resourceManagerId == nil {
+				return metadata.MarkAsGone(*id)
+			}
+
+			resp, err := client.GetKey(ctx, id.BaseUri(), id.KeyName, "")
+			if err != nil {
+				if utils.ResponseWasNotFound(resp.Response) {
+					return metadata.MarkAsGone(*id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if key := resp.Key; key != nil {
+				schema.Name = id.KeyName
+				schema.ManagedHSMID = resourceManagerId.ID()
+				schema.KeyType = string(key.Kty)
+				schema.KeyOpts = flattenKeyVaultKeyOptions(key.KeyOps)
+				schema.Curve = string(key.Crv)
+				schema.Tags = tags.Flatten(resp.Tags)
+				schema.VersionedId = pointer.From(key.Kid)
+				if key.N != nil {
+					nBytes, err := base64.RawURLEncoding.DecodeString(*key.N)
+					if err != nil {
+						return fmt.Errorf("Could not decode N: %+v", err)
+					}
+					schema.KeySize = int64(len(nBytes) * 8)
+				}
+
+				if attributes := resp.Attributes; attributes != nil {
+					if v := attributes.NotBefore; v != nil {
+						schema.NotBeforeDate = time.Time(*v).Format(time.RFC3339)
+					}
+
+					if v := attributes.Expires; v != nil {
+						schema.ExpirationDate = time.Time(*v).Format(time.RFC3339)
+					}
+				}
+			}
+
+			return metadata.Encode(&schema)
+		},
+	}
+}

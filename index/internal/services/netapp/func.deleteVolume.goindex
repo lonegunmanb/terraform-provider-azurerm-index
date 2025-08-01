@@ -1,0 +1,125 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumesreplication"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func deleteVolume(ctx context.Context, metadata sdk.ResourceMetaData, volumeId string) error {
+	client := metadata.Client.NetApp.VolumeClient
+
+	id, err := volumes.ParseVolumeID(volumeId)
+	if err != nil {
+		return err
+	}
+
+	existing, err := client.Get(ctx, pointer.From(id))
+	if err != nil {
+		if response.WasNotFound(existing.HttpResponse) {
+			return metadata.MarkAsGone(id)
+		}
+		return fmt.Errorf("retrieving %s: %v", id, err)
+	}
+
+	// Removing replication if present
+	if existing.Model.Properties.DataProtection != nil && existing.Model.Properties.DataProtection.Replication != nil {
+		dataProtectionReplication := existing.Model.Properties.DataProtection
+		replicaVolumeId, err := volumesreplication.ParseVolumeID(id.ID())
+		if err != nil {
+			return err
+		}
+		if dataProtectionReplication.Replication.EndpointType != nil && !strings.EqualFold(string(pointer.From(dataProtectionReplication.Replication.EndpointType)), string(volumes.EndpointTypeDst)) {
+			// This is the case where primary volume started the deletion, in this case, to be consistent we will remove replication from secondary
+			replicaVolumeId, err = volumesreplication.ParseVolumeID(dataProtectionReplication.Replication.RemoteVolumeResourceId)
+			if err != nil {
+				return err
+			}
+		}
+
+		replicationClient := metadata.Client.NetApp.VolumeReplicationClient
+		// Checking replication status before deletion, it need to be broken before proceeding with deletion
+		if res, err := replicationClient.VolumesReplicationStatus(ctx, pointer.From(replicaVolumeId)); err == nil {
+			// Wait for replication state = "mirrored"
+			if model := res.Model; model != nil {
+				if model.MirrorState != nil && strings.ToLower(string(pointer.From(model.MirrorState))) == "uninitialized" {
+					if err := waitForReplMirrorState(ctx, replicationClient, pointer.From(replicaVolumeId), "mirrored"); err != nil {
+						return fmt.Errorf("waiting for replica %s to become 'mirrored': %+v", pointer.From(replicaVolumeId), err)
+					}
+				}
+			}
+
+			// Breaking replication
+			if err = replicationClient.VolumesBreakReplicationThenPoll(ctx, pointer.From(replicaVolumeId), volumesreplication.BreakReplicationRequest{
+				ForceBreakReplication: utils.Bool(true),
+			}); err != nil {
+				return fmt.Errorf("breaking replication for %s: %+v", pointer.From(replicaVolumeId), err)
+			}
+
+			// Waiting for replication be in broken state
+			metadata.Logger.Infof("waiting for the replication of %s to be in broken state", pointer.From(replicaVolumeId))
+			if err := waitForReplMirrorState(ctx, replicationClient, pointer.From(replicaVolumeId), "broken"); err != nil {
+				return fmt.Errorf("waiting for the breaking of replication for %s: %+v", pointer.From(replicaVolumeId), err)
+			}
+		}
+
+		// Deleting replication and waiting for it to fully complete the operation
+		// Can't use VolumesDeleteReplicationThenPoll because from time to time the LRO SDK fails,
+		// please see Pandora's issue: https://github.com/hashicorp/pandora/issues/4571
+		if _, err = replicationClient.VolumesDeleteReplication(ctx, pointer.From(replicaVolumeId)); err != nil {
+			return fmt.Errorf("deleting replicate %s: %+v", pointer.From(replicaVolumeId), err)
+		}
+
+		if err := waitForReplicationDeletion(ctx, replicationClient, pointer.From(replicaVolumeId)); err != nil {
+			return fmt.Errorf("waiting for the replica %s to be deleted: %+v", pointer.From(replicaVolumeId), err)
+		}
+	}
+
+	// Disassociating volume from snapshot policy if present
+	if existing.Model.Properties.DataProtection != nil && existing.Model.Properties.DataProtection.Snapshot != nil && existing.Model.Properties.DataProtection.Snapshot.SnapshotPolicyId != nil && existing.Model.Properties.DataProtection.Snapshot.SnapshotPolicyId != pointer.To("") {
+		log.Printf("[INFO] Disassociating volume from snapshot policy")
+		if err = client.UpdateThenPoll(ctx, pointer.From(id), volumes.VolumePatch{
+			Properties: &volumes.VolumePatchProperties{
+				DataProtection: &volumes.VolumePatchPropertiesDataProtection{
+					Snapshot: &volumes.VolumeSnapshotProperties{
+						SnapshotPolicyId: pointer.To(""),
+					},
+				},
+			},
+		}); err != nil {
+			return fmt.Errorf("dissociating snapshot policy from %s: %+v", pointer.From(id), err)
+		}
+
+		// Wait for the volume update to complete
+		log.Printf("[INFO] Wait for the volume update to complete after unsetting snapshot policy")
+		if err := waitForVolumeCreateOrUpdate(ctx, client, pointer.From(id)); err != nil {
+			return fmt.Errorf("waiting for volume to reflect snapshotPolicyId unset from %q: %+v", pointer.From(id), err)
+		}
+	}
+
+	// Deleting volume and waiting for it to fully complete the operation
+	log.Printf("[INFO] Deleting volume %s", id.String())
+	if err = client.DeleteThenPoll(ctx, pointer.From(id), volumes.DeleteOperationOptions{
+		ForceDelete: utils.Bool(true),
+	}); err != nil {
+		return fmt.Errorf("deleting %s: %+v", pointer.From(id), err)
+	}
+
+	if err = waitForVolumeDeletion(ctx, client, pointer.From(id)); err != nil {
+		return fmt.Errorf("waiting delete %s: %+v", pointer.From(id), err)
+	}
+
+	return nil
+}

@@ -1,0 +1,122 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/google/uuid"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandFunctionAppSiteConfig(d *pluginsdk.ResourceData) (web.SiteConfig, error) {
+	configs := d.Get("site_config").([]interface{})
+	siteConfig := web.SiteConfig{}
+
+	if len(configs) == 0 {
+		return siteConfig, nil
+	}
+
+	config := configs[0].(map[string]interface{})
+
+	if v, ok := config["always_on"]; ok {
+		siteConfig.AlwaysOn = utils.Bool(v.(bool))
+	}
+
+	if v, ok := config["use_32_bit_worker_process"]; ok {
+		siteConfig.Use32BitWorkerProcess = utils.Bool(v.(bool))
+	}
+
+	if v, ok := config["websockets_enabled"]; ok {
+		siteConfig.WebSocketsEnabled = utils.Bool(v.(bool))
+	}
+
+	if v, ok := config["linux_fx_version"]; ok {
+		siteConfig.LinuxFxVersion = utils.String(v.(string))
+	}
+
+	if v, ok := config["cors"]; ok {
+		expand := ExpandWebCorsSettings(v)
+		siteConfig.Cors = &expand
+	}
+
+	if v, ok := config["http2_enabled"]; ok {
+		siteConfig.HTTP20Enabled = utils.Bool(v.(bool))
+	}
+
+	if v, ok := config["ip_restriction"]; ok {
+		restrictions, err := expandAppServiceIpRestriction(v)
+		if err != nil {
+			return siteConfig, err
+		}
+		siteConfig.IPSecurityRestrictions = &restrictions
+	}
+
+	if v, ok := config["scm_use_main_ip_restriction"]; ok {
+		siteConfig.ScmIPSecurityRestrictionsUseMain = utils.Bool(v.(bool))
+	}
+
+	if v, ok := config["scm_ip_restriction"]; ok {
+		scmIPSecurityRestrictions := v.([]interface{})
+		scmRestrictions, err := expandAppServiceIpRestriction(scmIPSecurityRestrictions)
+		if err != nil {
+			return siteConfig, err
+		}
+		siteConfig.ScmIPSecurityRestrictions = &scmRestrictions
+	}
+
+	if v, ok := config["min_tls_version"]; ok {
+		siteConfig.MinTLSVersion = web.SupportedTLSVersions(v.(string))
+	}
+
+	if v, ok := config["ftps_state"]; ok {
+		siteConfig.FtpsState = web.FtpsState(v.(string))
+	}
+
+	if v, ok := config["pre_warmed_instance_count"]; ok {
+		siteConfig.PreWarmedInstanceCount = utils.Int32(int32(v.(int)))
+	}
+
+	if v, ok := config["scm_type"]; ok {
+		siteConfig.ScmType = web.ScmType(v.(string))
+	}
+
+	// This optional parameter can only present in "slot" resources
+	if v, ok := config["auto_swap_slot_name"]; ok {
+		siteConfig.AutoSwapSlotName = utils.String(v.(string))
+	}
+
+	if v, ok := config["health_check_path"]; ok {
+		siteConfig.HealthCheckPath = utils.String(v.(string))
+	}
+
+	if v, ok := config["java_version"]; ok {
+		siteConfig.JavaVersion = utils.String(v.(string))
+	}
+
+	if v, ok := config["elastic_instance_minimum"]; ok && v.(int) > 0 {
+		siteConfig.MinimumElasticInstanceCount = utils.Int32(int32(v.(int)))
+	}
+
+	if v, ok := config["app_scale_limit"]; ok {
+		siteConfig.FunctionAppScaleLimit = utils.Int32(int32(v.(int)))
+	}
+
+	if v, ok := config["runtime_scale_monitoring_enabled"]; ok {
+		siteConfig.FunctionsRuntimeScaleMonitoringEnabled = utils.Bool(v.(bool))
+	}
+
+	if v, ok := config["dotnet_framework_version"]; ok {
+		siteConfig.NetFrameworkVersion = utils.String(v.(string))
+	}
+
+	if v, ok := config["vnet_route_all_enabled"]; ok {
+		siteConfig.VnetRouteAllEnabled = utils.Bool(v.(bool))
+	}
+
+	return siteConfig, nil
+}

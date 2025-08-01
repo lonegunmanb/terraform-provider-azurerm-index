@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/rules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/subscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAzureRmServiceBusCorrelationFilter(d *pluginsdk.ResourceData) (*rules.CorrelationFilter, error) {
+	configs := d.Get("correlation_filter").([]interface{})
+	if len(configs) == 0 {
+		return nil, fmt.Errorf("`correlation_filter` is required when `filter_type` is set to `CorrelationFilter`")
+	}
+
+	if configs[0] == nil {
+		return nil, fmt.Errorf("at least one property must not be empty in the `correlation_filter` block")
+	}
+	config := configs[0].(map[string]interface{})
+
+	contentType := config["content_type"].(string)
+	correlationID := config["correlation_id"].(string)
+	label := config["label"].(string)
+	messageID := config["message_id"].(string)
+	replyTo := config["reply_to"].(string)
+	replyToSessionID := config["reply_to_session_id"].(string)
+	sessionID := config["session_id"].(string)
+	to := config["to"].(string)
+
+	properties := expandProperties(config["properties"].(map[string]interface{}))
+
+	if contentType == "" && correlationID == "" && label == "" && messageID == "" && replyTo == "" && replyToSessionID == "" && sessionID == "" && to == "" && len(*properties) == 0 {
+		return nil, fmt.Errorf("at least one property must be set in the `correlation_filter` block")
+	}
+
+	correlationFilter := rules.CorrelationFilter{}
+
+	if correlationID != "" {
+		correlationFilter.CorrelationId = utils.String(correlationID)
+	}
+
+	if messageID != "" {
+		correlationFilter.MessageId = utils.String(messageID)
+	}
+
+	if to != "" {
+		correlationFilter.To = utils.String(to)
+	}
+
+	if replyTo != "" {
+		correlationFilter.ReplyTo = utils.String(replyTo)
+	}
+
+	if label != "" {
+		correlationFilter.Label = utils.String(label)
+	}
+
+	if sessionID != "" {
+		correlationFilter.SessionId = utils.String(sessionID)
+	}
+
+	if replyToSessionID != "" {
+		correlationFilter.ReplyToSessionId = utils.String(replyToSessionID)
+	}
+
+	if contentType != "" {
+		correlationFilter.ContentType = utils.String(contentType)
+	}
+
+	if len(*properties) > 0 {
+		correlationFilter.Properties = properties
+	}
+
+	return &correlationFilter, nil
+}

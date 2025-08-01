@@ -1,0 +1,32 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventgrid
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2022-06-15/eventsubscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandEventSubscriptionIdentity(input []interface{}) (*eventsubscriptions.EventSubscriptionIdentity, error) {
+	if len(input) == 0 || input[0] == nil {
+		return &eventsubscriptions.EventSubscriptionIdentity{
+			Type: pointer.To(eventsubscriptions.EventSubscriptionIdentityType("None")),
+		}, nil
+	}
+
+	identity := input[0].(map[string]interface{})
+	identityType := eventsubscriptions.EventSubscriptionIdentityType(identity["type"].(string))
+	eventgridIdentity := eventsubscriptions.EventSubscriptionIdentity{
+		Type: pointer.To(identityType),
+	}
+
+	userAssignedIdentity := identity["user_assigned_identity"].(string)
+	if identityType == eventsubscriptions.EventSubscriptionIdentityTypeUserAssigned {
+		eventgridIdentity.UserAssignedIdentity = pointer.To(userAssignedIdentity)
+	} else if len(userAssignedIdentity) > 0 {
+		return nil, fmt.Errorf("`user_assigned_identity` can only be specified when `type` is `UserAssigned`; but `type` is currently %q", identityType)
+	}
+
+	return &eventgridIdentity, nil
+}

@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2023-09-04/openshiftclusters"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenOpenShiftClusterProfile(profile *openshiftclusters.ClusterProfile, config RedHatOpenShiftClusterModel) (*[]ClusterProfile, error) {
+	if profile == nil {
+		return &[]ClusterProfile{}, nil
+	}
+
+	// pull secret isn't returned by the API so pass the existing value along
+	pullSecret := ""
+	if len(config.ClusterProfile) != 0 {
+		pullSecret = config.ClusterProfile[0].PullSecret
+	}
+
+	fipsEnabled := false
+	if profile.FipsValidatedModules != nil {
+		fipsEnabled = *profile.FipsValidatedModules == openshiftclusters.FipsValidatedModulesEnabled
+	}
+
+	resourceGroupId, err := commonids.ParseResourceGroupIDInsensitively(*profile.ResourceGroupId)
+	if err != nil {
+		return nil, err
+	}
+
+	resourceGroupIdString := ""
+	resourceGroupName := ""
+	if resourceGroupId != nil {
+		resourceGroupIdString = resourceGroupId.ID()
+		resourceGroupName = resourceGroupId.ResourceGroupName
+	}
+
+	return &[]ClusterProfile{
+		{
+			PullSecret:               pullSecret,
+			Domain:                   pointer.From(profile.Domain),
+			FipsEnabled:              fipsEnabled,
+			ResourceGroupId:          resourceGroupIdString,
+			ManagedResourceGroupName: resourceGroupName,
+			Version:                  pointer.From(profile.Version),
+		},
+	}, nil
+}

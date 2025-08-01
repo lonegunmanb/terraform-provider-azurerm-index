@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func flattenSpringCloudNetwork(input *appplatform.NetworkProfile) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	var serviceRuntimeSubnetID, appSubnetID, serviceRuntimeNetworkResourceGroup, appNetworkResourceGroup string
+	var readTimeoutInSeconds int32
+	var cidrRanges []interface{}
+	if input.ServiceRuntimeSubnetID != nil {
+		serviceRuntimeSubnetID = *input.ServiceRuntimeSubnetID
+	}
+	if input.AppSubnetID != nil {
+		appSubnetID = *input.AppSubnetID
+	}
+	if input.ServiceCidr != nil {
+		cidrs := strings.Split(*input.ServiceCidr, ",")
+		cidrRanges = utils.FlattenStringSlice(&cidrs)
+	}
+	if input.ServiceRuntimeNetworkResourceGroup != nil {
+		serviceRuntimeNetworkResourceGroup = *input.ServiceRuntimeNetworkResourceGroup
+	}
+	if input.AppNetworkResourceGroup != nil {
+		appNetworkResourceGroup = *input.AppNetworkResourceGroup
+	}
+
+	if ingressConfig := input.IngressConfig; ingressConfig != nil {
+		if ingressConfig.ReadTimeoutInSeconds != nil {
+			readTimeoutInSeconds = *ingressConfig.ReadTimeoutInSeconds
+		}
+	}
+
+	outboundType := "loadBalancer"
+	if input.OutboundType != nil {
+		outboundType = *input.OutboundType
+	}
+
+	if serviceRuntimeSubnetID == "" && appSubnetID == "" && serviceRuntimeNetworkResourceGroup == "" && appNetworkResourceGroup == "" && len(cidrRanges) == 0 {
+		return []interface{}{}
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"app_subnet_id":                          appSubnetID,
+			"service_runtime_subnet_id":              serviceRuntimeSubnetID,
+			"cidr_ranges":                            cidrRanges,
+			"app_network_resource_group":             appNetworkResourceGroup,
+			"read_timeout_seconds":                   readTimeoutInSeconds,
+			"service_runtime_network_resource_group": serviceRuntimeNetworkResourceGroup,
+			"outbound_type":                          outboundType,
+		},
+	}
+}

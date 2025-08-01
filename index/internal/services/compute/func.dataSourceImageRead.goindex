@@ -1,0 +1,103 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"sort"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/images"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceImageRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Compute.ImagesClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	nameRegex, nameRegexOk := d.GetOk("name_regex")
+
+	var id images.ImageId
+	var model images.Image
+
+	if !nameRegexOk {
+		var err error
+		id = images.NewImageID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+		result, err := client.Get(ctx, id, images.DefaultGetOperationOptions())
+		if err != nil {
+			if response.WasNotFound(result.HttpResponse) {
+				return fmt.Errorf("%s was not found", id)
+			}
+			return fmt.Errorf("retrieving %s: %+v", id, err)
+		}
+
+		if result.Model == nil {
+			return fmt.Errorf("%s was not found", id)
+		}
+		model = *result.Model
+	} else {
+		r := regexp.MustCompile(nameRegex.(string))
+		resourceGroupId := commonids.NewResourceGroupID(subscriptionId, d.Get("resource_group_name").(string))
+		listResponse, err := client.ListByResourceGroupComplete(ctx, resourceGroupId)
+		if err != nil {
+			return fmt.Errorf("listing Images within %s: %+v", resourceGroupId, err)
+		}
+		results := make([]images.Image, 0)
+		for _, v := range listResponse.Items {
+			if r.Match(([]byte)(*v.Name)) {
+				results = append(results, v)
+			}
+		}
+
+		if len(results) == 0 {
+			return fmt.Errorf("no Images were found within %s", resourceGroupId)
+		}
+		if len(results) > 1 {
+			desc := d.Get("sort_descending").(bool)
+			log.Printf("[DEBUG] Image - multiple results found and `sort_descending` is set to: %t", desc)
+
+			sort.Slice(results, func(i, j int) bool {
+				return (!desc && *results[i].Name < *results[j].Name) ||
+					(desc && *results[i].Name > *results[j].Name)
+			})
+		}
+		model = results[0]
+		if model.Name == nil {
+			return fmt.Errorf("image name is null for the first Image in %s: %+v", resourceGroupId, model)
+		}
+
+		id = images.NewImageID(resourceGroupId.SubscriptionId, resourceGroupId.ResourceGroupName, *model.Name)
+	}
+
+	d.SetId(id.ID())
+	d.Set("name", id.ImageName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	d.Set("location", location.Normalize(model.Location))
+	if props := model.Properties; props != nil {
+		if profile := props.StorageProfile; profile != nil {
+			if err := d.Set("os_disk", flattenImageDataSourceOSDisk(profile.OsDisk)); err != nil {
+				return fmt.Errorf("setting `os_disk`: %+v", err)
+			}
+
+			if err := d.Set("data_disk", flattenImageDataSourceDataDisks(profile.DataDisks)); err != nil {
+				return fmt.Errorf("setting `data_disk`: %+v", err)
+			}
+			d.Set("zone_resilient", profile.ZoneResilient)
+		}
+	}
+
+	if err := tags.FlattenAndSet(d, model.Tags); err != nil {
+		return fmt.Errorf("setting `tags`: %+v", err)
+	}
+
+	return nil
+}

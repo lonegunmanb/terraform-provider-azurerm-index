@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	validate2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAzureRmVirtualMachineScaleSetStorageProfileOSDisk(profile *virtualmachinescalesets.VirtualMachineScaleSetOSDisk) []interface{} {
+	result := make(map[string]interface{})
+
+	if profile.Name != nil {
+		result["name"] = *profile.Name
+	}
+
+	if profile.Image != nil {
+		result["image"] = *profile.Image.Uri
+	}
+
+	containers := make([]interface{}, 0)
+	if profile.VhdContainers != nil {
+		for _, container := range *profile.VhdContainers {
+			containers = append(containers, container)
+		}
+	}
+	result["vhd_containers"] = pluginsdk.NewSet(pluginsdk.HashString, containers)
+
+	if profile.ManagedDisk != nil {
+		result["managed_disk_type"] = string(pointer.From(profile.ManagedDisk.StorageAccountType))
+	}
+
+	result["caching"] = profile.Caching
+	result["create_option"] = profile.CreateOption
+	result["os_type"] = profile.OsType
+
+	return []interface{}{result}
+}

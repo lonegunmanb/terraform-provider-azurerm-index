@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2023-07-01/managedhsms"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidation "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/custompollers"
+	managedHSMValidation "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	kv74 "github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func resourceArmKeyVaultManagedHardwareSecurityModuleCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).ManagedHSMs
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := managedhsms.NewManagedHSMID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	existing, err := client.ManagedHsmClient.Get(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+		}
+	}
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_key_vault_managed_hardware_security_module", id.ID())
+	}
+
+	publicNetworkAccessEnabled := managedhsms.PublicNetworkAccessEnabled
+	if !d.Get("public_network_access_enabled").(bool) {
+		publicNetworkAccessEnabled = managedhsms.PublicNetworkAccessDisabled
+	}
+	hsm := managedhsms.ManagedHsm{
+		Location: utils.String(azure.NormalizeLocation(d.Get("location").(string))),
+		Properties: &managedhsms.ManagedHsmProperties{
+			InitialAdminObjectIds:     utils.ExpandStringSlice(d.Get("admin_object_ids").(*pluginsdk.Set).List()),
+			CreateMode:                pointer.To(managedhsms.CreateModeDefault),
+			EnableSoftDelete:          utils.Bool(true),
+			SoftDeleteRetentionInDays: utils.Int64(int64(d.Get("soft_delete_retention_days").(int))),
+			EnablePurgeProtection:     utils.Bool(d.Get("purge_protection_enabled").(bool)),
+			PublicNetworkAccess:       pointer.To(publicNetworkAccessEnabled),
+			NetworkAcls:               expandMHSMNetworkAcls(d.Get("network_acls").([]interface{})),
+		},
+		Sku: &managedhsms.ManagedHsmSku{
+			Family: managedhsms.ManagedHsmSkuFamilyB,
+			Name:   managedhsms.ManagedHsmSkuName(d.Get("sku_name").(string)),
+		},
+		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+	if tenantId := d.Get("tenant_id").(string); tenantId != "" {
+		hsm.Properties.TenantId = pointer.To(tenantId)
+	}
+
+	if err := client.ManagedHsmClient.CreateOrUpdateThenPoll(ctx, id, hsm); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	dataPlaneUri := ""
+	resp, err := client.ManagedHsmClient.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+	if model := resp.Model; model != nil && model.Properties != nil && model.Properties.HsmUri != nil {
+		dataPlaneUri = *model.Properties.HsmUri
+	}
+	if dataPlaneUri == "" {
+		return fmt.Errorf("retrieving %s: `properties.HsmUri` was nil", id)
+	}
+	client.AddToCache(id, dataPlaneUri)
+
+	// security domain download to activate this module
+	if ok := d.HasChange("security_domain_key_vault_certificate_ids"); ok {
+		// get hsm uri
+		resp, err := client.ManagedHsmClient.Get(ctx, id)
+		if err != nil || resp.Model == nil || resp.Model.Properties == nil || resp.Model.Properties.HsmUri == nil {
+			return fmt.Errorf("got nil HSMUri for %s: %+v", id, err)
+		}
+
+		keyVaultClient := meta.(*clients.Client).KeyVault.ManagementClient
+		encData, err := securityDomainDownload(ctx, client.DataPlaneSecurityDomainsClient, *keyVaultClient, *resp.Model.Properties.HsmUri, d.Get("security_domain_key_vault_certificate_ids").([]interface{}), d.Get("security_domain_quorum").(int))
+		if err != nil {
+			return fmt.Errorf("downloading security domain for %q: %+v", id, err)
+		}
+		d.Set("security_domain_encrypted_data", encData)
+	}
+
+	return resourceArmKeyVaultManagedHardwareSecurityModuleRead(d, meta)
+}

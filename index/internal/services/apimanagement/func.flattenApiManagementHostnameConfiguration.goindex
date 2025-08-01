@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apimanagementservice"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenApiManagementHostnameConfiguration(input *[]apimanagementservice.HostnameConfiguration, d *pluginsdk.ResourceData, name, apimHostNameSuffix string) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	managementResults := make([]interface{}, 0)
+	portalResults := make([]interface{}, 0)
+	developerPortalResults := make([]interface{}, 0)
+	gatewayResults := make([]interface{}, 0)
+	scmResults := make([]interface{}, 0)
+
+	for _, config := range *input {
+		output := make(map[string]interface{})
+
+		// There'll always be a default custom domain with hostName "apim_name.azure-api.net" and Type "Proxy", which should be ignored
+		if config.HostName == strings.ToLower(name)+"."+apimHostNameSuffix && config.Type == apimanagementservice.HostnameTypeProxy {
+			continue
+		}
+
+		output["host_name"] = config.HostName
+		output["negotiate_client_certificate"] = pointer.From(config.NegotiateClientCertificate)
+		output["key_vault_id"] = pointer.From(config.KeyVaultId)
+		output["ssl_keyvault_identity_client_id"] = pointer.From(config.IdentityClientId)
+
+		var configType string
+		switch strings.ToLower(string(config.Type)) {
+		case strings.ToLower(string(apimanagementservice.HostnameTypeProxy)):
+			// only set SSL binding for proxy types
+			output["default_ssl_binding"] = pointer.From(config.DefaultSslBinding)
+			gatewayResults = append(gatewayResults, output)
+			configType = "gateway"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeManagement)):
+			managementResults = append(managementResults, output)
+			configType = "management"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypePortal)):
+			portalResults = append(portalResults, output)
+			configType = "portal"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeDeveloperPortal)):
+			developerPortalResults = append(developerPortalResults, output)
+			configType = "developer_portal"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeScm)):
+			scmResults = append(scmResults, output)
+			configType = "scm"
+		}
+
+		if configType != "" {
+			if valsRaw, ok := d.GetOk(configType); ok {
+				vals := valsRaw.([]interface{})
+				schemaz.CopyCertificateAndPassword(vals, config.HostName, output)
+			}
+		}
+	}
+
+	res := map[string]interface{}{
+		"management":       managementResults,
+		"portal":           portalResults,
+		"developer_portal": developerPortalResults,
+		"scm":              scmResults,
+		"gateway":          gatewayResults,
+	}
+
+	return []interface{}{res}
+}

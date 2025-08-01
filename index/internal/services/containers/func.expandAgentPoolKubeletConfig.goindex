@@ -1,0 +1,74 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/subnets"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/parse"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAgentPoolKubeletConfig(input []interface{}) *agentpools.KubeletConfig {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	raw := input[0].(map[string]interface{})
+	result := &agentpools.KubeletConfig{
+		CpuCfsQuota: utils.Bool(raw["cpu_cfs_quota_enabled"].(bool)),
+		// must be false, otherwise the backend will report error: CustomKubeletConfig.FailSwapOn must be set to false to enable swap file on nodes.
+		FailSwapOn:           utils.Bool(false),
+		AllowedUnsafeSysctls: utils.ExpandStringSlice(raw["allowed_unsafe_sysctls"].(*pluginsdk.Set).List()),
+	}
+
+	if v := raw["cpu_manager_policy"].(string); v != "" {
+		result.CpuManagerPolicy = utils.String(v)
+	}
+	if v := raw["cpu_cfs_quota_period"].(string); v != "" {
+		result.CpuCfsQuotaPeriod = utils.String(v)
+	}
+	if v := raw["image_gc_high_threshold"].(int); v != 0 {
+		result.ImageGcHighThreshold = utils.Int64(int64(v))
+	}
+	if v := raw["image_gc_low_threshold"].(int); v != 0 {
+		result.ImageGcLowThreshold = utils.Int64(int64(v))
+	}
+	if v := raw["topology_manager_policy"].(string); v != "" {
+		result.TopologyManagerPolicy = utils.String(v)
+	}
+	if v := raw["container_log_max_size_mb"].(int); v != 0 {
+		result.ContainerLogMaxSizeMB = utils.Int64(int64(v))
+	}
+	if v := raw["container_log_max_line"].(int); v != 0 {
+		result.ContainerLogMaxFiles = utils.Int64(int64(v))
+	}
+	if v := raw["pod_max_pid"].(int); v != 0 {
+		result.PodMaxPids = utils.Int64(int64(v))
+	}
+
+	return result
+}

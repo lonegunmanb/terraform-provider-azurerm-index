@@ -1,0 +1,149 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/recoveryservices/mgmt/2018-07-10/siterecovery" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	vmwaremachines "github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/machines"
+	vmwarerunasaccounts "github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/runasaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservices/2024-01-01/vaults"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotecteditems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotectioncontainers"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (s VMWareReplicatedVmResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			id, err := replicationprotecteditems.ParseReplicationProtectedItemID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			client := metadata.Client.RecoveryServices.ReplicationProtectedItemsClient
+			runAsAccountId := metadata.Client.RecoveryServices.VMWareRunAsAccountsClient
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("reading %s: %+v", id.String(), err)
+			}
+
+			vaultId := replicationprotecteditems.NewVaultID(id.SubscriptionId, id.ResourceGroupName, id.VaultName)
+
+			state := SiteRecoveryReplicatedVmVMwareModel{
+				Name:            id.ReplicationProtectedItemName,
+				RecoveryVaultId: vaultId.ID(),
+			}
+
+			if resp.Model != nil && resp.Model.Properties != nil {
+				prop := *resp.Model.Properties
+
+				state.SourceVmName = pointer.From(prop.FriendlyName)
+
+				policyId := ""
+				if respPolicyId := pointer.From(prop.PolicyId); respPolicyId != "" {
+					parsedPolicyId, err := replicationpolicies.ParseReplicationPolicyIDInsensitively(respPolicyId)
+					if err != nil {
+						return fmt.Errorf("parse %q: %+v", respPolicyId, err)
+					}
+					policyId = parsedPolicyId.ID()
+				}
+				state.RecoveryReplicationPolicyId = policyId
+
+				if inMageRcm, isV2A := prop.ProviderSpecificDetails.(replicationprotecteditems.InMageRcmReplicationDetails); isV2A {
+					state.ApplianceName = pointer.From(inMageRcm.ProcessServerName)
+
+					state.LicenseType = pointer.From(inMageRcm.LicenseType)
+
+					state.MultiVmGroupName = pointer.From(inMageRcm.MultiVMGroupName)
+
+					state.TargetProximityPlacementGroupId = pointer.From(inMageRcm.TargetProximityPlacementGroupId)
+
+					state.TargetResourceGroupId = pointer.From(inMageRcm.TargetResourceGroupId)
+
+					state.TargetVmName = pointer.From(inMageRcm.TargetVMName)
+
+					state.TargetVmSize = pointer.From(inMageRcm.TargetVMSize)
+
+					state.TargetAvailabilitySetId = pointer.From(inMageRcm.TargetAvailabilitySetId)
+
+					state.TargetZone = pointer.From(inMageRcm.TargetAvailabilityZone)
+
+					state.TargetNetworkId = pointer.From(inMageRcm.TargetNetworkId)
+
+					state.TestNetworkId = pointer.From(inMageRcm.TestNetworkId)
+
+					state.TargetBootDiagnosticsStorageAccountId = pointer.From(inMageRcm.TargetBootDiagnosticsStorageAccountId)
+
+					credential := ""
+					if inMageRcm.RunAsAccountId != nil && *inMageRcm.RunAsAccountId != "" {
+						credential, err = fetchCredentialByRunAsAccountId(ctx, runAsAccountId, *inMageRcm.RunAsAccountId)
+						if err != nil {
+							return fmt.Errorf("retrieving credential by run as account id %q: %+v", *inMageRcm.RunAsAccountId, err)
+						}
+					}
+					state.PhysicalServerCredentialName = credential
+
+					if inMageRcm.ProtectedDisks != nil {
+						diskOutputs := make([]IncludedDiskModel, 0)
+						for _, diskRaw := range *inMageRcm.ProtectedDisks {
+							diskModel := IncludedDiskModel{
+								DiskId:         *diskRaw.DiskId,
+								TargetDiskType: string(*diskRaw.DiskType),
+							}
+							if diskRaw.DiskEncryptionSetId != nil {
+								diskModel.TargetDiskEncryptionSetId = *diskRaw.DiskEncryptionSetId
+							}
+							diskOutputs = append(diskOutputs, diskModel)
+						}
+						state.DiskToInclude = diskOutputs
+					}
+
+					networkInterfaceModel := NetworkInterfaceModel{}
+					networkInterfaceModel.TargetStaticIp = pointer.From(inMageRcm.PrimaryNicIPAddress)
+
+					if inMageRcm.VMNics != nil {
+						nicsOutput := make([]NetworkInterfaceModel, 0)
+						for _, nic := range *inMageRcm.VMNics {
+							nicModel := NetworkInterfaceModel{}
+							nicModel.TargetStaticIp = pointer.From(nic.TargetIPAddress)
+							nicModel.TargetSubnetName = pointer.From(nic.TargetSubnetName)
+							nicModel.TestSubnetName = pointer.From(nic.TestSubnetName)
+							nicModel.SourceMacAddress = pointer.From(nic.NicId)
+							nicModel.IsPrimary = pointer.From(nic.IsPrimaryNic) == "true"
+
+							nicsOutput = append(nicsOutput, nicModel)
+						}
+						state.NetworkInterface = nicsOutput
+					}
+				}
+			}
+
+			var plan SiteRecoveryReplicatedVmVMwareModel
+			if err := metadata.Decode(&plan); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

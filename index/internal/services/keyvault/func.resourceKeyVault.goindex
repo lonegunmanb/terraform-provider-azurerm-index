@@ -1,0 +1,240 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2023-02-01/vaults"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	dataplane "github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func resourceKeyVault() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		Create: resourceKeyVaultCreate,
+		Read:   resourceKeyVaultRead,
+		Update: resourceKeyVaultUpdate,
+		Delete: resourceKeyVaultDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := commonids.ParseKeyVaultID(id)
+			return err
+		}),
+
+		SchemaVersion: 2,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.KeyVaultV0ToV1{},
+			1: migration.KeyVaultV1ToV2{},
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.VaultName,
+			},
+
+			"location": commonschema.Location(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"sku_name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(vaults.SkuNameStandard),
+					string(vaults.SkuNamePremium),
+				}, false),
+			},
+
+			"tenant_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.IsUUID,
+			},
+
+			"access_policy": {
+				Type:       pluginsdk.TypeList,
+				ConfigMode: pluginsdk.SchemaConfigModeAttr,
+				Optional:   true,
+				Computed:   true,
+				MaxItems:   1024,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"tenant_id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.IsUUID,
+						},
+						"object_id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: validation.IsUUID,
+						},
+						"application_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: validate.IsUUIDOrEmpty,
+						},
+						"certificate_permissions": schemaCertificatePermissions(),
+						"key_permissions":         schemaKeyPermissions(),
+						"secret_permissions":      schemaSecretPermissions(),
+						"storage_permissions":     schemaStoragePermissions(),
+					},
+				},
+			},
+
+			// NOTE: To unblock customers where they had previously deployed a key vault with
+			// contacts, but cannot re-deploy the key vault. I am adding support for the contact
+			// field back into the resource for UPDATE ONLY. If this is a new resource and the
+			// contact field is defined in the configuration file it will now throw an error.
+			// This will allow legacy key vaults to continue to work as the previously have
+			// and enforces our new model of separating out the data plane call into its
+			// own resource (e.g., contacts)...
+			"contact": {
+				Type:       pluginsdk.TypeSet,
+				Optional:   true,
+				Computed:   true,
+				Deprecated: "As the `contact` property requires reaching out to the dataplane, to better support private endpoints and keyvaults with public network access disabled, new key vaults with the `contact` field defined in the configuration file will now be required to use the `azurerm_key_vault_certificate_contacts` resource instead of the exposed `contact` field in the key vault resource itself.",
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"email": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+						},
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+						},
+						"phone": {
+							Type:     pluginsdk.TypeString,
+							Optional: true,
+						},
+					},
+				},
+			},
+
+			"enabled_for_deployment": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+			},
+
+			"enabled_for_disk_encryption": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+			},
+
+			"enabled_for_template_deployment": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+			},
+
+			// TODO 4.0: change this from enable_* to *_enabled
+			"enable_rbac_authorization": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+			},
+
+			"network_acls": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Computed: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"default_action": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(vaults.NetworkRuleActionAllow),
+								string(vaults.NetworkRuleActionDeny),
+							}, false),
+						},
+						"bypass": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(vaults.NetworkRuleBypassOptionsNone),
+								string(vaults.NetworkRuleBypassOptionsAzureServices),
+							}, false),
+						},
+						"ip_rules": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+								ValidateFunc: validation.Any(
+									commonValidate.IPv4Address,
+									commonValidate.CIDR,
+								),
+							},
+							Set: set.HashIPv4AddressOrCIDR,
+						},
+						"virtual_network_subnet_ids": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+							Set:      set.HashStringIgnoreCase,
+						},
+					},
+				},
+			},
+
+			"public_network_access_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"purge_protection_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+			},
+
+			"soft_delete_retention_days": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      90,
+				ValidateFunc: validation.IntBetween(7, 90),
+			},
+
+			"tags": commonschema.Tags(),
+
+			// Computed
+			"vault_uri": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+		},
+	}
+
+	return resource
+}

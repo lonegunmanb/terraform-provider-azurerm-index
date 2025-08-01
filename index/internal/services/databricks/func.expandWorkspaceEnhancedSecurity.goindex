@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2022-10-01-preview/accessconnector"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	mlworkspace "github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandWorkspaceEnhancedSecurity(input []interface{}) *workspaces.EnhancedSecurityComplianceDefinition {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	config := input[0].(map[string]interface{})
+
+	automaticClusterUpdateEnabled := workspaces.AutomaticClusterUpdateValueDisabled
+	if enabled, ok := config["automatic_cluster_update_enabled"].(bool); ok && enabled {
+		automaticClusterUpdateEnabled = workspaces.AutomaticClusterUpdateValueEnabled
+	}
+
+	enhancedSecurityMonitoringEnabled := workspaces.EnhancedSecurityMonitoringValueDisabled
+	if enabled, ok := config["enhanced_security_monitoring_enabled"].(bool); ok && enabled {
+		enhancedSecurityMonitoringEnabled = workspaces.EnhancedSecurityMonitoringValueEnabled
+	}
+
+	complianceSecurityProfileEnabled := workspaces.ComplianceSecurityProfileValueDisabled
+	if enabled, ok := config["compliance_security_profile_enabled"].(bool); ok && enabled {
+		complianceSecurityProfileEnabled = workspaces.ComplianceSecurityProfileValueEnabled
+	}
+
+	complianceStandards := []workspaces.ComplianceStandard{}
+	if standardSet, ok := config["compliance_security_profile_standards"].(*pluginsdk.Set); ok {
+		for _, s := range standardSet.List() {
+			complianceStandards = append(complianceStandards, workspaces.ComplianceStandard(s.(string)))
+		}
+	}
+
+	if complianceSecurityProfileEnabled == workspaces.ComplianceSecurityProfileValueEnabled && len(complianceStandards) == 0 {
+		complianceStandards = append(complianceStandards, workspaces.ComplianceStandardNONE)
+	}
+
+	return &workspaces.EnhancedSecurityComplianceDefinition{
+		AutomaticClusterUpdate: &workspaces.AutomaticClusterUpdateDefinition{
+			Value: &automaticClusterUpdateEnabled,
+		},
+		EnhancedSecurityMonitoring: &workspaces.EnhancedSecurityMonitoringDefinition{
+			Value: &enhancedSecurityMonitoringEnabled,
+		},
+		ComplianceSecurityProfile: &workspaces.ComplianceSecurityProfileDefinition{
+			Value:               &complianceSecurityProfileEnabled,
+			ComplianceStandards: &complianceStandards,
+		},
+	}
+}

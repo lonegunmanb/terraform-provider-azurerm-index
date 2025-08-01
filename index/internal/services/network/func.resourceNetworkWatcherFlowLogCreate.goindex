@@ -1,0 +1,111 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/flowlogs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkwatchers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceNetworkWatcherFlowLogCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.FlowLogs
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := flowlogs.NewFlowLogID(subscriptionId, d.Get("resource_group_name").(string), d.Get("network_watcher_name").(string), d.Get("name").(string))
+
+	targetResourceId := ""
+
+	if !features.FivePointOh() {
+		if v, ok := d.GetOk("network_security_group_id"); ok && v.(string) != "" {
+			targetResourceId = v.(string)
+		}
+	}
+
+	if v, ok := d.GetOk("target_resource_id"); ok && v.(string) != "" {
+		targetResourceId = v.(string)
+	}
+
+	// For newly created resources, the "name" is required, it is set as Optional and Computed is merely for the existing ones for the sake of backward compatibility.
+	if id.NetworkWatcherName == "" {
+		return fmt.Errorf("`name` is required for Network Watcher Flow Log")
+	}
+
+	existing, err := client.Get(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+		}
+	}
+
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_network_watcher_flow_log", id.ID())
+	}
+
+	locks.ByID(targetResourceId)
+	defer locks.UnlockByID(targetResourceId)
+
+	loc := d.Get("location").(string)
+	if loc == "" {
+		// Get the containing network watcher in order to reuse its location if the "location" is not specified.
+		watcherClient := meta.(*clients.Client).Network.NetworkWatchers
+		watcherId := networkwatchers.NewNetworkWatcherID(id.SubscriptionId, id.ResourceGroupName, id.NetworkWatcherName)
+		resp, err := watcherClient.Get(ctx, watcherId)
+		if err != nil {
+			return fmt.Errorf("retrieving %s: %v", watcherId, err)
+		}
+		if model := resp.Model; model != nil && model.Location != nil {
+			loc = *model.Location
+		}
+	}
+
+	parameters := flowlogs.FlowLog{
+		Location: utils.String(location.Normalize(loc)),
+		Properties: &flowlogs.FlowLogPropertiesFormat{
+			TargetResourceId: targetResourceId,
+			StorageId:        d.Get("storage_account_id").(string),
+			Enabled:          pointer.To(d.Get("enabled").(bool)),
+			RetentionPolicy:  expandNetworkWatcherFlowLogRetentionPolicy(d.Get("retention_policy").([]interface{})),
+		},
+		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	if _, ok := d.GetOk("traffic_analytics"); ok {
+		parameters.Properties.FlowAnalyticsConfiguration = expandNetworkWatcherFlowLogTrafficAnalytics(d)
+	}
+
+	if version, ok := d.GetOk("version"); ok {
+		format := &flowlogs.FlowLogFormatParameters{
+			Version: pointer.To(int64(version.(int))),
+		}
+
+		parameters.Properties.Format = format
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, parameters); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceNetworkWatcherFlowLogRead(d, meta)
+}

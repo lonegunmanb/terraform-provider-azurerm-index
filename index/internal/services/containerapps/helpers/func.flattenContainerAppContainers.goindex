@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/daprcomponents"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/containerapps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenContainerAppContainers(input *[]containerapps.Container) []Container {
+	if input == nil || len(*input) == 0 {
+		return []Container{}
+	}
+	result := make([]Container, 0)
+	for _, v := range *input {
+		container := Container{
+			Name:         pointer.From(v.Name),
+			Image:        pointer.From(v.Image),
+			Args:         pointer.From(v.Args),
+			Command:      pointer.From(v.Command),
+			Env:          flattenContainerEnvVar(v.Env),
+			VolumeMounts: flattenContainerVolumeMounts(v.VolumeMounts),
+		}
+		if v.Probes != nil {
+			for _, p := range *v.Probes {
+				switch *p.Type {
+				case containerapps.TypeLiveness:
+					container.LivenessProbe = flattenContainerAppLivenessProbe(p)
+				case containerapps.TypeReadiness:
+					container.ReadinessProbe = flattenContainerAppReadinessProbe(p)
+				case containerapps.TypeStartup:
+					container.StartupProbe = flattenContainerAppStartupProbe(p)
+				}
+			}
+		}
+
+		if resources := v.Resources; resources != nil {
+			container.CPU = pointer.From(resources.Cpu)
+			container.Memory = pointer.From(resources.Memory)
+			container.EphemeralStorage = pointer.From(resources.EphemeralStorage)
+		}
+
+		result = append(result, container)
+	}
+	return result
+}

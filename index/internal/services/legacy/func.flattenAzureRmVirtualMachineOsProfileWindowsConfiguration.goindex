@@ -1,0 +1,89 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/publicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	compute2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	intStor "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func flattenAzureRmVirtualMachineOsProfileWindowsConfiguration(config *virtualmachines.WindowsConfiguration) []interface{} {
+	if config == nil {
+		return []interface{}{}
+	}
+
+	result := make(map[string]interface{})
+
+	if config.ProvisionVMAgent != nil {
+		result["provision_vm_agent"] = *config.ProvisionVMAgent
+	}
+
+	if config.EnableAutomaticUpdates != nil {
+		result["enable_automatic_upgrades"] = *config.EnableAutomaticUpdates
+	}
+
+	if config.TimeZone != nil {
+		result["timezone"] = *config.TimeZone
+	}
+
+	listeners := make([]map[string]interface{}, 0)
+	if config.WinRM != nil && config.WinRM.Listeners != nil {
+		for _, i := range *config.WinRM.Listeners {
+			listener := make(map[string]interface{})
+			listener["protocol"] = string(pointer.From(i.Protocol))
+
+			if i.CertificateURL != nil {
+				listener["certificate_url"] = *i.CertificateURL
+			}
+
+			listeners = append(listeners, listener)
+		}
+	}
+
+	result["winrm"] = listeners
+
+	content := make([]map[string]interface{}, 0)
+	if config.AdditionalUnattendContent != nil {
+		for _, i := range *config.AdditionalUnattendContent {
+			c := make(map[string]interface{})
+			c["pass"] = string(pointer.From(i.PassName))
+			c["component"] = string(pointer.From(i.ComponentName))
+			c["setting_name"] = string(pointer.From(i.SettingName))
+
+			if i.Content != nil {
+				c["content"] = *i.Content
+			}
+
+			content = append(content, c)
+		}
+	}
+	result["additional_unattend_config"] = content
+
+	return []interface{}{result}
+}

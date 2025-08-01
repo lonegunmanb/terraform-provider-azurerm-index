@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2022-08-29/localrulestacks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2023-09-01/firewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r NextGenerationFirewallVHubLocalRuleStackResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 3 * time.Hour,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.PaloAlto.PaloAltoClient_v2023_09_01.Firewalls
+			localRuleStackClient := metadata.Client.PaloAlto.Client.LocalRulestacks
+			var model NextGenerationFirewallVHubLocalRuleStackModel
+
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			id := firewalls.NewFirewallID(metadata.Client.Account.SubscriptionId, model.ResourceGroupName, model.Name)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			ruleStackID, err := localrulestacks.ParseLocalRulestackID(model.RuleStackId)
+			if err != nil {
+				return err
+			}
+
+			ruleStack, err := localRuleStackClient.Get(ctx, *ruleStackID)
+			if err != nil {
+				return fmt.Errorf("reading %s for %s: %+v", ruleStackID, id, err)
+			}
+
+			loc := location.Normalize(ruleStack.Model.Location)
+
+			firewall := firewalls.FirewallResource{
+				Location: loc,
+				Properties: firewalls.FirewallDeploymentProperties{
+					AssociatedRulestack: &firewalls.RulestackDetails{
+						ResourceId: pointer.To(ruleStackID.ID()),
+						Location:   pointer.To(loc),
+					},
+					DnsSettings: schema.ExpandDNSSettings(model.DNSSettings),
+					MarketplaceDetails: firewalls.MarketplaceDetails{
+						OfferId:     model.MarketplaceOfferId,
+						PublisherId: "paloaltonetworks",
+					},
+					NetworkProfile: schema.ExpandNetworkProfileVHub(model.NetworkProfile),
+					PlanData: firewalls.PlanData{
+						BillingCycle: firewalls.BillingCycleMONTHLY,
+						PlanId:       model.PlanId,
+					},
+					FrontEndSettings: schema.ExpandDestinationNAT(model.FrontEnd),
+				},
+
+				Tags: tags.Expand(model.Tags),
+			}
+
+			locks.ByID(ruleStackID.ID())
+			defer locks.UnlockByID(ruleStackID.ID())
+
+			if err = client.CreateOrUpdateThenPoll(ctx, id, firewall); err != nil {
+				return err
+			}
+
+			metadata.SetID(id)
+
+			return nil
+		},
+	}
+}

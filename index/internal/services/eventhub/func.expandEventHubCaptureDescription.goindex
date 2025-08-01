@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/eventhubs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2022-01-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandEventHubCaptureDescription(d *pluginsdk.ResourceData) *eventhubs.CaptureDescription {
+	inputs := d.Get("capture_description").([]interface{})
+	if len(inputs) == 0 || inputs[0] == nil {
+		return nil
+	}
+	input := inputs[0].(map[string]interface{})
+
+	enabled := input["enabled"].(bool)
+	encoding := input["encoding"].(string)
+	intervalInSeconds := input["interval_in_seconds"].(int)
+	sizeLimitInBytes := input["size_limit_in_bytes"].(int)
+	skipEmptyArchives := input["skip_empty_archives"].(bool)
+
+	captureDescription := eventhubs.CaptureDescription{
+		Enabled: utils.Bool(enabled),
+		Encoding: func() *eventhubs.EncodingCaptureDescription {
+			v := eventhubs.EncodingCaptureDescription(encoding)
+			return &v
+		}(),
+		IntervalInSeconds: utils.Int64(int64(intervalInSeconds)),
+		SizeLimitInBytes:  utils.Int64(int64(sizeLimitInBytes)),
+		SkipEmptyArchives: utils.Bool(skipEmptyArchives),
+	}
+
+	if v, ok := input["destination"]; ok {
+		destinations := v.([]interface{})
+		if len(destinations) > 0 {
+			destination := destinations[0].(map[string]interface{})
+
+			destinationName := destination["name"].(string)
+			archiveNameFormat := destination["archive_name_format"].(string)
+			blobContainerName := destination["blob_container_name"].(string)
+			storageAccountId := destination["storage_account_id"].(string)
+
+			captureDescription.Destination = &eventhubs.Destination{
+				Name: utils.String(destinationName),
+				Properties: &eventhubs.DestinationProperties{
+					ArchiveNameFormat:        utils.String(archiveNameFormat),
+					BlobContainer:            utils.String(blobContainerName),
+					StorageAccountResourceId: utils.String(storageAccountId),
+				},
+			}
+		}
+	}
+
+	return &captureDescription
+}

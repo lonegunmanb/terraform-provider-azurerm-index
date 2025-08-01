@@ -1,0 +1,123 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/gofrs/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/api"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/product"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/subscription"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceApiManagementSubscription() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceApiManagementSubscriptionCreateUpdate,
+		Read:   resourceApiManagementSubscriptionRead,
+		Update: resourceApiManagementSubscriptionCreateUpdate,
+		Delete: resourceApiManagementSubscriptionDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := subscription.ParseSubscriptions2ID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"subscription_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.Any(validate.ApiManagementChildName, validation.StringIsEmpty),
+			},
+
+			// 3.0 this seems to have been renamed to owner id?
+			"user_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: azure.ValidateResourceID,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"api_management_name": schemaz.SchemaApiManagementName(),
+
+			"display_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"product_id": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ForceNew:      true,
+				ValidateFunc:  product.ValidateProductID,
+				ConflictsWith: []string{"api_id"},
+			},
+
+			"api_id": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ForceNew:      true,
+				ValidateFunc:  api.ValidateApiID,
+				ConflictsWith: []string{"product_id"},
+			},
+
+			"state": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(subscription.SubscriptionStateSubmitted),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(subscription.SubscriptionStateActive),
+					string(subscription.SubscriptionStateCancelled),
+					string(subscription.SubscriptionStateExpired),
+					string(subscription.SubscriptionStateRejected),
+					string(subscription.SubscriptionStateSubmitted),
+					string(subscription.SubscriptionStateSuspended),
+				}, false),
+			},
+
+			"primary_key": {
+				Type:      pluginsdk.TypeString,
+				Optional:  true,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"secondary_key": {
+				Type:      pluginsdk.TypeString,
+				Optional:  true,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"allow_tracing": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+		},
+	}
+}

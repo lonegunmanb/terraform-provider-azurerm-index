@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/guestconfiguration/2020-06-25/guestconfigurationassignments"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePolicyVirtualMachineConfigurationAssignmentCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	client := meta.(*clients.Client).Policy.GuestConfigurationAssignmentsClient
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	vmId, err := commonids.ParseVirtualMachineID(d.Get("virtual_machine_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := guestconfigurationassignments.NewProviders2GuestConfigurationAssignmentID(subscriptionId, vmId.ResourceGroupName, vmId.VirtualMachineName, d.Get("name").(string))
+
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for present of existing %s: %+v", id, err)
+			}
+		}
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_policy_virtual_machine_configuration_assignment", id.ID())
+		}
+	}
+	guestConfiguration := expandGuestConfigurationAssignment(d.Get("configuration").([]interface{}), id.GuestConfigurationAssignmentName)
+	assignment := guestconfigurationassignments.GuestConfigurationAssignment{
+		Name:     utils.String(id.GuestConfigurationAssignmentName),
+		Location: utils.String(location.Normalize(d.Get("location").(string))),
+		Properties: &guestconfigurationassignments.GuestConfigurationAssignmentProperties{
+			GuestConfiguration: guestConfiguration,
+		},
+	}
+
+	// I need to determine if the passed in guest config is a built-in config or not
+	// since the attribute is computed and optional I need to check the value of the
+	// contentURI to see if it is on a service team owned storage account or not
+	// all built-in guest configuration will always be on a service team owned
+	// storage account
+	if guestConfiguration.ContentUri != nil || *guestConfiguration.ContentUri != "" {
+		if strings.Contains(strings.ToLower(*guestConfiguration.ContentUri), "oaasguestconfig") {
+			assignment.Properties.GuestConfiguration.ContentHash = nil
+			assignment.Properties.GuestConfiguration.ContentUri = nil
+		}
+	}
+
+	if _, err := client.CreateOrUpdate(ctx, id, assignment); err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourcePolicyVirtualMachineConfigurationAssignmentRead(d, meta)
+}

@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	apimValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func FlattenSiteConfigLinuxFunctionApp(functionAppSiteConfig *webapps.SiteConfig) (*SiteConfigLinuxFunctionApp, error) {
+	if functionAppSiteConfig == nil {
+		return nil, fmt.Errorf("flattening site config: SiteConfig was nil")
+	}
+
+	result := &SiteConfigLinuxFunctionApp{
+		AlwaysOn:                      pointer.From(functionAppSiteConfig.AlwaysOn),
+		AppCommandLine:                pointer.From(functionAppSiteConfig.AppCommandLine),
+		AppScaleLimit:                 pointer.From(functionAppSiteConfig.FunctionAppScaleLimit),
+		ContainerRegistryMSI:          pointer.From(functionAppSiteConfig.AcrUserManagedIdentityID),
+		Cors:                          FlattenCorsSettings(functionAppSiteConfig.Cors),
+		DetailedErrorLogging:          pointer.From(functionAppSiteConfig.DetailedErrorLoggingEnabled),
+		HealthCheckPath:               pointer.From(functionAppSiteConfig.HealthCheckPath),
+		Http2Enabled:                  pointer.From(functionAppSiteConfig.HTTP20Enabled),
+		IpRestrictionDefaultAction:    string(pointer.From(functionAppSiteConfig.IPSecurityRestrictionsDefaultAction)),
+		ScmIpRestrictionDefaultAction: string(pointer.From(functionAppSiteConfig.ScmIPSecurityRestrictionsDefaultAction)),
+		LinuxFxVersion:                pointer.From(functionAppSiteConfig.LinuxFxVersion),
+		LoadBalancing:                 string(pointer.From(functionAppSiteConfig.LoadBalancing)),
+		ManagedPipelineMode:           string(pointer.From(functionAppSiteConfig.ManagedPipelineMode)),
+		WorkerCount:                   pointer.From(functionAppSiteConfig.NumberOfWorkers),
+		ScmType:                       string(pointer.From(functionAppSiteConfig.ScmType)),
+		FtpsState:                     string(pointer.From(functionAppSiteConfig.FtpsState)),
+		RuntimeScaleMonitoring:        pointer.From(functionAppSiteConfig.FunctionsRuntimeScaleMonitoringEnabled),
+		MinTlsVersion:                 string(pointer.From(functionAppSiteConfig.MinTlsVersion)),
+		ScmMinTlsVersion:              string(pointer.From(functionAppSiteConfig.ScmMinTlsVersion)),
+		PreWarmedInstanceCount:        pointer.From(functionAppSiteConfig.PreWarmedInstanceCount),
+		ElasticInstanceMinimum:        pointer.From(functionAppSiteConfig.MinimumElasticInstanceCount),
+		Use32BitWorker:                pointer.From(functionAppSiteConfig.Use32BitWorkerProcess),
+		WebSockets:                    pointer.From(functionAppSiteConfig.WebSocketsEnabled),
+		ScmUseMainIpRestriction:       pointer.From(functionAppSiteConfig.ScmIPSecurityRestrictionsUseMain),
+		UseManagedIdentityACR:         pointer.From(functionAppSiteConfig.AcrUseManagedIdentityCreds),
+		RemoteDebugging:               pointer.From(functionAppSiteConfig.RemoteDebuggingEnabled),
+		RemoteDebuggingVersion:        strings.ToUpper(pointer.From(functionAppSiteConfig.RemoteDebuggingVersion)),
+		VnetRouteAllEnabled:           pointer.From(functionAppSiteConfig.VnetRouteAllEnabled),
+	}
+
+	if v := functionAppSiteConfig.ApiDefinition; v != nil && v.Url != nil {
+		result.ApiDefinition = *v.Url
+	}
+
+	if v := functionAppSiteConfig.ApiManagementConfig; v != nil && v.Id != nil {
+		result.ApiManagementConfigId = *v.Id
+	}
+
+	if functionAppSiteConfig.IPSecurityRestrictions != nil {
+		result.IpRestriction = FlattenIpRestrictions(functionAppSiteConfig.IPSecurityRestrictions)
+	}
+
+	if functionAppSiteConfig.ScmIPSecurityRestrictions != nil {
+		result.ScmIpRestriction = FlattenIpRestrictions(functionAppSiteConfig.ScmIPSecurityRestrictions)
+	}
+
+	if v := functionAppSiteConfig.DefaultDocuments; v != nil {
+		result.DefaultDocuments = *v
+	}
+
+	var appStack []ApplicationStackLinuxFunctionApp
+	if functionAppSiteConfig.LinuxFxVersion != nil {
+		decoded, err := DecodeFunctionAppLinuxFxVersion(*functionAppSiteConfig.LinuxFxVersion)
+		if err != nil {
+			return nil, fmt.Errorf("flattening site config: %s", err)
+		}
+		appStack = decoded
+	}
+	result.ApplicationStack = appStack
+
+	return result, nil
+}

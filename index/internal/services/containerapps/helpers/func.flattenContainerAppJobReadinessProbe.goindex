@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"reflect"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-02-02-preview/jobs"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenContainerAppJobReadinessProbe(input jobs.ContainerAppProbe) []ContainerAppReadinessProbe {
+	result := make([]ContainerAppReadinessProbe, 0)
+	probe := ContainerAppReadinessProbe{
+		Interval:         pointer.From(input.PeriodSeconds),
+		Timeout:          pointer.From(input.TimeoutSeconds),
+		FailureThreshold: pointer.From(input.FailureThreshold),
+		SuccessThreshold: pointer.From(input.SuccessThreshold),
+	}
+
+	if httpGet := input.HTTPGet; httpGet != nil {
+		if httpGet.Scheme != nil {
+			probe.Transport = string(*httpGet.Scheme)
+		}
+		probe.Host = pointer.From(httpGet.Host)
+		probe.Port = httpGet.Port
+		probe.Path = pointer.From(httpGet.Path)
+
+		if httpGet.HTTPHeaders != nil {
+			headers := make([]HttpHeader, 0)
+			for _, h := range *httpGet.HTTPHeaders {
+				headers = append(headers, HttpHeader{
+					Name:  h.Name,
+					Value: h.Value,
+				})
+			}
+			probe.Headers = headers
+		}
+	}
+
+	if tcpSocket := input.TcpSocket; tcpSocket != nil {
+		probe.Transport = "TCP"
+		probe.Host = pointer.From(tcpSocket.Host)
+		probe.Port = tcpSocket.Port
+	}
+
+	result = append(result, probe)
+
+	return result
+}

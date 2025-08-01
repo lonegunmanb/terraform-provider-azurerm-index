@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func applicationGatewayProbeHash(v interface{}) int {
+	var buf bytes.Buffer
+	if m, ok := v.(map[string]interface{}); ok {
+		buf.WriteString(m["name"].(string))
+		buf.WriteString(m["protocol"].(string))
+		buf.WriteString(m["path"].(string))
+		buf.WriteString(fmt.Sprintf("%d", m["interval"].(int)))
+		buf.WriteString(fmt.Sprintf("%d", m["timeout"].(int)))
+		buf.WriteString(fmt.Sprintf("%d", m["unhealthy_threshold"].(int)))
+
+		if v, ok := m["host"]; ok {
+			buf.WriteString(v.(string))
+		}
+		if v, ok := m["port"]; ok {
+			buf.WriteString(fmt.Sprintf("%d", v.(int)))
+		}
+		if v, ok := m["pick_host_name_from_backend_http_settings"]; ok {
+			buf.WriteString(fmt.Sprintf("%t", v.(bool)))
+		}
+		if v, ok := m["minimum_servers"]; ok {
+			buf.WriteString(fmt.Sprintf("%d", v.(int)))
+		}
+		if match, ok := m["match"]; ok {
+			if attrs := match.([]interface{}); len(attrs) == 1 {
+				attr := attrs[0].(map[string]interface{})
+				if attr["body"].(string) != "" || len(attr["status_code"].([]interface{})) != 0 {
+					buf.WriteString(fmt.Sprintf("%s-%+v", attr["body"].(string), attr["status_code"].([]interface{})))
+				}
+			}
+		}
+	}
+
+	return pluginsdk.HashString(buf.String())
+}

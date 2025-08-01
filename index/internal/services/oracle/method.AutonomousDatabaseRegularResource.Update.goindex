@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2024-06-01/autonomousdatabases"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r AutonomousDatabaseRegularResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Oracle.OracleClient.AutonomousDatabases
+			id, err := autonomousdatabases.ParseAutonomousDatabaseID(metadata.ResourceData.Id())
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			var model AutonomousDatabaseRegularResourceModel
+			if err = metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding err: %+v", err)
+			}
+
+			_, err = client.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			update := &autonomousdatabases.AutonomousDatabaseUpdate{
+				Properties: &autonomousdatabases.AutonomousDatabaseUpdateProperties{},
+			}
+			if metadata.ResourceData.HasChange("tags") {
+				update.Tags = pointer.To(model.Tags)
+			}
+			if metadata.ResourceData.HasChange("data_storage_size_in_tbs") {
+				update.Properties.DataStorageSizeInTbs = pointer.To(model.DataStorageSizeInTbs)
+			}
+			if metadata.ResourceData.HasChange("compute_count") {
+				update.Properties.ComputeCount = pointer.To(model.ComputeCount)
+			}
+			if metadata.ResourceData.HasChange("auto_scaling_enabled") {
+				update.Properties.IsAutoScalingEnabled = pointer.To(model.AutoScalingEnabled)
+			}
+			if metadata.ResourceData.HasChange("auto_scaling_for_storage_enabled") {
+				update.Properties.IsAutoScalingForStorageEnabled = pointer.To(model.AutoScalingForStorageEnabled)
+			}
+
+			err = client.UpdateThenPoll(ctx, *id, *update)
+			if err != nil {
+				return fmt.Errorf("updating %s: %v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

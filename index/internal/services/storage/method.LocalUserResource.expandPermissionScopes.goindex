@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/localusers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computevalidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r LocalUserResource) expandPermissionScopes(input []PermissionScopeModel) *[]localusers.PermissionScope {
+	if len(input) == 0 {
+		return nil
+	}
+
+	output := make([]localusers.PermissionScope, 0, len(input))
+	for _, v := range input {
+		// The length constraint is guaranteed by schema
+		permissions := v.Permissions[0]
+		var permissionStr string
+		if permissions.Read {
+			permissionStr += "r"
+		}
+		if permissions.Write {
+			permissionStr += "w"
+		}
+		if permissions.Delete {
+			permissionStr += "d"
+		}
+		if permissions.List {
+			permissionStr += "l"
+		}
+		if permissions.Create {
+			permissionStr += "c"
+		}
+
+		output = append(output, localusers.PermissionScope{
+			Permissions:  permissionStr,
+			Service:      v.Service,
+			ResourceName: v.ResourceName,
+		})
+	}
+
+	return &output
+}

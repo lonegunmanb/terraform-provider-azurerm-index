@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2023-09-04/openshiftclusters"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r RedHatOpenShiftCluster) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 90 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.RedHatOpenShift.OpenShiftClustersClient
+
+			id, err := openshiftclusters.ParseProviderOpenShiftClusterID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var state RedHatOpenShiftClusterModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			parameter := openshiftclusters.OpenShiftClusterUpdate{}
+
+			if metadata.ResourceData.HasChange("tags") {
+				parameter.Tags = pointer.To(state.Tags)
+			}
+
+			if metadata.ResourceData.HasChange("service_principal") {
+				parameter.Properties = &openshiftclusters.OpenShiftClusterProperties{
+					ServicePrincipalProfile: expandOpenshiftServicePrincipalProfile(state.ServicePrincipal),
+				}
+			}
+
+			if err := client.UpdateThenPoll(ctx, *id, parameter); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

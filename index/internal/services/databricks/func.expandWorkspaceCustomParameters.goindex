@@ -1,0 +1,144 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2022-10-01-preview/accessconnector"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	mlworkspace "github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandWorkspaceCustomParameters(input []interface{}, customerManagedKeyEnabled, infrastructureEncryptionEnabled bool, backendAddressPoolName, loadBalancerId string) (workspaceCustomParameters *workspaces.WorkspaceCustomParameters, publicSubnetAssociation, privateSubnetAssociation *string) {
+	if len(input) == 0 || input[0] == nil {
+		// This will be hit when there are no custom params set but we still
+		// need to pass the customerManagedKeyEnabled and infrastructureEncryptionEnabled
+		// flags anyway...
+		parameters := workspaces.WorkspaceCustomParameters{}
+
+		parameters.PrepareEncryption = &workspaces.WorkspaceCustomBooleanParameter{
+			Value: customerManagedKeyEnabled,
+		}
+
+		parameters.RequireInfrastructureEncryption = &workspaces.WorkspaceCustomBooleanParameter{
+			Value: infrastructureEncryptionEnabled,
+		}
+
+		return &parameters, nil, nil
+	}
+
+	config := input[0].(map[string]interface{})
+	var pubSubnetAssoc, priSubnetAssoc *string
+	parameters := workspaces.WorkspaceCustomParameters{}
+
+	if v, ok := config["public_subnet_network_security_group_association_id"].(string); ok && v != "" {
+		pubSubnetAssoc = &v
+	}
+
+	if v, ok := config["private_subnet_network_security_group_association_id"].(string); ok && v != "" {
+		priSubnetAssoc = &v
+	}
+
+	if backendAddressPoolName != "" {
+		parameters.LoadBalancerBackendPoolName = &workspaces.WorkspaceCustomStringParameter{
+			Value: backendAddressPoolName,
+		}
+	}
+
+	if loadBalancerId != "" {
+		parameters.LoadBalancerId = &workspaces.WorkspaceCustomStringParameter{
+			Value: loadBalancerId,
+		}
+	}
+
+	if v, ok := config["nat_gateway_name"].(string); ok && v != "" {
+		parameters.NatGatewayName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["public_ip_name"].(string); ok && v != "" {
+		parameters.PublicIPName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["storage_account_name"].(string); ok && v != "" {
+		parameters.StorageAccountName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["storage_account_sku_name"].(string); ok && v != "" {
+		parameters.StorageAccountSkuName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["vnet_address_prefix"].(string); ok && v != "" {
+		parameters.VnetAddressPrefix = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["machine_learning_workspace_id"].(string); ok && v != "" {
+		parameters.AmlWorkspaceId = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["no_public_ip"].(bool); ok {
+		parameters.EnableNoPublicIP = &workspaces.WorkspaceNoPublicIPBooleanParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["public_subnet_name"].(string); ok && v != "" {
+		parameters.CustomPublicSubnetName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	parameters.PrepareEncryption = &workspaces.WorkspaceCustomBooleanParameter{
+		Value: customerManagedKeyEnabled,
+	}
+
+	parameters.RequireInfrastructureEncryption = &workspaces.WorkspaceCustomBooleanParameter{
+		Value: infrastructureEncryptionEnabled,
+	}
+
+	if v, ok := config["private_subnet_name"].(string); ok && v != "" {
+		parameters.CustomPrivateSubnetName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["virtual_network_id"].(string); ok && v != "" {
+		parameters.CustomVirtualNetworkId = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	return &parameters, pubSubnetAssoc, priSubnetAssoc
+}

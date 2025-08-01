@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"bytes"
+	"flag"
+	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"log"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"github.com/hashicorp/go-hclog"
+	"golang.org/x/tools/go/ast/astutil"
+)
+func run(serviceName string, oldApiVersion string, newApiVersion string, workingDirectory string) error {
+	configDirectory := path.Join(workingDirectory, "clients")
+	logger.Debug(fmt.Sprintf("Updating Imports in the 'config' directory %q..", configDirectory))
+	if err := updateImportsWithinDirectory(serviceName, oldApiVersion, newApiVersion, configDirectory); err != nil {
+		return fmt.Errorf("updating the imports within the config directory %q: %+v", configDirectory, err)
+	}
+
+	serviceDirectory := path.Join(workingDirectory, "services", serviceName)
+	logger.Debug(fmt.Sprintf("Updating Imports in the top-level directory %q..", serviceDirectory))
+	if err := updateImportsWithinDirectory(serviceName, oldApiVersion, newApiVersion, serviceDirectory); err != nil {
+		return fmt.Errorf("updating the imports within the top-level directory %q: %+v", serviceDirectory, err)
+	}
+
+	logger.Debug(fmt.Sprintf("Updating Imports in the directories within directory %q..", serviceDirectory))
+	entries, err := os.ReadDir(serviceDirectory)
+	if err != nil {
+		return fmt.Errorf("opening the working directory at %q: %+v", serviceDirectory, err)
+	}
+	directories := make([]string, 0)
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("retrieving information for %q: %+v", entry.Name(), err)
+		}
+		if info.IsDir() {
+			directories = append(directories, info.Name())
+		}
+	}
+	for _, directory := range directories {
+		path := filepath.Join(serviceDirectory, directory)
+		logger.Debug(fmt.Sprintf("Updating Imports within the nested directory %q..", path))
+		if err := updateImportsWithinDirectory(serviceName, oldApiVersion, newApiVersion, path); err != nil {
+			return fmt.Errorf("updating the imports within %q: %+v", path, err)
+		}
+	}
+
+	return nil
+}

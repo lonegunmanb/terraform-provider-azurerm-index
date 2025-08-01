@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/sdk
+import (
+	"fmt"
+	"reflect"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+)
+func decodeReflectedType(input interface{}, stateRetriever stateRetriever, debugLogger Logger) error {
+	if reflect.TypeOf(input).Kind() != reflect.Ptr {
+		return fmt.Errorf("need a pointer")
+	}
+
+	objType := reflect.TypeOf(input).Elem()
+	for i := 0; i < objType.NumField(); i++ {
+		field := objType.Field(i)
+		debugLogger.Infof("Field: %#v", field.Name)
+
+		structTags, err := parseStructTags(field.Tag)
+		if err != nil {
+			return fmt.Errorf("parsing struct tags for %q: %+v", field.Name, err)
+		}
+
+		if structTags != nil {
+			tfschemaValue, valExists := stateRetriever.GetOkExists(structTags.hclPath)
+			if !valExists {
+				continue
+			}
+
+			debugLogger.Infof("TFSchemaValue: %+v", tfschemaValue)
+			debugLogger.Infof("Input Type: %+v", reflect.ValueOf(input).Elem().Field(i).Type())
+
+			if err := setValue(input, tfschemaValue, i, field.Name, debugLogger); err != nil {
+				return fmt.Errorf("while setting value %+v of model field %q: %+v", tfschemaValue, field.Name, err)
+			}
+		}
+	}
+	return nil
+}

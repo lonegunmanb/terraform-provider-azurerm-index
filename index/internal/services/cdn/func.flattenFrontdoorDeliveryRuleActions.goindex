@@ -1,0 +1,95 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/rulesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-09-01/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	cdnFrontDoorRuleActions "github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdoorruleactions"
+	cdnFrontDoorRuleConditions "github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdoorruleconditions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenFrontdoorDeliveryRuleActions(input *[]rules.DeliveryRuleAction) ([]interface{}, error) {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results, nil
+	}
+
+	a := cdnFrontDoorRuleActions.InitializeCdnFrontDoorActionMappings()
+
+	requestHeaderActions := make([]interface{}, 0)
+	responseHeaderActions := make([]interface{}, 0)
+	routeConfigOverrideActions := make([]interface{}, 0)
+	urlRedirectActions := make([]interface{}, 0)
+	urlRewriteActions := make([]interface{}, 0)
+
+	for _, deliveryRuleAction := range *input {
+		if deliveryRuleAction.DeliveryRuleAction().Name == a.RouteConfigurationOverride.Name {
+			action := deliveryRuleAction.(rules.DeliveryRuleRouteConfigurationOverrideAction)
+
+			flattened, err := cdnFrontDoorRuleActions.FlattenCdnFrontDoorRouteConfigurationOverrideAction(action)
+			if err != nil {
+				return nil, fmt.Errorf("'route_configuration_override_action' unable to parse 'cdn_frontdoor_origin_group_id': %+v", err)
+			}
+
+			routeConfigOverrideActions = append(routeConfigOverrideActions, flattened)
+			continue
+		}
+
+		if deliveryRuleAction.DeliveryRuleAction().Name == a.RequestHeader.Name {
+			action := deliveryRuleAction.(rules.DeliveryRuleRequestHeaderAction)
+
+			flattened := cdnFrontDoorRuleActions.FlattenRequestHeaderAction(action)
+			requestHeaderActions = append(requestHeaderActions, flattened)
+			continue
+		}
+
+		if deliveryRuleAction.DeliveryRuleAction().Name == a.ResponseHeader.Name {
+			action := deliveryRuleAction.(rules.DeliveryRuleResponseHeaderAction)
+
+			flattened := cdnFrontDoorRuleActions.FlattenResponseHeaderAction(action)
+			responseHeaderActions = append(responseHeaderActions, flattened)
+			continue
+		}
+
+		if deliveryRuleAction.DeliveryRuleAction().Name == a.URLRedirect.Name {
+			action := deliveryRuleAction.(rules.URLRedirectAction)
+
+			flattened := cdnFrontDoorRuleActions.FlattenCdnFrontDoorUrlRedirectAction(action)
+			urlRedirectActions = append(urlRedirectActions, flattened)
+			continue
+		}
+
+		if deliveryRuleAction.DeliveryRuleAction().Name == a.URLRewrite.Name {
+			action := deliveryRuleAction.(rules.URLRewriteAction)
+
+			flattened := cdnFrontDoorRuleActions.FlattenCdnFrontDoorUrlRewriteAction(action)
+			urlRewriteActions = append(urlRewriteActions, flattened)
+			continue
+		}
+
+		return nil, fmt.Errorf("unknown DeliveryRuleAction %q encountered", deliveryRuleAction.DeliveryRuleAction().Name)
+	}
+
+	if len(requestHeaderActions) == 0 && len(responseHeaderActions) == 0 && len(routeConfigOverrideActions) == 0 && len(urlRedirectActions) == 0 && len(urlRewriteActions) == 0 {
+		return []interface{}{}, nil
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			a.RequestHeader.ConfigName:              requestHeaderActions,
+			a.ResponseHeader.ConfigName:             responseHeaderActions,
+			a.RouteConfigurationOverride.ConfigName: routeConfigOverrideActions,
+			a.URLRedirect.ConfigName:                urlRedirectActions,
+			a.URLRewrite.ConfigName:                 urlRewriteActions,
+		},
+	}, nil
+}

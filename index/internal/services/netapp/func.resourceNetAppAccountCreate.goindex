@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/netappaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceNetAppAccountCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).NetApp.AccountClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := netappaccounts.NewNetAppAccountID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+
+	locks.ByID(id.ID())
+	defer locks.UnlockByID(id.ID())
+
+	if d.IsNewResource() {
+		existing, err := client.AccountsGet(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_netapp_account", id.ID())
+		}
+	}
+
+	accountParameters := netappaccounts.NetAppAccount{
+		Location:   azure.NormalizeLocation(d.Get("location").(string)),
+		Properties: &netappaccounts.AccountProperties{},
+		Tags:       tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	activeDirectoryRaw := d.Get("active_directory")
+	if activeDirectoryRaw != nil {
+		activeDirectories := activeDirectoryRaw.([]interface{})
+		activeDirectoriesExpanded := expandNetAppActiveDirectories(activeDirectories)
+		if len(pointer.From(activeDirectoriesExpanded)) > 0 {
+			accountParameters.Properties.ActiveDirectories = activeDirectoriesExpanded
+		}
+	}
+
+	anfAccountIdentityRaw := d.Get("identity")
+	if anfAccountIdentityRaw != nil {
+		anfAccountIdentity, ok := anfAccountIdentityRaw.([]interface{})
+
+		if ok && len(anfAccountIdentity) > 0 {
+			anfAccountIdentityExpanded, err := identity.ExpandLegacySystemAndUserAssignedMap(anfAccountIdentity)
+			if err != nil {
+				return err
+			}
+			if anfAccountIdentity != nil {
+				accountParameters.Identity = anfAccountIdentityExpanded
+			}
+		}
+	}
+
+	if err := client.AccountsCreateOrUpdateThenPoll(ctx, id, accountParameters); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceNetAppAccountRead(d, meta)
+}

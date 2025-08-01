@@ -1,0 +1,129 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/restorabledroppeddatabases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serverazureadadministrators"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serverazureadonlyauthentications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serverconnectionpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/servers"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	keyVaultParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceMsSqlServerRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).MSSQL.ServersClient
+	connectionClient := meta.(*clients.Client).MSSQL.ServerConnectionPoliciesClient
+	restorableDroppedDatabasesClient := meta.(*clients.Client).MSSQL.RestorableDroppedDatabasesClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := commonids.ParseSqlServerID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id, servers.DefaultGetOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[INFO] Error retrieving SQL Server %s - removing from state", id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving SQL Server %s: %v", id, err)
+	}
+
+	d.Set("name", id.ServerName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.Normalize(model.Location))
+
+		identity, err := identity.FlattenLegacySystemAndUserAssignedMap(model.Identity)
+		if err != nil {
+			return fmt.Errorf("setting `identity`: %+v", err)
+		}
+
+		if err := d.Set("identity", identity); err != nil {
+			return fmt.Errorf("setting `identity`: %+v", err)
+		}
+
+		if props := model.Properties; props != nil {
+			d.Set("version", props.Version)
+			d.Set("administrator_login", props.AdministratorLogin)
+			d.Set("fully_qualified_domain_name", props.FullyQualifiedDomainName)
+
+			// todo remove `|| *v == "None"` when https://github.com/Azure/azure-rest-api-specs/issues/24348 is addressed
+			if v := props.MinimalTlsVersion; v == nil || *v == "None" {
+				d.Set("minimum_tls_version", "Disabled")
+			} else {
+				d.Set("minimum_tls_version", string(pointer.From(props.MinimalTlsVersion)))
+			}
+
+			d.Set("public_network_access_enabled", pointer.From(props.PublicNetworkAccess) == servers.ServerPublicNetworkAccessFlagEnabled)
+			d.Set("outbound_network_restriction_enabled", pointer.From(props.RestrictOutboundNetworkAccess) == servers.ServerNetworkAccessFlagEnabled)
+
+			primaryUserAssignedIdentityID := ""
+			if props.PrimaryUserAssignedIdentityId != nil && pointer.From(props.PrimaryUserAssignedIdentityId) != "" {
+				parsedPrimaryUserAssignedIdentityID, err := commonids.ParseUserAssignedIdentityIDInsensitively(pointer.From(props.PrimaryUserAssignedIdentityId))
+				if err != nil {
+					return err
+				}
+				primaryUserAssignedIdentityID = parsedPrimaryUserAssignedIdentityID.ID()
+			}
+
+			d.Set("primary_user_assigned_identity_id", primaryUserAssignedIdentityID)
+			d.Set("transparent_data_encryption_key_vault_key_id", props.KeyId)
+
+			if props.Administrators != nil {
+				d.Set("azuread_administrator", flatternMsSqlServerAdministrators(*props.Administrators))
+			}
+		}
+
+		if err := tags.FlattenAndSet(d, model.Tags); err != nil {
+			return err
+		}
+	}
+
+	connection, err := connectionClient.Get(ctx, pointer.From(id))
+	if err != nil {
+		return fmt.Errorf("reading SQL Server Blob Connection Policy %s: %v ", id, err)
+	}
+
+	if model := connection.Model; model != nil && model.Properties != nil {
+		d.Set("connection_policy", string(model.Properties.ConnectionType))
+	}
+
+	restorableListPage, err := restorableDroppedDatabasesClient.ListByServerComplete(ctx, pointer.From(id))
+	if err != nil {
+		return fmt.Errorf("listing SQL Server Restorable Dropped Databases %s: %v", id, err)
+	}
+
+	if err := d.Set("restorable_dropped_database_ids", flattenSqlServerRestorableDatabases(restorableListPage)); err != nil {
+		return fmt.Errorf("setting `restorable_dropped_database_ids`: %+v", err)
+	}
+
+	return nil
+}

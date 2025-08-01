@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"fmt"
+	"log"
+	"math"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAppServiceLogs(input *web.SiteLogsConfigProperties) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	result := make(map[string]interface{})
+
+	appLogs := make([]interface{}, 0)
+	if input.ApplicationLogs != nil {
+		appLogsItem := make(map[string]interface{})
+
+		if fileSystemInput := input.ApplicationLogs.FileSystem; fileSystemInput != nil {
+			appLogsItem["file_system_level"] = string(fileSystemInput.Level)
+		}
+
+		blobStorage := make([]interface{}, 0)
+		if blobStorageInput := input.ApplicationLogs.AzureBlobStorage; blobStorageInput != nil {
+			blobStorageItem := make(map[string]interface{})
+
+			blobStorageItem["level"] = string(blobStorageInput.Level)
+
+			if blobStorageInput.SasURL != nil {
+				blobStorageItem["sas_url"] = *blobStorageInput.SasURL
+			}
+
+			if blobStorageInput.RetentionInDays != nil {
+				blobStorageItem["retention_in_days"] = *blobStorageInput.RetentionInDays
+			}
+
+			// The API returns a non nil application logs object when other logs are specified so we'll check that this structure is empty before adding it to the statefile.
+			if blobStorageInput.SasURL != nil && *blobStorageInput.SasURL != "" {
+				blobStorage = append(blobStorage, blobStorageItem)
+			}
+		}
+
+		appLogsItem["azure_blob_storage"] = blobStorage
+		appLogs = append(appLogs, appLogsItem)
+	}
+	result["application_logs"] = appLogs
+
+	httpLogs := make([]interface{}, 0)
+	if input.HTTPLogs != nil {
+		httpLogsItem := make(map[string]interface{})
+
+		fileSystem := make([]interface{}, 0)
+		if fileSystemInput := input.HTTPLogs.FileSystem; fileSystemInput != nil {
+			fileSystemItem := make(map[string]interface{})
+
+			if fileSystemInput.RetentionInDays != nil {
+				fileSystemItem["retention_in_days"] = *fileSystemInput.RetentionInDays
+			}
+
+			if fileSystemInput.RetentionInMb != nil {
+				fileSystemItem["retention_in_mb"] = *fileSystemInput.RetentionInMb
+			}
+
+			// The API returns a non nil filesystem logs object when other logs are specified so we'll check that this is disabled before adding it to the statefile.
+			if fileSystemInput.Enabled != nil && *fileSystemInput.Enabled {
+				fileSystem = append(fileSystem, fileSystemItem)
+			}
+		}
+
+		blobStorage := make([]interface{}, 0)
+		if blobStorageInput := input.HTTPLogs.AzureBlobStorage; blobStorageInput != nil {
+			blobStorageItem := make(map[string]interface{})
+
+			if blobStorageInput.SasURL != nil {
+				blobStorageItem["sas_url"] = *blobStorageInput.SasURL
+			}
+
+			if blobStorageInput.RetentionInDays != nil {
+				blobStorageItem["retention_in_days"] = *blobStorageInput.RetentionInDays
+			}
+
+			// The API returns a non nil blob logs object when other logs are specified so we'll check that this is disabled before adding it to the statefile.
+			if blobStorageInput.Enabled != nil && *blobStorageInput.Enabled {
+				blobStorage = append(blobStorage, blobStorageItem)
+			}
+		}
+
+		httpLogsItem["file_system"] = fileSystem
+		httpLogsItem["azure_blob_storage"] = blobStorage
+		httpLogs = append(httpLogs, httpLogsItem)
+	}
+	result["http_logs"] = httpLogs
+
+	if input.DetailedErrorMessages != nil && input.DetailedErrorMessages.Enabled != nil {
+		result["detailed_error_messages_enabled"] = *input.DetailedErrorMessages.Enabled
+	}
+	if input.FailedRequestsTracing != nil && input.FailedRequestsTracing.Enabled != nil {
+		result["failed_request_tracing_enabled"] = *input.FailedRequestsTracing.Enabled
+	}
+
+	return append(results, result)
+}

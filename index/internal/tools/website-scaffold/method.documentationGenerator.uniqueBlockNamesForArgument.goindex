@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/magodo/terraform-provider-azurerm-example-gen/examplegen"
+)
+func (gen documentationGenerator) uniqueBlockNamesForArgument(fields map[string]*schema.Schema) ([]string, map[string]map[string]*schema.Schema) {
+	blockNames := make([]string, 0)
+	blocks := make(map[string]map[string]*schema.Schema)
+
+	for _, fieldName := range gen.sortFields(fields) {
+		field := fields[fieldName]
+
+		// compute-only fields can be omitted
+		if field.Computed && !(field.Optional || field.Required) {
+			continue
+		}
+
+		if field.Type != schema.TypeList && field.Type != schema.TypeSet {
+			continue
+		}
+
+		if field.Elem == nil {
+			continue
+		}
+		v, ok := field.Elem.(*schema.Resource)
+		if !ok {
+			continue
+		}
+		if v == nil {
+			continue
+		}
+
+		// add this block
+		blockNames = append(blockNames, fieldName)
+		blocks[fieldName] = v.Schema
+
+		// at this point we want to iterate over all the fields to determine which ones are nested blocks, then iterate over/aggregate those
+		for _, innerElem := range v.Schema {
+			if innerElem.Type != schema.TypeList && innerElem.Type != schema.TypeSet {
+				continue
+			}
+			if field.Elem == nil {
+				continue
+			}
+
+			innerV, ok := field.Elem.(*schema.Resource)
+			if !ok {
+				continue
+			}
+			if innerV == nil {
+				continue
+			}
+
+			innerBlockNames, innerBlocks := gen.uniqueBlockNamesForArgument(innerV.Schema)
+			for _, innerBlockName := range innerBlockNames {
+				innerBlock := innerBlocks[innerBlockName]
+
+				blockNames = append(blockNames, innerBlockName)
+				blocks[innerBlockName] = innerBlock
+			}
+		}
+	}
+
+	blockNames = gen.distinctBlockNames(blockNames)
+	sort.Strings(blockNames)
+
+	return blockNames, blocks
+}

@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenOrchestratedVirtualMachineScaleSetLinuxConfiguration(input *virtualmachinescalesets.VirtualMachineScaleSetOSProfile, d *pluginsdk.ResourceData) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	output := make(map[string]interface{})
+	linConfig := input.LinuxConfiguration
+
+	if v := input.AdminUsername; v != nil {
+		output["admin_username"] = *v
+	}
+
+	if v := d.Get("os_profile").([]interface{}); len(v) > 0 {
+		osProfile := v[0].(map[string]interface{})
+		if linConfigRaw := osProfile["linux_configuration"].([]interface{}); len(linConfigRaw) > 0 {
+			linCfg := linConfigRaw[0].(map[string]interface{})
+			output["admin_password"] = linCfg["admin_password"].(string)
+		}
+	}
+
+	if v := input.AdminPassword; v != nil {
+		output["admin_password"] = *v
+	}
+
+	if v := linConfig.Ssh; v != nil {
+		if sshKeys, _ := flattenSSHKeysVMSS(v); sshKeys != nil {
+			output["admin_ssh_key"] = pluginsdk.NewSet(SSHKeySchemaHash, *sshKeys)
+		}
+	}
+
+	if v := input.ComputerNamePrefix; v != nil {
+		output["computer_name_prefix"] = *v
+	}
+
+	if v := linConfig.DisablePasswordAuthentication; v != nil {
+		output["disable_password_authentication"] = *v
+	}
+
+	if v := linConfig.PatchSettings; v != nil {
+		output["patch_mode"] = v.PatchMode
+		output["patch_assessment_mode"] = v.AssessmentMode
+	}
+
+	if v := linConfig.ProvisionVMAgent; v != nil {
+		output["provision_vm_agent"] = *v
+	}
+
+	if v := input.Secrets; v != nil {
+		output["secret"] = flattenLinuxSecretsVMSS(v)
+	}
+
+	return []interface{}{output}
+}

@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/expressroutegateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/virtualwans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/expressrouteconnections"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenExpressRouteConnectionRouting(input *expressrouteconnections.RoutingConfiguration) ([]interface{}, error) {
+	if input == nil {
+		return []interface{}{}, nil
+	}
+
+	associatedRouteTableId := ""
+	if input.AssociatedRouteTable != nil && input.AssociatedRouteTable.Id != nil {
+		associatedRouteTableId = *input.AssociatedRouteTable.Id
+	}
+	routeTableId, err := virtualwans.ParseHubRouteTableIDInsensitively(associatedRouteTableId)
+	if err != nil {
+		return nil, err
+	}
+
+	result := map[string]interface{}{
+		"associated_route_table_id": routeTableId.ID(),
+		"propagated_route_table":    flattenExpressRouteConnectionPropagatedRouteTable(input.PropagatedRouteTables),
+	}
+
+	if input.InboundRouteMap != nil && input.InboundRouteMap.Id != nil {
+		result["inbound_route_map_id"] = input.InboundRouteMap.Id
+	}
+
+	if input.OutboundRouteMap != nil && input.OutboundRouteMap.Id != nil {
+		result["outbound_route_map_id"] = input.OutboundRouteMap.Id
+	}
+
+	return []interface{}{result}, nil
+}

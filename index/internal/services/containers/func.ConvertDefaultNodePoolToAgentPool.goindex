@@ -1,0 +1,167 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ConvertDefaultNodePoolToAgentPool(input *[]managedclusters.ManagedClusterAgentPoolProfile) agentpools.AgentPool {
+	defaultCluster := (*input)[0]
+
+	agentpool := agentpools.AgentPool{
+		Name: &defaultCluster.Name,
+		Properties: &agentpools.ManagedClusterAgentPoolProfileProperties{
+			Count:                     defaultCluster.Count,
+			VMSize:                    defaultCluster.VMSize,
+			OsDiskSizeGB:              defaultCluster.OsDiskSizeGB,
+			VnetSubnetID:              defaultCluster.VnetSubnetID,
+			MaxPods:                   defaultCluster.MaxPods,
+			MaxCount:                  defaultCluster.MaxCount,
+			MinCount:                  defaultCluster.MinCount,
+			EnableAutoScaling:         defaultCluster.EnableAutoScaling,
+			EnableEncryptionAtHost:    defaultCluster.EnableEncryptionAtHost,
+			EnableFIPS:                defaultCluster.EnableFIPS,
+			EnableUltraSSD:            defaultCluster.EnableUltraSSD,
+			OrchestratorVersion:       defaultCluster.OrchestratorVersion,
+			ProximityPlacementGroupID: defaultCluster.ProximityPlacementGroupID,
+			AvailabilityZones:         defaultCluster.AvailabilityZones,
+			EnableNodePublicIP:        defaultCluster.EnableNodePublicIP,
+			NodePublicIPPrefixID:      defaultCluster.NodePublicIPPrefixID,
+			SpotMaxPrice:              defaultCluster.SpotMaxPrice,
+			NodeLabels:                defaultCluster.NodeLabels,
+			NodeTaints:                defaultCluster.NodeTaints,
+			PodSubnetID:               defaultCluster.PodSubnetID,
+			Tags:                      defaultCluster.Tags,
+		},
+	}
+
+	if osDisktypeNodePool := defaultCluster.OsDiskType; osDisktypeNodePool != nil {
+		osDisktype := agentpools.OSDiskType(string(*osDisktypeNodePool))
+		agentpool.Properties.OsDiskType = &osDisktype
+	}
+	if kubeletConfigNodePool := defaultCluster.KubeletConfig; kubeletConfigNodePool != nil {
+		kubeletConfig := agentpools.KubeletConfig{
+			AllowedUnsafeSysctls:  kubeletConfigNodePool.AllowedUnsafeSysctls,
+			ContainerLogMaxFiles:  kubeletConfigNodePool.ContainerLogMaxFiles,
+			ContainerLogMaxSizeMB: kubeletConfigNodePool.ContainerLogMaxSizeMB,
+			CpuCfsQuota:           kubeletConfigNodePool.CpuCfsQuota,
+			CpuCfsQuotaPeriod:     kubeletConfigNodePool.CpuCfsQuotaPeriod,
+			CpuManagerPolicy:      kubeletConfigNodePool.CpuManagerPolicy,
+			FailSwapOn:            kubeletConfigNodePool.FailSwapOn,
+			ImageGcHighThreshold:  kubeletConfigNodePool.ImageGcHighThreshold,
+			ImageGcLowThreshold:   kubeletConfigNodePool.ImageGcLowThreshold,
+			PodMaxPids:            kubeletConfigNodePool.PodMaxPids,
+			TopologyManagerPolicy: kubeletConfigNodePool.TopologyManagerPolicy,
+		}
+		agentpool.Properties.KubeletConfig = &kubeletConfig
+	}
+	if linuxOsConfigRaw := defaultCluster.LinuxOSConfig; linuxOsConfigRaw != nil {
+		linuxOsConfig := agentpools.LinuxOSConfig{
+			SwapFileSizeMB:             linuxOsConfigRaw.SwapFileSizeMB,
+			TransparentHugePageDefrag:  linuxOsConfigRaw.TransparentHugePageDefrag,
+			TransparentHugePageEnabled: linuxOsConfigRaw.TransparentHugePageEnabled,
+		}
+		if sysctlsRaw := linuxOsConfigRaw.Sysctls; sysctlsRaw != nil {
+			linuxOsConfig.Sysctls = pointer.To(agentpools.SysctlConfig(*sysctlsRaw))
+		}
+		agentpool.Properties.LinuxOSConfig = &linuxOsConfig
+	}
+	if networkProfileRaw := defaultCluster.NetworkProfile; networkProfileRaw != nil {
+		networkProfile := agentpools.AgentPoolNetworkProfile{}
+		if allowedHostPortsRaw := networkProfileRaw.AllowedHostPorts; allowedHostPortsRaw != nil {
+			allowedHostPorts := make([]agentpools.PortRange, 0)
+			for _, allowedHostPortRaw := range *allowedHostPortsRaw {
+				allowedHostPorts = append(allowedHostPorts, agentpools.PortRange{
+					PortStart: allowedHostPortRaw.PortStart,
+					PortEnd:   allowedHostPortRaw.PortEnd,
+					Protocol:  pointer.To(agentpools.Protocol(pointer.From(allowedHostPortRaw.Protocol))),
+				})
+			}
+			networkProfile.AllowedHostPorts = &allowedHostPorts
+		}
+		networkProfile.ApplicationSecurityGroups = networkProfileRaw.ApplicationSecurityGroups
+		if nodePublicIPTagsRaw := networkProfileRaw.NodePublicIPTags; nodePublicIPTagsRaw != nil {
+			ipTags := make([]agentpools.IPTag, 0)
+			for _, ipTagRaw := range *nodePublicIPTagsRaw {
+				ipTags = append(ipTags, agentpools.IPTag{
+					IPTagType: ipTagRaw.IPTagType,
+					Tag:       ipTagRaw.Tag,
+				})
+			}
+			networkProfile.NodePublicIPTags = &ipTags
+		}
+		agentpool.Properties.NetworkProfile = &networkProfile
+	}
+	if osTypeNodePool := defaultCluster.OsType; osTypeNodePool != nil {
+		agentpool.Properties.OsType = pointer.To(agentpools.OSType(string(*osTypeNodePool)))
+	}
+	if osSku := defaultCluster.OsSKU; osSku != nil {
+		agentpool.Properties.OsSKU = pointer.To(agentpools.OSSKU(*osSku))
+	}
+	if kubeletDiskTypeNodePool := defaultCluster.KubeletDiskType; kubeletDiskTypeNodePool != nil {
+		agentpool.Properties.KubeletDiskType = pointer.To(agentpools.KubeletDiskType(string(*kubeletDiskTypeNodePool)))
+	}
+	if agentPoolTypeNodePool := defaultCluster.Type; agentPoolTypeNodePool != nil {
+		agentpool.Properties.Type = pointer.To(agentpools.AgentPoolType(string(*agentPoolTypeNodePool)))
+	}
+	if scaleSetPriorityNodePool := defaultCluster.ScaleSetPriority; scaleSetPriorityNodePool != nil {
+		agentpool.Properties.ScaleSetPriority = pointer.To(agentpools.ScaleSetPriority(string(*scaleSetPriorityNodePool)))
+	}
+	if scaleSetEvictionPolicyNodePool := defaultCluster.ScaleSetEvictionPolicy; scaleSetEvictionPolicyNodePool != nil {
+		agentpool.Properties.ScaleSetEvictionPolicy = pointer.To(agentpools.ScaleSetEvictionPolicy(string(*scaleSetEvictionPolicyNodePool)))
+	}
+	if modeNodePool := defaultCluster.Mode; modeNodePool != nil {
+		agentpool.Properties.Mode = pointer.To(agentpools.AgentPoolMode(string(*modeNodePool)))
+	}
+	if scaleDownModeNodePool := defaultCluster.ScaleDownMode; scaleDownModeNodePool != nil {
+		agentpool.Properties.ScaleDownMode = pointer.To(agentpools.ScaleDownMode(string(*scaleDownModeNodePool)))
+	}
+	agentpool.Properties.UpgradeSettings = &agentpools.AgentPoolUpgradeSettings{}
+	if upgradeSettingsNodePool := defaultCluster.UpgradeSettings; upgradeSettingsNodePool != nil {
+		if upgradeSettingsNodePool.MaxSurge != nil && *upgradeSettingsNodePool.MaxSurge != "" {
+			agentpool.Properties.UpgradeSettings.MaxSurge = upgradeSettingsNodePool.MaxSurge
+		}
+		if upgradeSettingsNodePool.DrainTimeoutInMinutes != nil {
+			agentpool.Properties.UpgradeSettings.DrainTimeoutInMinutes = upgradeSettingsNodePool.DrainTimeoutInMinutes
+		}
+		if upgradeSettingsNodePool.NodeSoakDurationInMinutes != nil {
+			agentpool.Properties.UpgradeSettings.NodeSoakDurationInMinutes = upgradeSettingsNodePool.NodeSoakDurationInMinutes
+		}
+	}
+	if workloadRuntimeNodePool := defaultCluster.WorkloadRuntime; workloadRuntimeNodePool != nil {
+		agentpool.Properties.WorkloadRuntime = pointer.To(agentpools.WorkloadRuntime(string(*workloadRuntimeNodePool)))
+	}
+
+	if creationData := defaultCluster.CreationData; creationData != nil {
+		if creationData.SourceResourceId != nil {
+			agentpool.Properties.CreationData = &agentpools.CreationData{
+				SourceResourceId: creationData.SourceResourceId,
+			}
+		}
+	}
+
+	if defaultCluster.GpuInstanceProfile != nil {
+		agentpool.Properties.GpuInstanceProfile = pointer.To(agentpools.GPUInstanceProfile(*defaultCluster.GpuInstanceProfile))
+	}
+
+	return agentpool
+}

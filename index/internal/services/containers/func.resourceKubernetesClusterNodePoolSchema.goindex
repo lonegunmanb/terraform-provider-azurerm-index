@@ -1,0 +1,340 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/subnets"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/parse"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceKubernetesClusterNodePoolSchema() map[string]*pluginsdk.Schema {
+	s := map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: containerValidate.KubernetesAgentPoolName,
+		},
+
+		"kubernetes_cluster_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: containerValidate.ClusterID,
+		},
+
+		"node_count": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: validation.IntBetween(0, 1000),
+		},
+
+		"tags": commonschema.Tags(),
+
+		"vm_size": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"host_group_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			ValidateFunc: computeValidate.HostGroupID,
+		},
+
+		// Optional
+		"capacity_reservation_group_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			ValidateFunc: capacityreservationgroups.ValidateCapacityReservationGroupID,
+		},
+
+		"eviction_policy": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ForceNew: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.ScaleSetEvictionPolicyDelete),
+				string(agentpools.ScaleSetEvictionPolicyDeallocate),
+			}, false),
+		},
+
+		"kubelet_config": schemaNodePoolKubeletConfig(),
+
+		"linux_os_config": schemaNodePoolLinuxOSConfig(),
+
+		"fips_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+		},
+
+		"gpu_instance": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ForceNew: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.GPUInstanceProfileMIGOneg),
+				string(managedclusters.GPUInstanceProfileMIGTwog),
+				string(managedclusters.GPUInstanceProfileMIGThreeg),
+				string(managedclusters.GPUInstanceProfileMIGFourg),
+				string(managedclusters.GPUInstanceProfileMIGSeveng),
+			}, false),
+		},
+
+		"kubelet_disk_type": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Computed: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.KubeletDiskTypeOS),
+				string(agentpools.KubeletDiskTypeTemporary),
+			}, false),
+		},
+
+		"max_count": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			ValidateFunc: validation.IntBetween(0, 1000),
+		},
+
+		"max_pods": {
+			Type:     pluginsdk.TypeInt,
+			Optional: true,
+			Computed: true,
+		},
+
+		"mode": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  string(agentpools.AgentPoolModeUser),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.AgentPoolModeSystem),
+				string(agentpools.AgentPoolModeUser),
+			}, false),
+		},
+
+		"min_count": {
+			Type:     pluginsdk.TypeInt,
+			Optional: true,
+			// NOTE: rather than setting `0` users should instead pass `null` here
+			ValidateFunc: validation.IntBetween(0, 1000),
+		},
+
+		"node_network_profile": schemaNodePoolNetworkProfile(),
+
+		"node_labels": {
+			Type:     pluginsdk.TypeMap,
+			Optional: true,
+			Computed: true,
+			Elem: &pluginsdk.Schema{
+				Type: pluginsdk.TypeString,
+			},
+		},
+
+		"node_public_ip_prefix_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			RequiredWith: []string{"node_public_ip_enabled"},
+		},
+
+		// Node Taints control the behaviour of the Node Pool, as such they should not be computed and
+		// must be specified/reconciled as required
+		"node_taints": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Elem: &pluginsdk.Schema{
+				Type: pluginsdk.TypeString,
+			},
+		},
+
+		"orchestrator_version": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"os_disk_size_gb": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: validation.IntAtLeast(1),
+		},
+
+		"os_disk_type": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  agentpools.OSDiskTypeManaged,
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.OSDiskTypeEphemeral),
+				string(agentpools.OSDiskTypeManaged),
+			}, false),
+		},
+
+		"os_sku": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Computed: true, // defaults to Ubuntu if using Linux
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.OSSKUAzureLinux),
+				string(agentpools.OSSKUUbuntu),
+				string(agentpools.OSSKUWindowsTwoZeroOneNine),
+				string(agentpools.OSSKUWindowsTwoZeroTwoTwo),
+			}, false),
+		},
+
+		"os_type": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ForceNew: true,
+			Default:  string(agentpools.OSTypeLinux),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.OSTypeLinux),
+				string(agentpools.OSTypeWindows),
+			}, false),
+		},
+
+		"pod_subnet_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: commonids.ValidateSubnetID,
+		},
+
+		"priority": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ForceNew: true,
+			Default:  string(agentpools.ScaleSetPriorityRegular),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.ScaleSetPriorityRegular),
+				string(agentpools.ScaleSetPrioritySpot),
+			}, false),
+		},
+
+		"proximity_placement_group_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			ValidateFunc: proximityplacementgroups.ValidateProximityPlacementGroupID,
+		},
+
+		"snapshot_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: snapshots.ValidateSnapshotID,
+		},
+
+		"spot_max_price": {
+			Type:         pluginsdk.TypeFloat,
+			Optional:     true,
+			ForceNew:     true,
+			Default:      -1.0,
+			ValidateFunc: computeValidate.SpotMaxPrice,
+		},
+
+		"scale_down_mode": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  string(agentpools.ScaleDownModeDelete),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.ScaleDownModeDeallocate),
+				string(agentpools.ScaleDownModeDelete),
+			}, false),
+		},
+
+		"temporary_name_for_rotation": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: containerValidate.KubernetesAgentPoolName,
+		},
+
+		"ultra_ssd_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Default:  false,
+			Optional: true,
+		},
+
+		"vnet_subnet_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: commonids.ValidateSubnetID,
+		},
+
+		"upgrade_settings": upgradeSettingsSchema(),
+
+		"windows_profile": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			ForceNew: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"outbound_nat_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						ForceNew: true,
+						Default:  true,
+					},
+				},
+			},
+		},
+
+		"workload_runtime": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				string(agentpools.WorkloadRuntimeOCIContainer),
+				string(agentpools.WorkloadRuntimeWasmWasi),
+			}, false),
+		},
+
+		"zones": commonschema.ZonesMultipleOptional(),
+
+		"auto_scaling_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+		},
+
+		"node_public_ip_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+		},
+
+		"host_encryption_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+		},
+	}
+
+	return s
+}

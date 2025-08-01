@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2020-10-01/activitylogalertsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandResourceHealth(resourceHealth []interface{}, conditions []activitylogalertsapis.AlertRuleAnyOfOrLeafCondition) []activitylogalertsapis.AlertRuleAnyOfOrLeafCondition {
+	for _, serviceItem := range resourceHealth {
+		if serviceItem == nil {
+			continue
+		}
+		vs := serviceItem.(map[string]interface{})
+
+		cv := vs["current"].(*pluginsdk.Set)
+		if len(cv.List()) > 0 {
+			ruleLeafCondition := make([]activitylogalertsapis.AlertRuleLeafCondition, 0)
+			for _, e := range cv.List() {
+				event := e.(string)
+				ruleLeafCondition = append(ruleLeafCondition, activitylogalertsapis.AlertRuleLeafCondition{
+					Field:  utils.String("properties.currentHealthStatus"),
+					Equals: utils.String(event),
+				})
+			}
+			conditions = append(conditions, activitylogalertsapis.AlertRuleAnyOfOrLeafCondition{
+				AnyOf: &ruleLeafCondition,
+			})
+		}
+
+		pv := vs["previous"].(*pluginsdk.Set)
+		if len(pv.List()) > 0 {
+			ruleLeafCondition := make([]activitylogalertsapis.AlertRuleLeafCondition, 0)
+			for _, e := range pv.List() {
+				event := e.(string)
+				ruleLeafCondition = append(ruleLeafCondition, activitylogalertsapis.AlertRuleLeafCondition{
+					Field:  utils.String("properties.previousHealthStatus"),
+					Equals: utils.String(event),
+				})
+			}
+			conditions = append(conditions, activitylogalertsapis.AlertRuleAnyOfOrLeafCondition{
+				AnyOf: &ruleLeafCondition,
+			})
+		}
+
+		rv := vs["reason"].(*pluginsdk.Set)
+		if len(rv.List()) > 0 {
+			ruleLeafCondition := make([]activitylogalertsapis.AlertRuleLeafCondition, 0)
+			for _, e := range rv.List() {
+				event := e.(string)
+				ruleLeafCondition = append(ruleLeafCondition, activitylogalertsapis.AlertRuleLeafCondition{
+					Field:  utils.String("properties.cause"),
+					Equals: utils.String(event),
+				})
+			}
+			conditions = append(conditions, activitylogalertsapis.AlertRuleAnyOfOrLeafCondition{
+				AnyOf: &ruleLeafCondition,
+			})
+		}
+	}
+	return conditions
+}

@@ -1,0 +1,100 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	keyvaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyvaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyvaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceArmCdnEndpointCustomDomainCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Cdn.CustomDomainsClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	name := d.Get("name").(string)
+	epid := d.Get("cdn_endpoint_id").(string)
+
+	cdnEndpointId, err := parse.EndpointID(epid)
+	if err != nil {
+		return err
+	}
+
+	id := parse.NewCustomDomainID(cdnEndpointId.SubscriptionId, cdnEndpointId.ResourceGroup, cdnEndpointId.ProfileName, cdnEndpointId.Name, name)
+
+	existing, err := client.Get(ctx, id.ResourceGroup, id.ProfileName, id.EndpointName, id.Name)
+	if err != nil {
+		if !utils.ResponseWasNotFound(existing.Response) {
+			return fmt.Errorf("checking for existing %q: %+v", id, err)
+		}
+	}
+
+	if !utils.ResponseWasNotFound(existing.Response) {
+		return tf.ImportAsExistsError("azurerm_cdn_endpoint_custom_domain", id.ID())
+	}
+
+	props := cdn.CustomDomainParameters{
+		CustomDomainPropertiesParameters: &cdn.CustomDomainPropertiesParameters{
+			HostName: utils.String(d.Get("host_name").(string)),
+		},
+	}
+
+	future, err := client.Create(ctx, id.ResourceGroup, id.ProfileName, id.EndpointName, id.Name, props)
+	if err != nil {
+		return fmt.Errorf("creating %q: %+v", id, err)
+	}
+	if err := future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("waiting for creation of %q: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	// Enable https if specified
+	var params cdn.BasicCustomDomainHTTPSParameters
+	if v, ok := d.GetOk("user_managed_https"); ok {
+		// User managed certificate is only available for Azure CDN from Microsoft and Azure CDN from Verizon profiles.
+		// https://docs.microsoft.com/en-us/azure/cdn/cdn-custom-ssl?tabs=option-2-enable-https-with-your-own-certificate#tlsssl-certificates
+		pfClient := meta.(*clients.Client).Cdn.ProfilesClient
+		cdnEndpointResp, err := pfClient.Get(ctx, id.ResourceGroup, id.ProfileName)
+		if err != nil {
+			return fmt.Errorf("retrieving Cdn Profile %q (Resource Group %q): %+v",
+				id.ResourceGroup, id.ProfileName, err)
+		}
+		supportedSku := map[cdn.SkuName]bool{
+			cdn.SkuNamePremiumVerizon:    true,
+			cdn.SkuNameStandardVerizon:   true,
+			cdn.SkuNameStandardMicrosoft: true,
+		}
+		if cdnEndpointResp.Sku != nil && !supportedSku[cdnEndpointResp.Sku.Name] {
+			return fmt.Errorf("user managed HTTPS certificate is only available for Azure CDN from Microsoft or Azure CDN from Verizon profiles")
+		}
+		params, err = expandArmCdnEndpointCustomDomainUserManagedHttpsSettings(ctx, v.([]interface{}), meta.(*clients.Client))
+		if err != nil {
+			return err
+		}
+	} else if v, ok := d.GetOk("cdn_managed_https"); ok {
+		params = expandArmCdnEndpointCustomDomainCdnManagedHttpsSettings(v.([]interface{}))
+	}
+
+	if params != nil {
+		if err := enableArmCdnEndpointCustomDomainHttps(ctx, client, id, params); err != nil {
+			return err
+		}
+	}
+
+	return resourceArmCdnEndpointCustomDomainRead(d, meta)
+}

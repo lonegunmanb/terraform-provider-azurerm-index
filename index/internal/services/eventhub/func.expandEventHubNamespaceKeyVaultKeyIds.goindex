@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2022-01-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandEventHubNamespaceKeyVaultKeyIds(input []interface{}) (*[]namespaces.KeyVaultProperties, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	results := make([]namespaces.KeyVaultProperties, 0)
+
+	for _, item := range input {
+		keyId, err := keyVaultParse.ParseOptionallyVersionedNestedItemID(item.(string))
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, namespaces.KeyVaultProperties{
+			KeyName:     utils.String(keyId.Name),
+			KeyVaultUri: utils.String(keyId.KeyVaultBaseUrl),
+			KeyVersion:  utils.String(keyId.Version),
+		})
+	}
+
+	return &results, nil
+}

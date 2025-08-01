@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-04-01/updateruns"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r KubernetesFleetUpdateRunResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Containers.FleetUpdateRunsClient
+
+			var config KubernetesFleetUpdateRunResourceSchema
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			fleetId, err := commonids.ParseKubernetesFleetID(config.KubernetesFleetManagerId)
+			if err != nil {
+				return err
+			}
+
+			id := updateruns.NewUpdateRunID(fleetId.SubscriptionId, fleetId.ResourceGroupName, fleetId.FleetName, config.Name)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for the presence of an existing %s: %+v", id, err)
+				}
+			}
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			payload := updateruns.UpdateRun{
+				Properties: &updateruns.UpdateRunProperties{
+					ManagedClusterUpdate: expandKubernetesFleetUpdateRunManagedClusterUpdate(config.ManagedClusterUpdate),
+					Strategy:             expandKubernetesFleetUpdateRunStrategy(config.Stage),
+					UpdateStrategyId:     pointer.To(config.FleetUpdateStrategyId),
+				},
+			}
+
+			if err := client.CreateOrUpdateThenPoll(ctx, id, payload, updateruns.DefaultCreateOrUpdateOperationOptions()); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

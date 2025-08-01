@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/localnetworkgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenVirtualNetworkGatewayIPConfigurations(ipConfigs *[]virtualnetworkgateways.VirtualNetworkGatewayIPConfiguration) []interface{} {
+	flat := make([]interface{}, 0)
+
+	if ipConfigs != nil {
+		for _, cfg := range *ipConfigs {
+			props := cfg.Properties
+			v := make(map[string]interface{})
+
+			if name := cfg.Name; name != nil {
+				v["name"] = *name
+			}
+			v["private_ip_address_allocation"] = string(pointer.From(props.PrivateIPAllocationMethod))
+
+			if subnet := props.Subnet; subnet != nil {
+				if id := subnet.Id; id != nil {
+					v["subnet_id"] = *id
+				}
+			}
+
+			if pip := props.PublicIPAddress; pip != nil {
+				if id := pip.Id; id != nil {
+					v["public_ip_address_id"] = *id
+				}
+			}
+
+			flat = append(flat, v)
+		}
+	}
+
+	return flat
+}

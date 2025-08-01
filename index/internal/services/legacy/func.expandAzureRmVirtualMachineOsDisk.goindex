@@ -1,0 +1,106 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/publicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	compute2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	intStor "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func expandAzureRmVirtualMachineOsDisk(d *pluginsdk.ResourceData) (*virtualmachines.OSDisk, error) {
+	disks := d.Get("storage_os_disk").([]interface{})
+
+	config := disks[0].(map[string]interface{})
+
+	name := config["name"].(string)
+	imageURI := config["image_uri"].(string)
+	createOption := config["create_option"].(string)
+	vhdURI := config["vhd_uri"].(string)
+	managedDiskType := config["managed_disk_type"].(string)
+	managedDiskID := config["managed_disk_id"].(string)
+
+	osDisk := &virtualmachines.OSDisk{
+		Name:         &name,
+		CreateOption: virtualmachines.DiskCreateOptionTypes(createOption),
+	}
+
+	if vhdURI != "" {
+		osDisk.Vhd = &virtualmachines.VirtualHardDisk{
+			Uri: &vhdURI,
+		}
+	}
+
+	managedDisk := &virtualmachines.ManagedDiskParameters{}
+
+	if managedDiskType != "" {
+		managedDisk.StorageAccountType = pointer.To(virtualmachines.StorageAccountTypes(managedDiskType))
+		osDisk.ManagedDisk = managedDisk
+	}
+
+	if managedDiskID != "" {
+		managedDisk.Id = &managedDiskID
+		osDisk.ManagedDisk = managedDisk
+	}
+
+	// BEGIN: code to be removed after GH-13016 is merged
+	if vhdURI != "" && managedDiskID != "" {
+		return nil, fmt.Errorf("conflict between `vhd_uri` and `managed_disk_id` (only one or the other can be used)")
+	}
+	if vhdURI != "" && managedDiskType != "" {
+		return nil, fmt.Errorf("conflict between `vhd_uri` and `managed_disk_type` (only one or the other can be used)")
+	}
+	// END: code to be removed after GH-13016 is merged
+	if managedDiskID == "" && vhdURI == "" && strings.EqualFold(string(osDisk.CreateOption), string(virtualmachines.DiskCreateOptionTypesAttach)) {
+		return nil, fmt.Errorf("must specify `vhd_uri` or `managed_disk_id` to attach")
+	}
+
+	if v := config["image_uri"].(string); v != "" {
+		osDisk.Image = &virtualmachines.VirtualHardDisk{
+			Uri: &imageURI,
+		}
+	}
+
+	if v := config["os_type"].(string); v != "" {
+		osDisk.OsType = pointer.To(virtualmachines.OperatingSystemTypes(v))
+	}
+
+	if v := config["caching"].(string); v != "" {
+		osDisk.Caching = pointer.To(virtualmachines.CachingTypes(v))
+	}
+
+	if v := config["disk_size_gb"].(int); v != 0 {
+		osDisk.DiskSizeGB = pointer.To(int64(v))
+	}
+
+	if v, ok := config["write_accelerator_enabled"].(bool); ok {
+		osDisk.WriteAcceleratorEnabled = utils.Bool(v)
+	}
+
+	return osDisk, nil
+}

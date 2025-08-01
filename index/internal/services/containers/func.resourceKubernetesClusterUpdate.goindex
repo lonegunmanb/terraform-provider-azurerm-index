@@ -1,0 +1,740 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	containersClient := meta.(*clients.Client).Containers
+	nodePoolsClient := containersClient.AgentPoolsClient
+	clusterClient := containersClient.KubernetesClustersClient
+	keyVaultsClient := meta.(*clients.Client).KeyVault
+	env := containersClient.Environment
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := commonids.ParseKubernetesClusterID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	d.Partial(true)
+
+	// we need to conditionally update the cluster
+	existing, err := clusterClient.Get(ctx, *id)
+	if err != nil {
+		return fmt.Errorf("retrieving existing %s: %+v", *id, err)
+	}
+	if existing.Model == nil || existing.Model.Properties == nil {
+		return fmt.Errorf("retrieving existing %s: `properties` was nil", *id)
+	}
+	props := existing.Model.Properties
+
+	if err := validateKubernetesCluster(d, existing.Model, id.ResourceGroupName, id.ManagedClusterName); err != nil {
+		return err
+	}
+
+	// when update, we should set the value of `Identity.UserAssignedIdentities` empty
+	// otherwise the rest api will report error - this is tracked here: https://github.com/Azure/azure-rest-api-specs/issues/13631
+	if existing.Model.Identity != nil && existing.Model.Identity.IdentityIds != nil {
+		for k := range existing.Model.Identity.IdentityIds {
+			existing.Model.Identity.IdentityIds[k] = identity.UserAssignedIdentityDetails{}
+		}
+	}
+
+	if d.HasChange("service_principal") && !d.HasChange("identity") {
+		log.Printf("[DEBUG] Updating the Service Principal for %s..", *id)
+		servicePrincipals := d.Get("service_principal").([]interface{})
+		// we'll be rotating the Service Principal - removing the SP block is handled by the validate function
+		servicePrincipalRaw := servicePrincipals[0].(map[string]interface{})
+
+		clientId := servicePrincipalRaw["client_id"].(string)
+		clientSecret := servicePrincipalRaw["client_secret"].(string)
+		params := managedclusters.ManagedClusterServicePrincipalProfile{
+			ClientId: clientId,
+			Secret:   utils.String(clientSecret),
+		}
+
+		err = clusterClient.ResetServicePrincipalProfileThenPoll(ctx, *id, params)
+		if err != nil {
+			return fmt.Errorf("updating Service Principal for %s: %+v", *id, err)
+		}
+		log.Printf("[DEBUG] Updated the Service Principal for %s.", *id)
+
+		// since we're patching it, re-retrieve the latest version of the cluster
+		existing, err = clusterClient.Get(ctx, *id)
+		if err != nil {
+			return fmt.Errorf("retrieving updated %s: %+v", *id, err)
+		}
+		if existing.Model == nil || existing.Model.Properties == nil {
+			return fmt.Errorf("retrieving updated %s: `properties` was nil", *id)
+		}
+	}
+
+	// since there's multiple reasons why we could be called into Update, we use this to only update if something's changed that's not SP/Version
+	updateCluster := false
+
+	// RBAC profile updates need to be handled atomically before any call to createUpdate as a diff there will create a PropertyChangeNotAllowed error
+	if d.HasChange("role_based_access_control_enabled") {
+		// check if we can determine current EnableRBAC state - don't do anything destructive if we can't be sure
+		if props.EnableRBAC == nil {
+			return fmt.Errorf("updating %s: RBAC Enabled was nil", *id)
+		}
+		rbacEnabled := d.Get("role_based_access_control_enabled").(bool)
+
+		// changing rbacEnabled must still force cluster recreation
+		if *props.EnableRBAC == rbacEnabled {
+			props.EnableRBAC = utils.Bool(rbacEnabled)
+		} else {
+			updateCluster = true
+		}
+	}
+
+	if d.HasChange("azure_active_directory_role_based_access_control") {
+		azureADRaw := d.Get("azure_active_directory_role_based_access_control").([]interface{})
+		azureADProfile := expandKubernetesClusterAzureActiveDirectoryRoleBasedAccessControl(azureADRaw)
+
+		props.AadProfile = azureADProfile
+		if props.AadProfile != nil && (props.AadProfile.Managed == nil || !*props.AadProfile.Managed) {
+			log.Printf("[DEBUG] Updating the RBAC AAD profile")
+			err = clusterClient.ResetAADProfileThenPoll(ctx, *id, *props.AadProfile)
+			if err != nil {
+				return fmt.Errorf("updating Managed Kubernetes Cluster AAD Profile for %s: %+v", *id, err)
+			}
+		}
+
+		if props.AadProfile != nil && props.AadProfile.Managed != nil && *props.AadProfile.Managed {
+			existing.Model.Properties.AadProfile = azureADProfile
+			updateCluster = true
+		}
+	}
+
+	if d.HasChange("aci_connector_linux") || d.HasChange("azure_policy_enabled") || d.HasChange("confidential_computing") || d.HasChange("http_application_routing_enabled") || d.HasChange("oms_agent") || d.HasChange("ingress_application_gateway") || d.HasChange("open_service_mesh_enabled") || d.HasChange("key_vault_secrets_provider") {
+		updateCluster = true
+		addOns := collectKubernetesAddons(d)
+		addonProfiles, err := expandKubernetesAddOns(d, addOns, env)
+		if err != nil {
+			return err
+		}
+		existing.Model.Properties.AddonProfiles = addonProfiles
+	}
+
+	if d.HasChange("api_server_authorized_ip_ranges") || d.HasChange("run_command_enabled") || d.HasChange("private_cluster_public_fqdn_enabled") || d.HasChange("api_server_access_profile") {
+		updateCluster = true
+
+		apiServerProfile := expandKubernetesClusterAPIAccessProfile(d)
+		existing.Model.Properties.ApiServerAccessProfile = apiServerProfile
+	}
+
+	if d.HasChange("auto_scaler_profile") {
+		updateCluster = true
+		autoScalerProfileRaw := d.Get("auto_scaler_profile").([]interface{})
+
+		autoScalerProfile := expandKubernetesClusterAutoScalerProfile(autoScalerProfileRaw)
+		existing.Model.Properties.AutoScalerProfile = autoScalerProfile
+	}
+
+	if d.HasChange("monitor_metrics") {
+		updateCluster = true
+		azureMonitorKubernetesMetricsRaw := d.Get("monitor_metrics").([]interface{})
+
+		azureMonitorProfile := expandKubernetesClusterAzureMonitorProfile(azureMonitorKubernetesMetricsRaw)
+		existing.Model.Properties.AzureMonitorProfile = azureMonitorProfile
+	}
+
+	if d.HasChange("linux_profile") {
+		updateCluster = true
+		linuxProfileRaw := d.Get("linux_profile").([]interface{})
+		linuxProfile := expandKubernetesClusterLinuxProfile(linuxProfileRaw)
+		existing.Model.Properties.LinuxProfile = linuxProfile
+	}
+
+	if d.HasChange("local_account_disabled") {
+		updateCluster = true
+		existing.Model.Properties.DisableLocalAccounts = utils.Bool(d.Get("local_account_disabled").(bool))
+	}
+
+	if d.HasChange("cost_analysis_enabled") {
+		updateCluster = true
+		metricsProfile, err := expandKubernetesClusterMetricsProfile(d.Get("cost_analysis_enabled").(bool), d.Get("sku_tier").(string))
+		if err != nil {
+			return err
+		}
+		existing.Model.Properties.MetricsProfile = metricsProfile
+	}
+
+	if d.HasChange("network_profile") {
+		updateCluster = true
+
+		if existing.Model.Properties.NetworkProfile == nil {
+			return fmt.Errorf("updating %s: `network_profile` was nil", *id)
+		}
+
+		networkProfile := *existing.Model.Properties.NetworkProfile
+
+		if networkProfile.LoadBalancerProfile != nil {
+			loadBalancerProfile := *networkProfile.LoadBalancerProfile
+
+			if key := "network_profile.0.network_policy"; d.HasChange(key) {
+				networkPolicy := d.Get(key).(string)
+				existing.Model.Properties.NetworkProfile.NetworkPolicy = pointer.To(managedclusters.NetworkPolicy(networkPolicy))
+			}
+
+			if key := "network_profile.0.load_balancer_profile.0.effective_outbound_ips"; d.HasChange(key) {
+				effectiveOutboundIPs := idsToResourceReferences(d.Get(key))
+				loadBalancerProfile.EffectiveOutboundIPs = effectiveOutboundIPs
+			}
+
+			if key := "network_profile.0.load_balancer_profile.0.idle_timeout_in_minutes"; d.HasChange(key) {
+				idleTimeoutInMinutes := d.Get(key).(int)
+				loadBalancerProfile.IdleTimeoutInMinutes = utils.Int64(int64(idleTimeoutInMinutes))
+			}
+
+			if key := "network_profile.0.load_balancer_profile.0.managed_outbound_ip_count"; d.HasChange(key) {
+				managedOutboundIPCount := d.Get(key).(int)
+				loadBalancerProfile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{
+					Count: utils.Int64(int64(managedOutboundIPCount)),
+				}
+
+				// fixes: Load balancer profile must specify one of ManagedOutboundIPs, OutboundIPPrefixes and OutboundIPs.
+				loadBalancerProfile.OutboundIPs = nil
+				loadBalancerProfile.OutboundIPPrefixes = nil
+			}
+
+			if key := "network_profile.0.load_balancer_profile.0.managed_outbound_ipv6_count"; d.HasChange(key) {
+				managedOutboundIPV6Count := d.Get(key).(int)
+				if loadBalancerProfile.ManagedOutboundIPs == nil {
+					loadBalancerProfile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{}
+				}
+				loadBalancerProfile.ManagedOutboundIPs.CountIPv6 = utils.Int64(int64(managedOutboundIPV6Count))
+
+				// fixes: Load balancer profile must specify one of ManagedOutboundIPs, OutboundIPPrefixes and OutboundIPs.
+				loadBalancerProfile.OutboundIPs = nil
+				loadBalancerProfile.OutboundIPPrefixes = nil
+			}
+
+			if key := "network_profile.0.load_balancer_profile.0.outbound_ip_address_ids"; d.HasChange(key) {
+				outboundIPAddress := d.Get(key)
+				if v := outboundIPAddress.(*pluginsdk.Set).List(); len(v) == 0 {
+					// sending [] to unset `outbound_ip_address_ids` results in 400 / Bad Request
+					// instead we default back to AKS managed outbound which is the default of the AKS API when nothing is provided
+					loadBalancerProfile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{
+						Count: utils.Int64(1),
+					}
+					loadBalancerProfile.OutboundIPs = nil
+					loadBalancerProfile.OutboundIPPrefixes = nil
+				} else {
+					publicIPAddressIDs := idsToResourceReferences(d.Get(key))
+					loadBalancerProfile.OutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileOutboundIPs{
+						PublicIPs: publicIPAddressIDs,
+					}
+
+					// fixes: Load balancer profile must specify one of ManagedOutboundIPs, OutboundIPPrefixes and OutboundIPs.
+					loadBalancerProfile.ManagedOutboundIPs = nil
+					loadBalancerProfile.OutboundIPPrefixes = nil
+				}
+			}
+
+			if key := "network_profile.0.load_balancer_profile.0.outbound_ip_prefix_ids"; d.HasChange(key) {
+				outboundIPPrefixes := d.Get(key)
+				if v := outboundIPPrefixes.(*pluginsdk.Set).List(); len(v) == 0 {
+					// sending [] to unset `outbound_ip_address_ids` results in 400 / Bad Request
+					// instead we default back to AKS managed outbound which is the default of the AKS API when nothing is specified
+					loadBalancerProfile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{
+						Count: utils.Int64(1),
+					}
+					loadBalancerProfile.OutboundIPs = nil
+					loadBalancerProfile.OutboundIPPrefixes = nil
+				} else {
+					outboundIPPrefixIDs := idsToResourceReferences(d.Get(key))
+					loadBalancerProfile.OutboundIPPrefixes = &managedclusters.ManagedClusterLoadBalancerProfileOutboundIPPrefixes{
+						PublicIPPrefixes: outboundIPPrefixIDs,
+					}
+
+					// fixes: Load balancer profile must specify one of ManagedOutboundIPs, OutboundIPPrefixes and OutboundIPs.
+					loadBalancerProfile.ManagedOutboundIPs = nil
+					loadBalancerProfile.OutboundIPs = nil
+				}
+			}
+
+			if key := "network_profile.0.load_balancer_profile.0.outbound_ports_allocated"; d.HasChange(key) {
+				allocatedOutboundPorts := d.Get(key).(int)
+				loadBalancerProfile.AllocatedOutboundPorts = utils.Int64(int64(allocatedOutboundPorts))
+			}
+
+			if key := "network_profile.0.load_balancer_profile.0.backend_pool_type"; d.HasChange(key) {
+				backendPoolType := d.Get(key).(string)
+				loadBalancerProfile.BackendPoolType = pointer.To(managedclusters.BackendPoolType(backendPoolType))
+			}
+
+			existing.Model.Properties.NetworkProfile.LoadBalancerProfile = &loadBalancerProfile
+		}
+
+		if networkProfile.NatGatewayProfile != nil {
+			natGatewayProfile := *networkProfile.NatGatewayProfile
+
+			if key := "network_profile.0.nat_gateway_profile.0.idle_timeout_in_minutes"; d.HasChange(key) {
+				idleTimeoutInMinutes := d.Get(key).(int)
+				natGatewayProfile.IdleTimeoutInMinutes = utils.Int64(int64(idleTimeoutInMinutes))
+			}
+
+			if key := "network_profile.0.nat_gateway_profile.0.managed_outbound_ip_count"; d.HasChange(key) {
+				managedOutboundIPCount := d.Get(key).(int)
+				natGatewayProfile.ManagedOutboundIPProfile = &managedclusters.ManagedClusterManagedOutboundIPProfile{
+					Count: utils.Int64(int64(managedOutboundIPCount)),
+				}
+				natGatewayProfile.EffectiveOutboundIPs = nil
+			}
+
+			existing.Model.Properties.NetworkProfile.NatGatewayProfile = &natGatewayProfile
+		}
+
+		if d.HasChange("network_profile.0.network_data_plane") {
+			existing.Model.Properties.NetworkProfile.NetworkDataplane = pointer.To(managedclusters.NetworkDataplane(d.Get("network_profile.0.network_data_plane").(string)))
+		}
+
+		if key := "network_profile.0.outbound_type"; d.HasChange(key) {
+			outboundType := managedclusters.OutboundType(d.Get(key).(string))
+			existing.Model.Properties.NetworkProfile.OutboundType = pointer.To(outboundType)
+			if outboundType != managedclusters.OutboundTypeLoadBalancer {
+				existing.Model.Properties.NetworkProfile.LoadBalancerProfile = nil
+			}
+			if outboundType != managedclusters.OutboundTypeManagedNATGateway && outboundType != managedclusters.OutboundTypeUserAssignedNATGateway {
+				existing.Model.Properties.NetworkProfile.NatGatewayProfile = nil
+			}
+		}
+	}
+	if d.HasChange("service_mesh_profile") {
+		updateCluster = true
+		if serviceMeshProfile := expandKubernetesClusterServiceMeshProfile(d.Get("service_mesh_profile").([]interface{}), existing.Model.Properties.ServiceMeshProfile); serviceMeshProfile != nil {
+			existing.Model.Properties.ServiceMeshProfile = serviceMeshProfile
+		}
+	}
+
+	if d.HasChange("tags") {
+		updateCluster = true
+		t := d.Get("tags").(map[string]interface{})
+		existing.Model.Tags = tags.Expand(t)
+	}
+
+	if d.HasChange("windows_profile") {
+		updateCluster = true
+		windowsProfileRaw := d.Get("windows_profile").([]interface{})
+		windowsProfile := expandKubernetesClusterWindowsProfile(windowsProfileRaw)
+		existing.Model.Properties.WindowsProfile = windowsProfile
+	}
+
+	if d.HasChange("identity") {
+		updateCluster = true
+		managedClusterIdentityRaw := d.Get("identity").([]interface{})
+
+		expandedIdentity, err := expandKubernetesClusterManagedClusterIdentity(managedClusterIdentityRaw)
+		if err != nil {
+			return fmt.Errorf("expanding `identity`: %+v", err)
+		}
+		existing.Model.Identity = expandedIdentity
+	}
+
+	if d.HasChange("sku_tier") {
+		updateCluster = true
+		if existing.Model.Sku == nil {
+			basic := managedclusters.ManagedClusterSKUNameBase
+			existing.Model.Sku = &managedclusters.ManagedClusterSKU{
+				Name: &basic,
+			}
+		}
+
+		skuTier := managedclusters.ManagedClusterSKUTierFree
+		if v := d.Get("sku_tier").(string); v != "" {
+			skuTier = managedclusters.ManagedClusterSKUTier(v)
+		}
+		existing.Model.Sku.Tier = &skuTier
+	}
+
+	autoUpgradeChannel := "automatic_upgrade_channel"
+	nodeOsUpgradeChannel := "node_os_upgrade_channel"
+	if d.HasChange(autoUpgradeChannel) {
+		updateCluster = true
+		if existing.Model.Properties.AutoUpgradeProfile == nil {
+			existing.Model.Properties.AutoUpgradeProfile = &managedclusters.ManagedClusterAutoUpgradeProfile{}
+		}
+		channel := d.Get(autoUpgradeChannel).(string)
+		if channel == "" {
+			channel = string(managedclusters.UpgradeChannelNone)
+		}
+		existing.Model.Properties.AutoUpgradeProfile.UpgradeChannel = pointer.To(managedclusters.UpgradeChannel(channel))
+	}
+
+	if d.HasChange(nodeOsUpgradeChannel) {
+		updateCluster = true
+		if d.Get(autoUpgradeChannel).(string) == string(managedclusters.UpgradeChannelNodeNegativeimage) && d.Get(nodeOsUpgradeChannel).(string) != string(managedclusters.NodeOSUpgradeChannelNodeImage) {
+			return fmt.Errorf("`node_os_upgrade_channel` must be set to `NodeImage` if `automatic_upgrade_channel` is set to `node-image`")
+		}
+		if existing.Model.Properties.AutoUpgradeProfile == nil {
+			existing.Model.Properties.AutoUpgradeProfile = &managedclusters.ManagedClusterAutoUpgradeProfile{}
+		}
+		existing.Model.Properties.AutoUpgradeProfile.NodeOSUpgradeChannel = pointer.To(managedclusters.NodeOSUpgradeChannel(d.Get(nodeOsUpgradeChannel).(string)))
+	}
+
+	if d.HasChange("http_proxy_config") {
+		updateCluster = true
+		httpProxyConfigRaw := d.Get("http_proxy_config").([]interface{})
+		httpProxyConfig := expandKubernetesClusterHttpProxyConfig(httpProxyConfigRaw)
+		existing.Model.Properties.HTTPProxyConfig = httpProxyConfig
+	}
+
+	if d.HasChange("oidc_issuer_enabled") {
+		updateCluster = true
+		oidcIssuerEnabled := d.Get("oidc_issuer_enabled").(bool)
+		oidcIssuerProfile := expandKubernetesClusterOidcIssuerProfile(oidcIssuerEnabled)
+		existing.Model.Properties.OidcIssuerProfile = oidcIssuerProfile
+	}
+
+	if d.HasChanges("key_management_service") {
+		updateCluster = true
+		azureKeyVaultKmsRaw := d.Get("key_management_service").([]interface{})
+		azureKeyVaultKms, _ := expandKubernetesClusterAzureKeyVaultKms(ctx, keyVaultsClient, id.SubscriptionId, d, azureKeyVaultKmsRaw)
+		if existing.Model.Properties.SecurityProfile == nil {
+			existing.Model.Properties.SecurityProfile = &managedclusters.ManagedClusterSecurityProfile{}
+		}
+		existing.Model.Properties.SecurityProfile.AzureKeyVaultKms = azureKeyVaultKms
+	}
+
+	if d.HasChanges("microsoft_defender") {
+		updateCluster = true
+		microsoftDefenderRaw := d.Get("microsoft_defender").([]interface{})
+		microsoftDefender := expandKubernetesClusterMicrosoftDefender(d, microsoftDefenderRaw)
+		if existing.Model.Properties.SecurityProfile == nil {
+			existing.Model.Properties.SecurityProfile = &managedclusters.ManagedClusterSecurityProfile{}
+		}
+		existing.Model.Properties.SecurityProfile.Defender = microsoftDefender
+	}
+
+	if d.HasChanges("storage_profile") {
+		updateCluster = true
+		storageProfileRaw := d.Get("storage_profile").([]interface{})
+		clusterStorageProfile := expandStorageProfile(storageProfileRaw)
+		existing.Model.Properties.StorageProfile = clusterStorageProfile
+	}
+
+	if d.HasChange("workload_autoscaler_profile") {
+		updateCluster = true
+		workloadAutoscalerProfileRaw := d.Get("workload_autoscaler_profile").([]interface{})
+		workloadAutoscalerProfile := expandKubernetesClusterWorkloadAutoscalerProfile(workloadAutoscalerProfileRaw, d)
+		if workloadAutoscalerProfile == nil {
+			existing.Model.Properties.WorkloadAutoScalerProfile = &managedclusters.ManagedClusterWorkloadAutoScalerProfile{
+				Keda: &managedclusters.ManagedClusterWorkloadAutoScalerProfileKeda{
+					Enabled: false,
+				},
+			}
+		} else {
+			existing.Model.Properties.WorkloadAutoScalerProfile = workloadAutoscalerProfile
+		}
+	}
+
+	if d.HasChanges("workload_identity_enabled") {
+		updateCluster = true
+		workloadIdentity := d.Get("workload_identity_enabled").(bool)
+		if existing.Model.Properties.SecurityProfile == nil {
+			existing.Model.Properties.SecurityProfile = &managedclusters.ManagedClusterSecurityProfile{}
+		}
+		existing.Model.Properties.SecurityProfile.WorkloadIdentity = &managedclusters.ManagedClusterSecurityProfileWorkloadIdentity{
+			Enabled: &workloadIdentity,
+		}
+	}
+
+	if d.HasChange("image_cleaner_enabled") || d.HasChange("image_cleaner_interval_hours") {
+		updateCluster = true
+		if existing.Model.Properties.SecurityProfile == nil {
+			existing.Model.Properties.SecurityProfile = &managedclusters.ManagedClusterSecurityProfile{}
+		}
+		existing.Model.Properties.SecurityProfile.ImageCleaner = &managedclusters.ManagedClusterSecurityProfileImageCleaner{
+			Enabled:       utils.Bool(d.Get("image_cleaner_enabled").(bool)),
+			IntervalHours: utils.Int64(int64(d.Get("image_cleaner_interval_hours").(int))),
+		}
+	}
+
+	if d.HasChange("web_app_routing") {
+		updateCluster = true
+		existing.Model.Properties.IngressProfile = expandKubernetesClusterIngressProfile(d, d.Get("web_app_routing").([]interface{}))
+	}
+
+	if d.HasChange("support_plan") {
+		updateCluster = true
+		existing.Model.Properties.SupportPlan = pointer.To(managedclusters.KubernetesSupportPlan(d.Get("support_plan").(string)))
+	}
+
+	if updateCluster {
+		// If Defender was explicitly disabled in a prior update then we should strip SecurityProfile.AzureDefender from the request
+		// body to prevent errors in cases where Defender is disabled for the entire subscription
+		if !d.HasChanges("microsoft_defender") && len(d.Get("microsoft_defender").([]interface{})) == 0 {
+			if existing.Model.Properties.SecurityProfile == nil {
+				existing.Model.Properties.SecurityProfile = &managedclusters.ManagedClusterSecurityProfile{}
+			}
+			existing.Model.Properties.SecurityProfile.Defender = nil
+		}
+
+		log.Printf("[DEBUG] Updating %s..", *id)
+		err = clusterClient.CreateOrUpdateThenPoll(ctx, *id, *existing.Model)
+		if err != nil {
+			return fmt.Errorf("updating %s: %+v", *id, err)
+		}
+
+		log.Printf("[DEBUG] Updated %s..", *id)
+	}
+
+	// then roll the version of Kubernetes if necessary
+	if d.HasChange("kubernetes_version") {
+		existing, err = clusterClient.Get(ctx, *id)
+		if err != nil {
+			return fmt.Errorf("retrieving existing %s: %+v", *id, err)
+		}
+		if existing.Model == nil || existing.Model.Properties == nil {
+			return fmt.Errorf("retrieving existing %s: `properties` was nil", *id)
+		}
+
+		kubernetesVersion := d.Get("kubernetes_version").(string)
+		log.Printf("[DEBUG] Upgrading the version of Kubernetes to %q..", kubernetesVersion)
+		existing.Model.Properties.KubernetesVersion = utils.String(kubernetesVersion)
+
+		err = clusterClient.CreateOrUpdateThenPoll(ctx, *id, *existing.Model)
+		if err != nil {
+			return fmt.Errorf("updating Kubernetes Version for %s: %+v", *id, err)
+		}
+
+		log.Printf("[DEBUG] Upgraded the version of Kubernetes to %q..", kubernetesVersion)
+	}
+
+	// update the node pool using the separate API
+	if d.HasChange("default_node_pool") {
+		agentProfiles, err := ExpandDefaultNodePool(d)
+		if err != nil {
+			return fmt.Errorf("expanding `default_node_pool`: %+v", err)
+		}
+		agentProfile := ConvertDefaultNodePoolToAgentPool(agentProfiles)
+		defaultNodePoolId := agentpools.NewAgentPoolID(id.SubscriptionId, id.ResourceGroupName, id.ManagedClusterName, *agentProfile.Name)
+
+		// if a users specified a version - confirm that version is supported on the cluster
+		if nodePoolVersion := agentProfile.Properties.CurrentOrchestratorVersion; nodePoolVersion != nil {
+			existingNodePool, err := nodePoolsClient.Get(ctx, defaultNodePoolId)
+			if err != nil {
+				return fmt.Errorf("retrieving Default Node Pool %s: %+v", defaultNodePoolId, err)
+			}
+			currentNodePoolVersion := ""
+			if v := existingNodePool.Model.Properties.OrchestratorVersion; v != nil {
+				currentNodePoolVersion = *v
+			}
+
+			if err := validateNodePoolSupportsVersion(ctx, containersClient, currentNodePoolVersion, defaultNodePoolId, *nodePoolVersion); err != nil {
+				return err
+			}
+		}
+
+		hostEncryptionEnabled := "default_node_pool.0.host_encryption_enabled"
+		nodePublicIpEnabled := "default_node_pool.0.node_public_ip_enabled"
+
+		cycleNodePoolProperties := []string{
+			"default_node_pool.0.name",
+			hostEncryptionEnabled,
+			nodePublicIpEnabled,
+			"default_node_pool.0.fips_enabled",
+			"default_node_pool.0.kubelet_config",
+			"default_node_pool.0.linux_os_config",
+			"default_node_pool.0.max_pods",
+			"default_node_pool.0.only_critical_addons_enabled",
+			"default_node_pool.0.os_disk_size_gb",
+			"default_node_pool.0.os_disk_type",
+			"default_node_pool.0.pod_subnet_id",
+			"default_node_pool.0.snapshot_id",
+			"default_node_pool.0.ultra_ssd_enabled",
+			"default_node_pool.0.vnet_subnet_id",
+			"default_node_pool.0.vm_size",
+			"default_node_pool.0.zones",
+		}
+
+		// if the default node pool name has changed, it means the initial attempt at resizing failed
+		cycleNodePool := d.HasChanges(cycleNodePoolProperties...)
+		// os_sku could only be updated if the current and new os_sku are either Ubuntu or AzureLinux
+		if d.HasChange("default_node_pool.0.os_sku") {
+			oldOsSkuRaw, newOsSkuRaw := d.GetChange("default_node_pool.0.os_sku")
+			oldOsSku := oldOsSkuRaw.(string)
+			newOsSku := newOsSkuRaw.(string)
+			if oldOsSku != string(managedclusters.OSSKUUbuntu) && oldOsSku != string(managedclusters.OSSKUAzureLinux) {
+				cycleNodePool = true
+			}
+			if newOsSku != string(managedclusters.OSSKUUbuntu) && newOsSku != string(managedclusters.OSSKUAzureLinux) {
+				cycleNodePool = true
+			}
+		}
+		if cycleNodePool {
+			log.Printf("[DEBUG] Cycling Default Node Pool..")
+			// to provide a seamless updating experience for the vm size of the default node pool we need to cycle the default
+			// node pool by provisioning a temporary system node pool, tearing down the former default node pool and then
+			// bringing up the new one.
+
+			if v := d.Get("default_node_pool.0.temporary_name_for_rotation").(string); v == "" {
+				return fmt.Errorf("`temporary_name_for_rotation` must be specified when updating any of the following properties %q", cycleNodePoolProperties)
+			}
+
+			temporaryNodePoolName := d.Get("default_node_pool.0.temporary_name_for_rotation").(string)
+			tempNodePoolId := agentpools.NewAgentPoolID(id.SubscriptionId, id.ResourceGroupName, id.ManagedClusterName, temporaryNodePoolName)
+
+			tempExisting, err := nodePoolsClient.Get(ctx, tempNodePoolId)
+			if !response.WasNotFound(tempExisting.HttpResponse) && err != nil {
+				return fmt.Errorf("checking for existing temporary %s: %+v", tempNodePoolId, err)
+			}
+
+			defaultExisting, err := nodePoolsClient.Get(ctx, defaultNodePoolId)
+			if !response.WasNotFound(defaultExisting.HttpResponse) && err != nil {
+				return fmt.Errorf("checking for existing default %s: %+v", defaultNodePoolId, err)
+			}
+
+			tempAgentProfile := agentProfile
+			tempAgentProfile.Name = &temporaryNodePoolName
+			// if the temp node pool already exists due to a previous failure, don't bother spinning it up
+			if tempExisting.Model == nil {
+				if err := retryNodePoolCreation(ctx, nodePoolsClient, tempNodePoolId, tempAgentProfile); err != nil {
+					return fmt.Errorf("creating temporary %s: %+v", tempNodePoolId, err)
+				}
+			}
+
+			// delete the old default node pool if it exists
+			if defaultExisting.Model != nil {
+				if err := nodePoolsClient.DeleteThenPoll(ctx, defaultNodePoolId); err != nil {
+					return fmt.Errorf("deleting default %s: %+v", defaultNodePoolId, err)
+				}
+			}
+
+			// create the default node pool with the new vm size
+			if err := retryNodePoolCreation(ctx, nodePoolsClient, defaultNodePoolId, agentProfile); err != nil {
+				// if creation of the default node pool fails we automatically fall back to the temporary node pool
+				// in func findDefaultNodePool
+				log.Printf("[DEBUG] Creation of resized default node pool failed")
+				return fmt.Errorf("creating default %s: %+v", defaultNodePoolId, err)
+			}
+
+			if err := nodePoolsClient.DeleteThenPoll(ctx, tempNodePoolId); err != nil {
+				return fmt.Errorf("deleting temporary %s: %+v", tempNodePoolId, err)
+			}
+
+			log.Printf("[DEBUG] Cycled Default Node Pool..")
+		} else {
+			log.Printf("[DEBUG] Updating of Default Node Pool..")
+
+			if err := nodePoolsClient.CreateOrUpdateThenPoll(ctx, defaultNodePoolId, agentProfile); err != nil {
+				return fmt.Errorf("updating Default Node Pool %s %+v", defaultNodePoolId, err)
+			}
+
+			log.Printf("[DEBUG] Updated Default Node Pool.")
+		}
+	}
+
+	if d.HasChange("maintenance_window") {
+		client := meta.(*clients.Client).Containers.MaintenanceConfigurationsClient
+		maintenanceWindowProperties := expandKubernetesClusterMaintenanceConfigurationDefault(d.Get("maintenance_window").([]interface{}))
+		maintenanceId := maintenanceconfigurations.NewMaintenanceConfigurationID(id.SubscriptionId, id.ResourceGroupName, id.ManagedClusterName, "default")
+		if maintenanceWindowProperties != nil {
+			parameters := maintenanceconfigurations.MaintenanceConfiguration{
+				Properties: maintenanceWindowProperties,
+			}
+			if _, err := client.CreateOrUpdate(ctx, maintenanceId, parameters); err != nil {
+				return fmt.Errorf("creating/updating Maintenance Configuration for Managed Kubernetes Cluster (%q): %+v", id, err)
+			}
+		} else {
+			if _, err := client.Delete(ctx, maintenanceId); err != nil {
+				return fmt.Errorf("deleting Maintenance Configuration for %s: %+v", id, err)
+			}
+		}
+	}
+
+	if d.HasChange("maintenance_window_auto_upgrade") {
+		client := meta.(*clients.Client).Containers.MaintenanceConfigurationsClient
+		maintenanceId := maintenanceconfigurations.NewMaintenanceConfigurationID(id.SubscriptionId, id.ResourceGroupName, id.ManagedClusterName, "aksManagedAutoUpgradeSchedule")
+		existing, err := client.Get(ctx, maintenanceId)
+		if err != nil && !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("retrieving Auto Upgrade Schedule Maintenance Configuration for %s: %+v", id, err)
+		}
+		var existingProperties *maintenanceconfigurations.MaintenanceConfigurationProperties
+		if existing.Model != nil {
+			existingProperties = existing.Model.Properties
+		}
+		maintenanceWindowProperties := expandKubernetesClusterMaintenanceConfigurationForUpdate(d.Get("maintenance_window_auto_upgrade").([]interface{}), existingProperties)
+		if maintenanceWindowProperties != nil {
+			parameters := maintenanceconfigurations.MaintenanceConfiguration{
+				Properties: maintenanceWindowProperties,
+			}
+			if _, err := client.CreateOrUpdate(ctx, maintenanceId, parameters); err != nil {
+				return fmt.Errorf("creating/updating Auto Upgrade Schedule Maintenance Configuration for %s: %+v", id, err)
+			}
+		} else {
+			if _, err := client.Delete(ctx, maintenanceId); err != nil {
+				return fmt.Errorf("deleting Auto Upgrade Schedule Maintenance Configuration for %s: %+v", id, err)
+			}
+		}
+	}
+
+	if d.HasChange("maintenance_window_node_os") {
+		client := meta.(*clients.Client).Containers.MaintenanceConfigurationsClient
+		maintenanceId := maintenanceconfigurations.NewMaintenanceConfigurationID(id.SubscriptionId, id.ResourceGroupName, id.ManagedClusterName, "aksManagedNodeOSUpgradeSchedule")
+		existing, err := client.Get(ctx, maintenanceId)
+		if err != nil && !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("retrieving Node OS Upgrade Schedule Maintenance Configuration for %s: %+v", id, err)
+		}
+		var existingProperties *maintenanceconfigurations.MaintenanceConfigurationProperties
+		if existing.Model != nil {
+			existingProperties = existing.Model.Properties
+		}
+		maintenanceWindowProperties := expandKubernetesClusterMaintenanceConfigurationForUpdate(d.Get("maintenance_window_node_os").([]interface{}), existingProperties)
+		if maintenanceWindowProperties != nil {
+			parameters := maintenanceconfigurations.MaintenanceConfiguration{
+				Properties: maintenanceWindowProperties,
+			}
+			if _, err := client.CreateOrUpdate(ctx, maintenanceId, parameters); err != nil {
+				return fmt.Errorf("creating/updating Node OS Upgrade Schedule Maintenance Configuration for %s: %+v", id, err)
+			}
+		} else {
+			if _, err := client.Delete(ctx, maintenanceId); err != nil {
+				return fmt.Errorf("deleting Node OS Upgrade Schedule Maintenance Configuration for %s: %+v", id, err)
+			}
+		}
+	}
+
+	d.Partial(false)
+
+	return resourceKubernetesClusterRead(d, meta)
+}

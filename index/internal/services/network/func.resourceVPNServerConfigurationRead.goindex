@@ -1,0 +1,96 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceVPNServerConfigurationRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.VirtualWANs
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := virtualwans.ParseVpnServerConfigurationID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.VpnServerConfigurationsGet(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found - removing from state!", *id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.VpnServerConfigurationName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.NormalizeNilable(model.Location))
+
+		if props := model.Properties; props != nil {
+			flattenedAADAuthentication := flattenVpnServerConfigurationAADAuthentication(props.AadAuthenticationParameters)
+			if err := d.Set("azure_active_directory_authentication", flattenedAADAuthentication); err != nil {
+				return fmt.Errorf("setting `azure_active_directory_authentication`: %+v", err)
+			}
+
+			flattenedClientRootCerts := flattenVpnServerConfigurationClientRootCertificates(props.VpnClientRootCertificates)
+			if err := d.Set("client_root_certificate", flattenedClientRootCerts); err != nil {
+				return fmt.Errorf("setting `client_root_certificate`: %+v", err)
+			}
+
+			flattenedClientRevokedCerts := flattenVpnServerConfigurationClientRevokedCertificates(props.VpnClientRevokedCertificates)
+			if err := d.Set("client_revoked_certificate", flattenedClientRevokedCerts); err != nil {
+				return fmt.Errorf("setting `client_revoked_certificate`: %+v", err)
+			}
+
+			flattenedIPSecPolicies := flattenVpnServerConfigurationIPSecPolicies(props.VpnClientIPsecPolicies)
+			if err := d.Set("ipsec_policy", flattenedIPSecPolicies); err != nil {
+				return fmt.Errorf("setting `ipsec_policy`: %+v", err)
+			}
+
+			flattenedRadius := flattenVpnServerConfigurationRadius(props)
+			if err := d.Set("radius", flattenedRadius); err != nil {
+				return fmt.Errorf("setting `radius`: %+v", err)
+			}
+
+			vpnAuthenticationTypes := make([]interface{}, 0)
+			if props.VpnAuthenticationTypes != nil {
+				for _, v := range *props.VpnAuthenticationTypes {
+					vpnAuthenticationTypes = append(vpnAuthenticationTypes, string(v))
+				}
+			}
+			if err := d.Set("vpn_authentication_types", vpnAuthenticationTypes); err != nil {
+				return fmt.Errorf("setting `vpn_authentication_types`: %+v", err)
+			}
+
+			flattenedVpnProtocols := flattenVpnServerConfigurationVPNProtocols(props.VpnProtocols)
+			if err := d.Set("vpn_protocols", pluginsdk.NewSet(pluginsdk.HashString, flattenedVpnProtocols)); err != nil {
+				return fmt.Errorf("setting `vpn_protocols`: %+v", err)
+			}
+
+			if err := tags.FlattenAndSet(d, model.Tags); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}

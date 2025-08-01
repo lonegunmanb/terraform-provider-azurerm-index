@@ -1,0 +1,90 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/workloads
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/workloads/2023-04-01/sapvirtualinstances"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/workloads/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r WorkloadsSAPSingleNodeVirtualInstanceResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Workloads.SAPVirtualInstances
+
+			id, err := sapvirtualinstances.ParseSapVirtualInstanceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			state := WorkloadsSAPSingleNodeVirtualInstanceModel{}
+			if model := resp.Model; model != nil {
+				state.Name = id.SapVirtualInstanceName
+				state.ResourceGroupName = id.ResourceGroupName
+				state.Location = location.Normalize(model.Location)
+
+				identity, err := identity.FlattenUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return fmt.Errorf("flattening `identity`: %+v", err)
+				}
+				state.Identity = pointer.From(identity)
+
+				props := &model.Properties
+				state.Environment = string(props.Environment)
+				state.SapProduct = string(props.SapProduct)
+				state.Tags = pointer.From(model.Tags)
+
+				if config := props.Configuration; config != nil {
+					if v, ok := config.(sapvirtualinstances.DeploymentWithOSConfiguration); ok {
+						appLocation := ""
+						if appLocationVal := v.AppLocation; appLocationVal != nil {
+							appLocation = *v.AppLocation
+						}
+						state.AppLocation = location.Normalize(appLocation)
+
+						sapFqdn := ""
+						if osSapConfiguration := v.OsSapConfiguration; osSapConfiguration != nil {
+							sapFqdn = pointer.From(osSapConfiguration.SapFqdn)
+						}
+						state.SapFqdn = sapFqdn
+
+						if configuration := v.InfrastructureConfiguration; configuration != nil {
+							if singleServerConfiguration, singleServerConfigurationExists := configuration.(sapvirtualinstances.SingleServerConfiguration); singleServerConfigurationExists {
+								state.SingleServerConfiguration = flattenSingleServerConfiguration(singleServerConfiguration, metadata.ResourceData)
+							}
+						}
+					}
+				}
+
+				if v := props.ManagedResourceGroupConfiguration; v != nil {
+					state.ManagedResourceGroupName = pointer.From(v.Name)
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

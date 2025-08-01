@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse
+import (
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+)
+func parseDataPlaneResource(input *url.URL, expectedType string, requireVersion bool) (*dataPlaneResource, error) {
+	expectedSegments := 2
+	expectedFormatExample := "/%s/{name}"
+	if requireVersion {
+		expectedSegments = 3
+		expectedFormatExample = "/%s/{name}/{version}"
+	}
+
+	// then we want to check the path, which should be in the format described above
+	path := strings.Split(strings.TrimPrefix(input.Path, "/"), "/")
+	if len(path) != expectedSegments {
+		return nil, fmt.Errorf("expected the path to be in the format %q but got %q", expectedFormatExample, input.Path)
+	}
+
+	nestedItemType := path[0]
+	if nestedItemType != expectedType {
+		return nil, fmt.Errorf("expected the Nested Item Type to be %q but got %q", expectedType, nestedItemType)
+	}
+	output := dataPlaneResource{
+		itemName:    path[1],
+		itemVersion: nil,
+	}
+	if err := validateSegment(output.itemName); err != nil {
+		return nil, fmt.Errorf("expected the path to be in the format %q but %+v", expectedFormatExample, err)
+	}
+
+	if requireVersion {
+		itemVersion := path[2]
+		if err := validateSegment(itemVersion); err != nil {
+			return nil, fmt.Errorf("expected the path to be in the format %q but %+v", expectedFormatExample, err)
+		}
+		output.itemVersion = pointer.To(itemVersion)
+	}
+
+	return &output, nil
+}

@@ -1,0 +1,98 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
+import (
+	"fmt"
+	"log"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstanceencryptionprotectors"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstancekeys"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	mhsmParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	managedhsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceMsSqlManagedInstanceTransparentDataEncryptionRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	encryptionProtectorClient := meta.(*clients.Client).MSSQLManagedInstance.ManagedInstanceEncryptionProtectorClient
+	env := meta.(*clients.Client).Account.Environment
+
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.ManagedInstanceEncryptionProtectorID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	managedInstanceId := commonids.NewSqlManagedInstanceID(id.SubscriptionId, id.ResourceGroup, id.ManagedInstanceName)
+
+	resp, err := encryptionProtectorClient.Get(ctx, managedInstanceId)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("making Read request for %s: %v", id, err)
+	}
+
+	d.Set("managed_instance_id", managedInstanceId.ID())
+
+	if resp.Model != nil && resp.Model.Properties != nil {
+		log.Printf("[INFO] Encryption protector key type is %s", resp.Model.Properties.ServerKeyType)
+
+		keyId := ""
+		autoRotationEnabled := false
+
+		// Only set the key type if it's an AKV key. For service managed, we can omit the setting the key_vault_key_id
+		if resp.Model.Properties.ServerKeyType == managedinstanceencryptionprotectors.ServerKeyTypeAzureKeyVault {
+			if resp.Model.Properties.Uri != nil {
+				log.Printf("[INFO] Setting Key Vault URI to %s", *resp.Model.Properties.Uri)
+				keyId = *resp.Model.Properties.Uri
+			}
+
+			// autoRotation is only for AKV keys
+			if resp.Model.Properties.AutoRotationEnabled != nil {
+				autoRotationEnabled = *resp.Model.Properties.AutoRotationEnabled
+			}
+		}
+
+		hsmKey := ""
+		keyVaultKeyId := ""
+		if keyId != "" {
+			isHSMURI, err, _, _ := managedHsmHelpers.IsManagedHSMURI(env, keyId)
+			if err != nil {
+				return err
+			}
+
+			if isHSMURI {
+				hsmKey = keyId
+			} else {
+				keyVaultKeyId = keyId
+			}
+		}
+
+		if err := d.Set("managed_hsm_key_id", hsmKey); err != nil {
+			return fmt.Errorf("setting `managed_hsm_key_id`: %+v", err)
+		}
+
+		if err := d.Set("key_vault_key_id", keyVaultKeyId); err != nil {
+			return fmt.Errorf("setting `key_vault_key_id`: %+v", err)
+		}
+
+		if err := d.Set("auto_rotation_enabled", autoRotationEnabled); err != nil {
+			return fmt.Errorf("setting `auto_rotation_enabled`: %+v", err)
+		}
+	}
+	return nil
+}

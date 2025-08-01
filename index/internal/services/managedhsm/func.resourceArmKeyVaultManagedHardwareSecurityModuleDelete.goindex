@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2023-07-01/managedhsms"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidation "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/custompollers"
+	managedHSMValidation "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	kv74 "github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func resourceArmKeyVaultManagedHardwareSecurityModuleDelete(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).ManagedHSMs
+	ctx, cancel := timeouts.ForDelete(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := managedhsms.ParseManagedHSMID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	// We need to grab the managed hsm to see if purge protection is enabled prior to deletion
+	resp, err := client.ManagedHsmClient.Get(ctx, *id)
+	if err != nil {
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	loc := ""
+	purgeProtectionEnabled := false
+	if model := resp.Model; model != nil {
+		loc = location.NormalizeNilable(model.Location)
+		if props := model.Properties; props != nil && props.EnablePurgeProtection != nil {
+			purgeProtectionEnabled = *props.EnablePurgeProtection
+		}
+	}
+
+	if err := client.ManagedHsmClient.DeleteThenPoll(ctx, *id); err != nil {
+		return fmt.Errorf("deleting %s: %+v", id, err)
+	}
+
+	if meta.(*clients.Client).Features.KeyVault.PurgeSoftDeletedHSMsOnDestroy {
+		if purgeProtectionEnabled {
+			log.Printf("[DEBUG] cannot purge %s because purge protection is enabled", id)
+			return nil
+		}
+	}
+
+	// the polling operation of purge can not terminate correctly, so we use the custom polling operation of polling delete
+	// try to purge again if managed HSM still exists after 1 minute
+	// for API issue: https://github.com/Azure/azure-rest-api-specs/issues/27138
+	purgeId := managedhsms.NewDeletedManagedHSMID(id.SubscriptionId, loc, id.ManagedHSMName)
+	if _, err := client.ManagedHsmClient.PurgeDeleted(ctx, purgeId); err != nil {
+		return fmt.Errorf("purging %s: %+v", id, err)
+	}
+
+	purgePoller := custompollers.NewHSMPurgePoller(client.ManagedHsmClient, purgeId)
+	poller := pollers.NewPoller(purgePoller, time.Second*30, pollers.DefaultNumberOfDroppedConnectionsToAllow)
+	if err := poller.PollUntilDone(ctx); err != nil {
+		return fmt.Errorf("waiting for %s to be purged: %+v", id, err)
+	}
+
+	client.Purge(*id)
+
+	return nil
+}

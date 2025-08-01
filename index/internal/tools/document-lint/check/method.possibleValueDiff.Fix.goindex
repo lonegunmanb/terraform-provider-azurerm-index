@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"log"
+	"path"
+	"strings"
+
+	"github.com/fatih/color"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func (p possibleValueDiff) Fix(line string) (result string, err error) {
+	if len(p.Want) == 0 {
+		return line, nil
+	}
+	result = line
+	// replace from field.EnumStart to field.EnumEnd
+	var bs strings.Builder
+	if len(p.Got) == 0 || (p.MDField().EnumStart == 0 && len(p.Missed) > 0) {
+		// skip this kind of field. may submit in a separate run
+		// find default index
+		idx := strings.Index(line, "Defaults to")
+		if idx < 0 {
+			idx = strings.Index(line, "Changing this forces")
+		}
+		if idx > 0 {
+			bs.WriteString(line[:idx])
+		} else {
+			bs.WriteString(line)
+			bs.WriteByte(' ')
+		}
+		if len(p.Want) == 1 {
+			bs.WriteString("The only possible value is ")
+		} else {
+			bs.WriteString("Possible values are ")
+		}
+		bs.WriteString(patchWantEnums(p.Want))
+		bs.WriteByte('.')
+		if idx > 0 {
+			bs.WriteByte(' ')
+			bs.WriteString(line[idx:])
+		}
+		result = bs.String()
+	} else if len(p.Missed) > 0 {
+		// only replace missed values
+		bs.WriteString(line[:p.MDField().EnumStart])
+		if len(p.Want) == 1 {
+			bs.WriteString("The only possible value is ")
+		} else {
+			bs.WriteString("Possible values are ")
+		}
+		bs.WriteString(patchWantEnums(p.Want))
+		if end := p.MDField().EnumEnd; end > 0 && end < len(line) {
+			bs.WriteString(line[p.MDField().EnumEnd:])
+		} else {
+			f := p.MDField()
+			log.Printf("warning enum end %s:L%d len %dvs%d; %s", path.Base(f.Path), f.Line, f.EnumEnd, len(line), line)
+		}
+		result = bs.String()
+	}
+	return result, nil
+}

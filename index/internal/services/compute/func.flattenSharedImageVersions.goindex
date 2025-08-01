@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryimageversions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenSharedImageVersions(input []galleryimageversions.GalleryImageVersion, filterTags *map[string]string) []interface{} {
+	results := make([]interface{}, 0)
+
+	if len(input) == 0 {
+		return results
+	}
+
+	for _, imageVersion := range input {
+		flattenedImageVersion := flattenSharedImageVersion(imageVersion)
+		found := true
+		// Loop through our filter tags and see if they match
+		if filterTags != nil {
+			for k, v := range *filterTags {
+				if imageVersion.Tags != nil {
+					// If the tags don't match, return false
+					if v != (*imageVersion.Tags)[k] {
+						found = false
+						break
+					}
+				}
+			}
+		}
+
+		if found {
+			results = append(results, flattenedImageVersion)
+		}
+	}
+
+	return results
+}

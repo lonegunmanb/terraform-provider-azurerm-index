@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/gofrs/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/jobschedule"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/runbook"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2023-11-01/runbookdraft"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/automation/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/automation/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandDraft(inputs []interface{}) *runbook.RunbookDraft {
+	if len(inputs) == 0 || inputs[0] == nil {
+		return nil
+	}
+
+	input := inputs[0].(map[string]interface{})
+	var res runbook.RunbookDraft
+
+	res.DraftContentLink = expandContentLink(input["content_link"].([]interface{}))
+	res.InEdit = pointer.To(input["edit_mode_enabled"].(bool))
+	parameter := map[string]runbook.RunbookParameter{}
+
+	for _, iparam := range input["parameters"].([]interface{}) {
+		param := iparam.(map[string]interface{})
+		key := param["key"].(string)
+		parameter[key] = runbook.RunbookParameter{
+			Type:         pointer.To(param["type"].(string)),
+			IsMandatory:  pointer.To(param["mandatory"].(bool)),
+			Position:     pointer.To(int64(param["position"].(int))),
+			DefaultValue: pointer.To(param["default_value"].(string)),
+		}
+	}
+	res.Parameters = &parameter
+
+	typesInput := input["output_types"].([]interface{})
+	types := make([]string, 0, len(typesInput))
+	for _, v := range typesInput {
+		types = append(types, v.(string))
+	}
+
+	if len(types) > 0 {
+		res.OutputTypes = &types
+	}
+
+	return &res
+}

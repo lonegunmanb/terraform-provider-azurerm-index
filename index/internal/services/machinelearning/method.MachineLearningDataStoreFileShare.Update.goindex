@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/datastore"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning/validate"
+	storageparse "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r MachineLearningDataStoreFileShare) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MachineLearning.Datastore
+
+			id, err := datastore.ParseDataStoreID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var state MachineLearningDataStoreFileShareModel
+			if err := metadata.Decode(&state); err != nil {
+				return err
+			}
+
+			fileShareId, err := storageparse.StorageShareResourceManagerID(state.StorageFileShareID)
+			if err != nil {
+				return err
+			}
+
+			datastoreRaw := datastore.DatastoreResource{
+				Name: pointer.To(id.DataStoreName),
+				Type: pointer.To(string(datastore.DatastoreTypeAzureFile)),
+			}
+
+			props := &datastore.AzureFileDatastore{
+				AccountName:                   fileShareId.StorageAccountName,
+				FileShareName:                 fileShareId.FileshareName,
+				Description:                   pointer.To(state.Description),
+				ServiceDataAccessAuthIdentity: pointer.To(datastore.ServiceDataAccessAuthIdentity(state.ServiceDataIdentity)),
+				Tags:                          pointer.To(state.Tags),
+			}
+
+			accountKey := state.AccountKey
+			if accountKey != "" {
+				props.Credentials = datastore.AccountKeyDatastoreCredentials{
+					Secrets: datastore.AccountKeyDatastoreSecrets{
+						Key: pointer.To(accountKey),
+					},
+				}
+			}
+
+			sasToken := state.SharedAccessSignature
+			if sasToken != "" {
+				props.Credentials = datastore.SasDatastoreCredentials{
+					Secrets: datastore.SasDatastoreSecrets{
+						SasToken: pointer.To(sasToken),
+					},
+				}
+			}
+			datastoreRaw.Properties = props
+
+			_, err = client.CreateOrUpdate(ctx, *id, datastoreRaw, datastore.CreateOrUpdateOperationOptions{SkipValidation: pointer.To(true)})
+			if err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

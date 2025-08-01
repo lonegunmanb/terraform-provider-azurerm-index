@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2024-10-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	cognitiveValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandCustomerManagedKey(input []CustomerManagedKey) (*cognitiveservicesaccounts.Encryption, error) {
+	if len(input) == 0 {
+		return &cognitiveservicesaccounts.Encryption{
+			KeySource: pointer.To(cognitiveservicesaccounts.KeySourceMicrosoftPointCognitiveServices),
+		}, nil
+	}
+
+	v := input[0]
+
+	var identityClientId string
+	if value := v.IdentityClientID; value != "" {
+		identityClientId = value
+	}
+
+	encryption := &cognitiveservicesaccounts.Encryption{
+		KeySource: pointer.To(cognitiveservicesaccounts.KeySourceMicrosoftPointKeyVault),
+		KeyVaultProperties: &cognitiveservicesaccounts.KeyVaultProperties{
+			IdentityClientId: pointer.To(identityClientId),
+		},
+	}
+
+	if v.KeyVaultKeyID != "" {
+		keyId, err := keyVaultParse.ParseOptionallyVersionedNestedItemID(v.KeyVaultKeyID)
+		if err != nil {
+			return nil, err
+		}
+		encryption.KeyVaultProperties.KeyName = pointer.To(keyId.Name)
+		encryption.KeyVaultProperties.KeyVersion = pointer.To(keyId.Version)
+		encryption.KeyVaultProperties.KeyVaultUri = pointer.To(keyId.KeyVaultBaseUrl)
+	} else {
+		hsmKyId, err := managedHsmParse.ManagedHSMDataPlaneVersionedKeyID(v.ManagedHsmKeyID, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		encryption.KeyVaultProperties.KeyName = pointer.To(hsmKyId.KeyName)
+		encryption.KeyVaultProperties.KeyVersion = pointer.To(hsmKyId.KeyVersion)
+		encryption.KeyVaultProperties.KeyVaultUri = pointer.To(hsmKyId.BaseUri())
+	}
+	return encryption, nil
+}

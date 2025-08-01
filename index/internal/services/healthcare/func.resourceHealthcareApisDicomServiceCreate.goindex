@@ -1,0 +1,102 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/healthcare
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/healthcareapis/2024-03-31/dicomservices"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/healthcareapis/2024-03-31/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/healthcare/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/healthcare/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceHealthcareApisDicomServiceCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).HealthCare.HealthcareWorkspaceDicomServiceClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+	log.Printf("[INFO] preparing arguments for AzureRM Healthcare Dicom Service creation.")
+
+	workspace, err := workspaces.ParseWorkspaceID(d.Get("workspace_id").(string))
+	if err != nil {
+		return fmt.Errorf("parsing healthcare workspace error: %+v", err)
+	}
+
+	id := dicomservices.NewDicomServiceID(workspace.SubscriptionId, workspace.ResourceGroupName, workspace.WorkspaceName, d.Get("name").(string))
+
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_healthcare_dicom_service", id.ID())
+		}
+	}
+
+	i, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding `identity`: %+v", err)
+	}
+
+	t := d.Get("tags").(map[string]interface{})
+
+	parameters := dicomservices.DicomService{
+		Identity: i,
+		Properties: &dicomservices.DicomServiceProperties{
+			PublicNetworkAccess: pointer.To(dicomservices.PublicNetworkAccessEnabled),
+		},
+		Location: pointer.To(location.Normalize(d.Get("location").(string))),
+		Tags:     tags.Expand(t),
+	}
+
+	if v, ok := d.GetOk("data_partitions_enabled"); ok {
+		parameters.Properties.EnableDataPartitions = pointer.To(v.(bool))
+	}
+
+	cors := expandDicomServiceCorsConfiguration(d.Get("cors").([]interface{}))
+	if cors != nil {
+		parameters.Properties.CorsConfiguration = cors
+	}
+
+	if v, ok := d.GetOk("encryption_key_url"); ok && v.(string) != "" {
+		parameters.Properties.Encryption = &dicomservices.Encryption{
+			CustomerManagedKeyEncryption: &dicomservices.EncryptionCustomerManagedKeyEncryption{
+				KeyEncryptionKeyURL: pointer.To(v.(string)),
+			},
+		}
+	}
+
+	storage := expandStorageConfiguration(d.Get("storage").([]interface{}))
+	if storage != nil {
+		parameters.Properties.StorageConfiguration = storage
+	}
+
+	if enabled := d.Get("public_network_access_enabled").(bool); !enabled {
+		parameters.Properties.PublicNetworkAccess = pointer.To(dicomservices.PublicNetworkAccessDisabled)
+	}
+
+	err = client.CreateOrUpdateThenPoll(ctx, id, parameters)
+	if err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceHealthcareApisDicomServiceRead(d, meta)
+}

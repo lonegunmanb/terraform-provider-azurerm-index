@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2022-10-01-preview/accessconnector"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r AccessConnectorResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DataBricks.AccessConnectorClient
+			id, err := accessconnector.ParseAccessConnectorID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var state AccessConnectorResourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("reading Databricks %s: %v", id, err)
+			}
+
+			if metadata.ResourceData.HasChange("identity") {
+				// TODO: Switch this to 'identity.ExpandSystemOrSingleUserAssignedMap(metadata.ResourceData.Get("identity").([]interface{}))'
+				// once SDK Helpers PR #164 has been merged and integrated into the provider...
+				identityValue, err := identity.ExpandLegacySystemAndUserAssignedMap(metadata.ResourceData.Get("identity").([]interface{}))
+				if err != nil {
+					return fmt.Errorf("expanding `identity`: %+v", err)
+				}
+
+				existing.Model.Identity = identityValue
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				existing.Model.Tags = &state.Tags
+			}
+
+			if err = client.CreateOrUpdateThenPoll(ctx, *id, *existing.Model); err != nil {
+				return fmt.Errorf("updating Databricks %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

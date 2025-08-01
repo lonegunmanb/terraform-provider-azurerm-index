@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redis
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redis/2024-03-01/firewallrules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redis/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redis/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceRedisFirewallRule() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceRedisFirewallRuleCreateUpdate,
+		Read:   resourceRedisFirewallRuleRead,
+		Update: resourceRedisFirewallRuleCreateUpdate,
+		Delete: resourceRedisFirewallRuleDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := firewallrules.ParseFirewallRuleID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.FirewallRuleV0ToV1{},
+		}),
+		SchemaVersion: 1,
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.FirewallRuleName,
+			},
+
+			"redis_cache_name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"start_ip": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.All(
+					validation.IsIPAddress,
+					validation.StringIsNotEmpty,
+				),
+			},
+
+			"end_ip": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.All(
+					validation.IsIPAddress,
+					validation.StringIsNotEmpty,
+				),
+			},
+		},
+	}
+}

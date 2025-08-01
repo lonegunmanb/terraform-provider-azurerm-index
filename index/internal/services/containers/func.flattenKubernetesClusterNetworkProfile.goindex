@@ -1,0 +1,197 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenKubernetesClusterNetworkProfile(profile *managedclusters.ContainerServiceNetworkProfile) []interface{} {
+	if profile == nil {
+		return []interface{}{}
+	}
+
+	dnsServiceIP := ""
+	if profile.DnsServiceIP != nil {
+		dnsServiceIP = *profile.DnsServiceIP
+	}
+
+	serviceCidr := ""
+	if profile.ServiceCidr != nil {
+		serviceCidr = *profile.ServiceCidr
+	}
+
+	podCidr := ""
+	if profile.PodCidr != nil {
+		podCidr = *profile.PodCidr
+	}
+
+	networkPlugin := ""
+	if profile.NetworkPlugin != nil {
+		networkPlugin = string(*profile.NetworkPlugin)
+	}
+
+	networkMode := ""
+	if profile.NetworkMode != nil {
+		networkMode = string(*profile.NetworkMode)
+	}
+
+	networkPolicy := ""
+	if profile.NetworkPolicy != nil {
+		networkPolicy = string(*profile.NetworkPolicy)
+
+		// convert "none" network policy to "", because "none" is only supported in preview api-version
+		if networkPolicy == "none" {
+			networkPolicy = ""
+		}
+	}
+
+	outboundType := ""
+	if profile.OutboundType != nil {
+		outboundType = string(*profile.OutboundType)
+	}
+
+	lbProfiles := make([]interface{}, 0)
+	if lbp := profile.LoadBalancerProfile; lbp != nil {
+		lb := make(map[string]interface{})
+
+		if v := lbp.AllocatedOutboundPorts; v != nil {
+			lb["outbound_ports_allocated"] = v
+		}
+
+		if v := lbp.IdleTimeoutInMinutes; v != nil {
+			lb["idle_timeout_in_minutes"] = v
+		}
+
+		if ips := lbp.ManagedOutboundIPs; ips != nil {
+			if count := ips.Count; count != nil {
+				lb["managed_outbound_ip_count"] = count
+			}
+
+			if countIPv6 := ips.CountIPv6; countIPv6 != nil {
+				lb["managed_outbound_ipv6_count"] = countIPv6
+			}
+		}
+
+		if oip := lbp.OutboundIPs; oip != nil {
+			if poip := oip.PublicIPs; poip != nil {
+				lb["outbound_ip_address_ids"] = resourceReferencesToIds(poip)
+			}
+		}
+
+		if oip := lbp.OutboundIPPrefixes; oip != nil {
+			if pip := oip.PublicIPPrefixes; pip != nil {
+				lb["outbound_ip_prefix_ids"] = resourceReferencesToIds(pip)
+			}
+		}
+
+		if v := lbp.BackendPoolType; v != nil {
+			lb["backend_pool_type"] = v
+		}
+
+		lb["effective_outbound_ips"] = resourceReferencesToIds(profile.LoadBalancerProfile.EffectiveOutboundIPs)
+		lbProfiles = append(lbProfiles, lb)
+	}
+
+	ngwProfiles := make([]interface{}, 0)
+	if ngwp := profile.NatGatewayProfile; ngwp != nil {
+		ng := make(map[string]interface{})
+
+		if v := ngwp.IdleTimeoutInMinutes; v != nil {
+			ng["idle_timeout_in_minutes"] = v
+		}
+
+		if ips := ngwp.ManagedOutboundIPProfile; ips != nil {
+			if count := ips.Count; count != nil {
+				ng["managed_outbound_ip_count"] = count
+			}
+		}
+
+		ng["effective_outbound_ips"] = resourceReferencesToIds(profile.NatGatewayProfile.EffectiveOutboundIPs)
+		ngwProfiles = append(ngwProfiles, ng)
+	}
+
+	ipVersions := make([]interface{}, 0)
+	if ipfs := profile.IPFamilies; ipfs != nil {
+		for _, item := range *ipfs {
+			ipVersions = append(ipVersions, item)
+		}
+	}
+
+	// TODO - Remove the workaround below once issue https://github.com/Azure/azure-rest-api-specs/issues/18056 is resolved
+	sku := profile.LoadBalancerSku
+	for _, v := range managedclusters.PossibleValuesForLoadBalancerSku() {
+		if strings.EqualFold(v, string(*sku)) {
+			lsSku := managedclusters.LoadBalancerSku(v)
+			sku = &lsSku
+		}
+	}
+
+	networkPluginMode := ""
+	if profile.NetworkPluginMode != nil {
+		// The returned value has inconsistent casing
+		// TODO: Remove the normalization codes once the following issue is fixed.
+		// Issue: https://github.com/Azure/azure-rest-api-specs/issues/21810
+		if strings.EqualFold(string(*profile.NetworkPluginMode), string(managedclusters.NetworkPluginModeOverlay)) {
+			networkPluginMode = string(managedclusters.NetworkPluginModeOverlay)
+		}
+	}
+
+	networkDataPlane := string(managedclusters.NetworkDataplaneAzure)
+	if v := profile.NetworkDataplane; v != nil {
+		networkDataPlane = string(pointer.From(v))
+	}
+
+	result := map[string]interface{}{
+		"dns_service_ip":        dnsServiceIP,
+		"network_data_plane":    networkDataPlane,
+		"load_balancer_sku":     string(*sku),
+		"load_balancer_profile": lbProfiles,
+		"nat_gateway_profile":   ngwProfiles,
+		"ip_versions":           ipVersions,
+		"network_plugin":        networkPlugin,
+		"network_plugin_mode":   networkPluginMode,
+		"network_mode":          networkMode,
+		"network_policy":        networkPolicy,
+		"pod_cidr":              podCidr,
+		"pod_cidrs":             utils.FlattenStringSlice(profile.PodCidrs),
+		"service_cidr":          serviceCidr,
+		"service_cidrs":         utils.FlattenStringSlice(profile.ServiceCidrs),
+		"outbound_type":         outboundType,
+	}
+
+	return []interface{}{result}
+}

@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func expandSpringCloudGitPatternRepository(input []interface{}) (*[]appplatform.GitPatternRepository, error) {
+	results := make([]appplatform.GitPatternRepository, 0)
+	for _, item := range input {
+		v := item.(map[string]interface{})
+
+		result := appplatform.GitPatternRepository{
+			Name: utils.String(v["name"].(string)),
+			URI:  utils.String(v["uri"].(string)),
+		}
+
+		if label := v["label"].(string); len(label) > 0 {
+			result.Label = utils.String(label)
+		}
+		if pattern := v["pattern"].([]interface{}); len(pattern) > 0 {
+			result.Pattern = utils.ExpandStringSlice(pattern)
+		}
+		if searchPaths := v["search_paths"].([]interface{}); len(searchPaths) > 0 {
+			result.SearchPaths = utils.ExpandStringSlice(searchPaths)
+		}
+
+		httpBasicAuth := v["http_basic_auth"].([]interface{})
+		sshAuth := v["ssh_auth"].([]interface{})
+		if len(httpBasicAuth) > 0 && len(sshAuth) > 0 {
+			return nil, fmt.Errorf("can not set both `http_basic_auth` and `ssh_auth` for the same repository")
+		}
+		if len(httpBasicAuth) > 0 {
+			v := httpBasicAuth[0].(map[string]interface{})
+			result.Username = utils.String(v["username"].(string))
+			result.Password = utils.String(v["password"].(string))
+		}
+		if len(sshAuth) > 0 {
+			v := sshAuth[0].(map[string]interface{})
+			result.PrivateKey = utils.String(v["private_key"].(string))
+			result.StrictHostKeyChecking = utils.Bool(v["strict_host_key_checking_enabled"].(bool))
+
+			if hostKey := v["host_key"].(string); hostKey != "" {
+				result.HostKey = utils.String(hostKey)
+			}
+			if hostKeyAlgorithm := v["host_key_algorithm"].(string); hostKeyAlgorithm != "" {
+				result.HostKeyAlgorithm = utils.String(hostKeyAlgorithm)
+			}
+		}
+
+		results = append(results, result)
+	}
+	return &results, nil
+}

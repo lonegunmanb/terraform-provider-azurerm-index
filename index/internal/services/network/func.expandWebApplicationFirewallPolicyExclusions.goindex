@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandWebApplicationFirewallPolicyExclusions(input []interface{}) *[]webapplicationfirewallpolicies.OwaspCrsExclusionEntry {
+	results := make([]webapplicationfirewallpolicies.OwaspCrsExclusionEntry, 0)
+	for _, item := range input {
+		v := item.(map[string]interface{})
+
+		matchVariable := v["match_variable"].(string)
+		selectorMatchOperator := v["selector_match_operator"].(string)
+		selector := v["selector"].(string)
+		exclusionManagedRuleSets := v["excluded_rule_set"].([]interface{})
+
+		result := webapplicationfirewallpolicies.OwaspCrsExclusionEntry{
+			MatchVariable:            webapplicationfirewallpolicies.OwaspCrsExclusionEntryMatchVariable(matchVariable),
+			SelectorMatchOperator:    webapplicationfirewallpolicies.OwaspCrsExclusionEntrySelectorMatchOperator(selectorMatchOperator),
+			Selector:                 selector,
+			ExclusionManagedRuleSets: expandWebApplicationFirewallPolicyExclusionManagedRuleSet(exclusionManagedRuleSets),
+		}
+
+		results = append(results, result)
+	}
+	return &results
+}

@@ -1,0 +1,98 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/resource
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2020-06-01/resources" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func tenantTemplateDeploymentResource() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: tenantTemplateDeploymentResourceCreate,
+		Read:   tenantTemplateDeploymentResourceRead,
+		Update: tenantTemplateDeploymentResourceUpdate,
+		Delete: tenantTemplateDeploymentResourceDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.TenantTemplateDeploymentID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(180 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(180 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(180 * time.Minute),
+		},
+
+		// (@jackofallops - lintignore needed as we need to make sure the JSON is usable in `output_content`)
+
+		// lintignore:S033
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.TemplateDeploymentName,
+			},
+
+			"location": commonschema.Location(),
+
+			"template_content": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				ExactlyOneOf: []string{
+					"template_content",
+					"template_spec_version_id",
+				},
+				StateFunc: utils.NormalizeJson,
+			},
+
+			"template_spec_version_id": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ExactlyOneOf: []string{
+					"template_content",
+					"template_spec_version_id",
+				},
+				ValidateFunc: validate.TemplateSpecVersionID,
+			},
+
+			// Optional
+			"debug_level": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringInSlice(templateDeploymentDebugLevels, false),
+			},
+
+			"parameters_content": {
+				Type:      pluginsdk.TypeString,
+				Optional:  true,
+				Computed:  true,
+				StateFunc: utils.NormalizeJson,
+			},
+
+			"tags": tags.Schema(),
+
+			// Computed
+			"output_content": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+				// NOTE:  outputs can be strings, ints, objects etc - whilst using a nested object was considered
+				// parsing the JSON using `jsondecode` allows the users to interact with/map objects as required
+			},
+		},
+	}
+}

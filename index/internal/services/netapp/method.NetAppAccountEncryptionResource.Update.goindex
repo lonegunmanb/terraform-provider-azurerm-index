@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/netappaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	keyVaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r NetAppAccountEncryptionResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 120 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.NetApp.AccountClient
+			keyVaultsClient := metadata.Client.KeyVault
+			subscriptionId := commonids.NewSubscriptionID(metadata.Client.Account.SubscriptionId)
+
+			id, err := netappaccounts.ParseNetAppAccountID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			locks.ByID(id.ID())
+			defer locks.UnlockByID(id.ID())
+
+			metadata.Logger.Infof("Decoding state for %s", id)
+			var state netAppModels.NetAppAccountEncryption
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			metadata.Logger.Infof("Updating %s", id)
+
+			update := netappaccounts.NetAppAccountPatch{
+				Properties: &netappaccounts.AccountProperties{},
+			}
+
+			if metadata.ResourceData.HasChange("user_assigned_identity_id") || metadata.ResourceData.HasChange("system_assigned_identity_principal_id") || metadata.ResourceData.HasChange("encryption_key") {
+				encryptionExpanded, err := expandEncryption(ctx, state.EncryptionKey, keyVaultsClient, subscriptionId, pointer.To(state))
+				if err != nil {
+					return err
+				}
+
+				update.Properties.Encryption = encryptionExpanded
+
+				if err := client.AccountsUpdateThenPoll(ctx, pointer.From(id), update); err != nil {
+					return fmt.Errorf("updating %s: %+v", id, err)
+				}
+			}
+
+			return nil
+		},
+	}
+}

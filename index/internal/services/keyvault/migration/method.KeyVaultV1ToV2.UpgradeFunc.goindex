@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/migration
+import (
+	"context"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+)
+func (KeyVaultV1ToV2) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		// @tombuildsstuff: this is an int in the schema but was previously set into the
+		// state as `*int32` - so using `.(int)` causes:
+		// panic: interface conversion: interface {} is float64, not int
+		// so I guess we try both?
+		oldVal := 0
+		if v, ok := rawState["soft_delete_retention_days"]; ok {
+			if val, ok := v.(float64); ok {
+				oldVal = int(val)
+			}
+			if val, ok := v.(int); ok {
+				oldVal = val
+			}
+		}
+
+		if oldVal == 0 {
+			// The Azure API force-upgraded all Key Vaults so that Soft Delete was enabled on 2020-12-15
+			// As a part of this, all Key Vaults got a default "retention days" of 90 days, however
+			// for both newly created and upgraded key vaults, this value isn't returned unless it's
+			// explicitly set by a user.
+			//
+			// As such we have to default this to a value of 90 days, which whilst assuming this default is
+			// less than ideal, unfortunately there's little choice otherwise as this isn't returned.
+			// Whilst the API Documentation doesn't show this default, it's listed here:
+			//
+			// > Once a secret, key, certificate, or key vault is deleted, it will remain recoverable
+			// > for a configurable period of 7 to 90 calendar days. If no configuration is specified
+			// > the default recovery period will be set to 90 days
+			// https://docs.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview
+			//
+			// Notably this value cannot be updated once it's initially been configured, meaning that we
+			// must not send this during creation if it's the default value, to allow users to change
+			// this value later. This also means we can't use Terraform's "ForceNew" here without breaking
+			// the one-time change.
+			//
+			// Hopefully in time this behaviour is fixed, but for now I'm not sure what else we can do.
+			//
+			// - @tombuildsstuff
+			rawState["soft_delete_retention_days"] = 90
+		}
+		return rawState, nil
+	}
+}

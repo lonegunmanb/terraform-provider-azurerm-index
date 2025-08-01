@@ -1,0 +1,87 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/resource
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2021-07-01/features"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-09-01/providers"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ResourceProviderRegistrationResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Resource.ResourceProvidersClient
+			account := metadata.Client.Account
+
+			var obj ResourceProviderRegistrationModel
+			if err := metadata.Decode(&obj); err != nil {
+				return err
+			}
+
+			resourceId, err := providers.ParseSubscriptionProviderID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+			if err := r.checkIfManagedByTerraform(resourceId.ProviderName, account); err != nil {
+				return err
+			}
+
+			provider, err := client.Get(ctx, *resourceId, providers.DefaultGetOperationOptions())
+			if err != nil {
+				if response.WasNotFound(provider.HttpResponse) {
+					return fmt.Errorf("the %s was not found", *resourceId)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *resourceId, err)
+			}
+			registrationState := ""
+			if model := provider.Model; model != nil && model.RegistrationState != nil {
+				registrationState = *model.RegistrationState
+			}
+			if registrationState == "" {
+				return fmt.Errorf("retrieving %s: `registrationState` was nil", *resourceId)
+			}
+
+			if !strings.EqualFold(registrationState, "Registered") {
+				return fmt.Errorf("retrieving %s: `registrationState` was not `Registered` but %q", *resourceId, registrationState)
+			}
+
+			if metadata.ResourceData.HasChange("feature") {
+				oldFeaturesRaw, newFeaturesRaw := metadata.ResourceData.GetChange("feature")
+				err := r.applyFeatures(ctx, metadata, *resourceId, oldFeaturesRaw.(*pluginsdk.Set).List(), newFeaturesRaw.(*pluginsdk.Set).List())
+				if err != nil {
+					return fmt.Errorf("applying features for %s: %+v", *resourceId, err)
+				}
+			}
+
+			log.Printf("[DEBUG] Registering %s..", *resourceId)
+			payload := providers.ProviderRegistrationRequest{}
+			if _, err := client.Register(ctx, *resourceId, payload); err != nil {
+				return fmt.Errorf("registering %s: %+v", *resourceId, err)
+			}
+
+			log.Printf("[DEBUG] Waiting for %s to finish registering..", resourceId)
+			pollerType := custompollers.NewResourceProviderRegistrationPoller(client, *resourceId)
+			poller := pollers.NewPoller(pollerType, 10*time.Second, pollers.DefaultNumberOfDroppedConnectionsToAllow)
+			if err := poller.PollUntilDone(ctx); err != nil {
+				return fmt.Errorf("waiting for %s to be registered: %s", resourceId, err)
+			}
+			log.Printf("[DEBUG] Registered Resource Provider %q.", resourceId)
+
+			metadata.SetID(resourceId)
+			return nil
+		},
+		Timeout: 120 * time.Minute,
+	}
+}

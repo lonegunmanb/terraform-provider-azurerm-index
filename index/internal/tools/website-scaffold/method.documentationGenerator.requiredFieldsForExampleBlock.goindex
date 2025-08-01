@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/magodo/terraform-provider-azurerm-example-gen/examplegen"
+)
+func (gen documentationGenerator) requiredFieldsForExampleBlock(fields map[string]*schema.Schema, indentLevel int) string {
+	indent := gen.buildIndentForExample(indentLevel)
+	output := ""
+
+	processField := func(name string, field *schema.Schema) string {
+		value := gen.determineDefaultValueForExample(name, field)
+		return fmt.Sprintf("%s%s = %s\n", indent, name, value)
+	}
+
+	// if we have a "name", "location" "resource_group_name" field output those first as per convention
+	if v, ok := fields["name"]; ok && v.Required {
+		output += processField("name", v)
+	}
+	if v, ok := fields["resource_group_name"]; ok && v.Required {
+		output += processField("resource_group_name", v)
+	}
+	if v, ok := fields["location"]; ok && v.Required {
+		output += processField("location", v)
+	}
+
+	for field, v := range fields {
+		if !v.Required {
+			continue
+		}
+		if field == "location" || field == "name" || field == "resource_group_name" {
+			continue
+		}
+
+		if v.Elem != nil {
+			isAttribute := v.ConfigMode == schema.SchemaConfigModeAttr
+			output += gen.processElementForExample(field, indentLevel, v.Elem, isAttribute)
+			continue
+		}
+
+		output += processField(field, v)
+	}
+	return strings.TrimSuffix(output, "\n")
+}

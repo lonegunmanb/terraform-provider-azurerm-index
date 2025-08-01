@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryimageversions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenSharedImageVersion(input galleryimageversions.GalleryImageVersion) map[string]interface{} {
+	output := make(map[string]interface{})
+
+	output["id"] = input.Id
+	output["name"] = input.Name
+	output["location"] = location.Normalize(input.Location)
+
+	if props := input.Properties; props != nil {
+		if profile := props.PublishingProfile; profile != nil {
+			output["exclude_from_latest"] = profile.ExcludeFromLatest
+			output["target_region"] = flattenSharedImageVersionDataSourceTargetRegions(profile.TargetRegions)
+		}
+
+		if source := props.StorageProfile.Source; source != nil {
+			output["managed_image_id"] = source.Id
+		}
+	}
+
+	output["tags"] = tags.Flatten(input.Tags)
+
+	return output
+}

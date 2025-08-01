@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/schema
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/networkvirtualappliances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/virtualwans"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2023-09-01/firewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandNetworkProfileVnet(input []NetworkProfileVnet) firewalls.NetworkProfile {
+	result := firewalls.NetworkProfile{
+		EnableEgressNat: firewalls.EgressNatDISABLED,
+		NetworkType:     firewalls.NetworkTypeVNET,
+		TrustedRanges:   &[]string{},
+	}
+
+	if len(input) == 0 {
+		return result
+	}
+
+	profile := input[0]
+
+	if len(profile.PublicIPIDs) > 0 {
+		ipIDs := make([]firewalls.IPAddress, 0)
+		for _, v := range profile.PublicIPIDs {
+			ipIDs = append(ipIDs, firewalls.IPAddress{
+				ResourceId: pointer.To(v),
+			})
+		}
+		result.PublicIPs = ipIDs
+	}
+
+	if len(profile.EgressNatIPIDs) > 0 {
+		result.EnableEgressNat = firewalls.EgressNatENABLED
+		egressNatIPs := make([]firewalls.IPAddress, 0)
+		for _, v := range profile.EgressNatIPIDs {
+			egressNatIPs = append(egressNatIPs, firewalls.IPAddress{
+				ResourceId: pointer.To(v),
+			})
+		}
+		result.EgressNatIP = pointer.To(egressNatIPs)
+	}
+
+	if len(profile.TrustedRanges) > 0 {
+		result.TrustedRanges = pointer.To(profile.TrustedRanges)
+	}
+
+	vnet := profile.VnetConfiguration[0]
+	result.VnetConfiguration = &firewalls.VnetConfiguration{
+		TrustSubnet: firewalls.IPAddressSpace{
+			ResourceId: pointer.To(vnet.TrustedSubnetID),
+		},
+		UnTrustSubnet: firewalls.IPAddressSpace{
+			ResourceId: pointer.To(vnet.UntrustedSubnetID),
+		},
+		Vnet: firewalls.IPAddressSpace{
+			ResourceId: pointer.To(vnet.VNetID),
+		},
+	}
+
+	return result
+}

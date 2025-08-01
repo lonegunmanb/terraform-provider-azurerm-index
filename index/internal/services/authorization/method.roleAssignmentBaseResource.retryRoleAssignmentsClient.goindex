@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2022-04-01/roleassignments"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2022-05-01-preview/roledefinitions"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (br roleAssignmentBaseResource) retryRoleAssignmentsClient(ctx context.Context, metadata sdk.ResourceMetaData, id parse.ScopedRoleAssignmentId, properties *roleassignments.RoleAssignmentCreateParameters) func() *pluginsdk.RetryError {
+	return func() *pluginsdk.RetryError {
+		roleAssignmentsClient := metadata.Client.Authorization.ScopedRoleAssignmentsClient
+		resp, err := roleAssignmentsClient.Create(ctx, id.ScopedId, *properties)
+		if err != nil {
+			if utils.ResponseErrorIsRetryable(err) {
+				return pluginsdk.RetryableError(err)
+			} else if response.WasStatusCode(resp.HttpResponse, 400) && strings.Contains(err.Error(), "PrincipalNotFound") {
+				// When waiting for service principal to become available
+				return pluginsdk.RetryableError(err)
+			}
+
+			return pluginsdk.NonRetryableError(err)
+		}
+
+		if resp.Model == nil || resp.Model.Id == nil {
+			return pluginsdk.NonRetryableError(fmt.Errorf("creation of Role Assignment %s did not return an id value", id))
+		}
+
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			return pluginsdk.NonRetryableError(fmt.Errorf("could not retrieve context deadline for %s", metadata.ResourceData.Id()))
+		}
+
+		stateConf := &pluginsdk.StateChangeConf{
+			Pending: []string{
+				"pending",
+			},
+			Target: []string{
+				"ready",
+			},
+			Refresh:                   br.roleAssignmentCreateStateRefreshFunc(ctx, roleAssignmentsClient, id),
+			MinTimeout:                5 * time.Second,
+			ContinuousTargetOccurence: 5,
+			Timeout:                   time.Until(deadline),
+		}
+
+		if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+			return pluginsdk.NonRetryableError(fmt.Errorf("failed waiting for Role Assignment %s to finish replicating: %+v", id, err))
+		}
+
+		return nil
+	}
+}

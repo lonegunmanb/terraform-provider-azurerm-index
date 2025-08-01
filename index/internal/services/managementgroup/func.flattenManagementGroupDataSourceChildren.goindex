@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/managementgroups/2020-05-01/managementgroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenManagementGroupDataSourceChildren(subscriptionIds, mgmtgroupIds *[]interface{}, input *[]managementgroups.ManagementGroupChildInfo, recursive bool) error {
+	if input == nil {
+		return nil
+	}
+
+	for _, child := range *input {
+		if child.Id == nil || child.Type == nil {
+			continue
+		}
+		switch *child.Type {
+		case managementgroups.ManagementGroupChildTypeMicrosoftPointManagementManagementGroups:
+			id, err := commonids.ParseManagementGroupID(*child.Id)
+			if err != nil {
+				return fmt.Errorf("Unable to parse child Management Group ID %+v", err)
+			}
+			*mgmtgroupIds = append(*mgmtgroupIds, id.ID())
+		case managementgroups.ManagementGroupChildTypeSubscriptions:
+			id, err := commonids.ParseSubscriptionID(*child.Id)
+			if err != nil {
+				return fmt.Errorf("Unable to parse child Subscription ID %+v", err)
+			}
+			*subscriptionIds = append(*subscriptionIds, id.SubscriptionId)
+		default:
+			continue
+		}
+		if recursive {
+			if err := flattenManagementGroupDataSourceChildren(subscriptionIds, mgmtgroupIds, child.Children, recursive); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}

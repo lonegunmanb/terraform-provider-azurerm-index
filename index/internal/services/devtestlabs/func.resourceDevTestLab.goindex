@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devtestlabs
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devtestlab/2018-09-15/labs"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/devtestlabs/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/devtestlabs/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceDevTestLab() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		Create: resourceDevTestLabCreateUpdate,
+		Read:   resourceDevTestLabRead,
+		Update: resourceDevTestLabCreateUpdate,
+		Delete: resourceDevTestLabDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := labs.ParseLabID(id)
+			return err
+		}),
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.DevTestLabUpgradeV0ToV1{},
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.DevTestLabName(),
+			},
+
+			"location": commonschema.Location(),
+
+			// There's a bug in the Azure API where this is returned in lower-case
+			// BUG: https://github.com/Azure/azure-rest-api-specs/issues/3964
+			"resource_group_name": azure.SchemaResourceGroupNameDiffSuppress(),
+
+			"tags": tags.Schema(),
+
+			"artifacts_storage_account_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"default_storage_account_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"default_premium_storage_account_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"key_vault_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"premium_data_disk_storage_account_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"unique_identifier": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+		},
+	}
+
+	return resource
+}

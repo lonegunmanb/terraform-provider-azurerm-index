@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/recoveryservices/mgmt/2018-07-10/siterecovery" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	vmwaremachines "github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/machines"
+	vmwarerunasaccounts "github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/runasaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservices/2024-01-01/vaults"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotecteditems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotectioncontainers"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func fetchRunAsAccountsIdBySite(ctx context.Context, runAsAccountClient *vmwarerunasaccounts.RunAsAccountsClient, siteId string, displayName string, applianceName string) (string, error) {
+	parsedSiteId, err := vmwarerunasaccounts.ParseVMwareSiteIDInsensitively(siteId)
+	if err != nil {
+		return "", fmt.Errorf("parse %s: %+v", siteId, err)
+	}
+
+	hackedClient := azuresdkhacks.RunAsAccountsClient{Client: runAsAccountClient.Client}
+	// GET on Site is not working, tracked on https://github.com/Azure/azure-rest-api-specs/issues/24711
+	resp, err := hackedClient.GetAllRunAsAccountsInSiteComplete(ctx, *parsedSiteId)
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Items) == 0 {
+		return "", fmt.Errorf("retire run as account from %s, get 0 item", siteId)
+	}
+
+	for _, account := range resp.Items {
+		if account.Properties == nil {
+			continue
+		}
+		if account.Properties.DisplayName == nil {
+			continue
+		}
+		if account.Properties.ApplianceName == nil {
+			continue
+		}
+		if strings.EqualFold(*account.Properties.DisplayName, displayName) && strings.EqualFold(*account.Properties.ApplianceName, applianceName) {
+			return *account.Id, nil
+		}
+	}
+
+	return "", fmt.Errorf("retrieving %q: run as account %s not found", siteId, displayName)
+}

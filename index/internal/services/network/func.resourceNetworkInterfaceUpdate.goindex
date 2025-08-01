@@ -1,0 +1,121 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	lbvalidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceNetworkInterfaceUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.NetworkInterfaces
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := commonids.ParseNetworkInterfaceID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	locks.ByName(id.NetworkInterfaceName, networkInterfaceResourceName)
+	defer locks.UnlockByName(id.NetworkInterfaceName, networkInterfaceResourceName)
+
+	// first get the existing one so that we can pull things as needed
+	existing, err := client.Get(ctx, *id, networkinterfaces.DefaultGetOperationOptions())
+	if err != nil {
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	if existing.Model == nil {
+		return fmt.Errorf("retrieving %s: `model` was nil", *id)
+	}
+
+	if existing.Model.Properties == nil {
+		return fmt.Errorf("retrieving %s: `properties` was nil", *id)
+	}
+
+	// then pull out things we need to lock on
+	info := parseFieldsFromNetworkInterface(*existing.Model.Properties)
+
+	payload := existing.Model
+
+	if d.HasChange("auxiliary_mode") {
+		if auxiliaryMode := d.Get("auxiliary_mode").(string); auxiliaryMode != "" {
+			payload.Properties.AuxiliaryMode = pointer.To(networkinterfaces.NetworkInterfaceAuxiliaryMode(auxiliaryMode))
+		} else {
+			payload.Properties.AuxiliaryMode = nil
+		}
+	}
+
+	if d.HasChange("auxiliary_sku") {
+		if auxiliarySku := d.Get("auxiliary_sku").(string); auxiliarySku != "" {
+			payload.Properties.AuxiliarySku = pointer.To(networkinterfaces.NetworkInterfaceAuxiliarySku(auxiliarySku))
+		} else {
+			payload.Properties.AuxiliarySku = nil
+		}
+	}
+
+	if d.HasChange("dns_servers") {
+		dnsServersRaw := d.Get("dns_servers").([]interface{})
+		dnsServers := expandNetworkInterfaceDnsServers(dnsServersRaw)
+
+		payload.Properties.DnsSettings.DnsServers = &dnsServers
+	}
+
+	if d.HasChange("accelerated_networking_enabled") {
+		payload.Properties.EnableAcceleratedNetworking = pointer.To(d.Get("accelerated_networking_enabled").(bool))
+	}
+
+	if d.HasChange("ip_forwarding_enabled") {
+		payload.Properties.EnableIPForwarding = pointer.To(d.Get("ip_forwarding_enabled").(bool))
+	}
+
+	if d.HasChange("internal_dns_name_label") {
+		payload.Properties.DnsSettings.InternalDnsNameLabel = pointer.To(d.Get("internal_dns_name_label").(string))
+	}
+
+	if d.HasChange("ip_configuration") {
+		ipConfigsRaw := d.Get("ip_configuration").([]interface{})
+		ipConfigs, err := expandNetworkInterfaceIPConfigurations(ipConfigsRaw)
+		if err != nil {
+			return fmt.Errorf("expanding `ip_configuration`: %+v", err)
+		}
+		lockingDetails, err := determineResourcesToLockFromIPConfiguration(ipConfigs)
+		if err != nil {
+			return fmt.Errorf("determining locking details: %+v", err)
+		}
+
+		lockingDetails.lock()
+		defer lockingDetails.unlock()
+
+		// then map the fields managed in other resources back
+		ipConfigs = mapFieldsToNetworkInterface(ipConfigs, info)
+
+		payload.Properties.IPConfigurations = ipConfigs
+	}
+
+	if d.HasChange("tags") {
+		tagsRaw := d.Get("tags").(map[string]interface{})
+		payload.Tags = tags.Expand(tagsRaw)
+	}
+
+	err = client.CreateOrUpdateThenPoll(ctx, *id, *payload)
+	if err != nil {
+		return fmt.Errorf("updating %s: %+v", *id, err)
+	}
+
+	return nil
+}

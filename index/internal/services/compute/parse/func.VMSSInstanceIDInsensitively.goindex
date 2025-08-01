@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/parse
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+)
+func VMSSInstanceIDInsensitively(input string) (*VMSSInstanceId, error) {
+	id, err := resourceids.ParseAzureResourceID(input)
+	if err != nil {
+		return nil, err
+	}
+
+	resourceId := VMSSInstanceId{
+		SubscriptionId: id.SubscriptionID,
+		ResourceGroup:  id.ResourceGroup,
+	}
+
+	if resourceId.SubscriptionId == "" {
+		return nil, errors.New("ID was missing the 'subscriptions' element")
+	}
+
+	if resourceId.ResourceGroup == "" {
+		return nil, errors.New("ID was missing the 'resourceGroups' element")
+	}
+
+	// find the correct casing for the 'virtualMachineScaleSets' segment
+	virtualMachineScaleSetsKey := "virtualMachineScaleSets"
+	for key := range id.Path {
+		if strings.EqualFold(key, virtualMachineScaleSetsKey) {
+			virtualMachineScaleSetsKey = key
+			break
+		}
+	}
+	if resourceId.VirtualMachineScaleSetName, err = id.PopSegment(virtualMachineScaleSetsKey); err != nil {
+		return nil, err
+	}
+
+	// find the correct casing for the 'virtualMachines' segment
+	virtualMachinesKey := "virtualMachines"
+	for key := range id.Path {
+		if strings.EqualFold(key, virtualMachinesKey) {
+			virtualMachinesKey = key
+			break
+		}
+	}
+	if resourceId.VirtualMachineName, err = id.PopSegment(virtualMachinesKey); err != nil {
+		return nil, err
+	}
+
+	if err := id.ValidateNoEmptySegments(input); err != nil {
+		return nil, err
+	}
+
+	return &resourceId, nil
+}

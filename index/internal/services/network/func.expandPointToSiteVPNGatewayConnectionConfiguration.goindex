@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandPointToSiteVPNGatewayConnectionConfiguration(input []interface{}) *[]virtualwans.P2SConnectionConfiguration {
+	configurations := make([]virtualwans.P2SConnectionConfiguration, 0)
+
+	for _, v := range input {
+		raw := v.(map[string]interface{})
+
+		addressPrefixes := make([]string, 0)
+		name := raw["name"].(string)
+
+		clientAddressPoolsRaw := raw["vpn_client_address_pool"].([]interface{})
+		for _, clientV := range clientAddressPoolsRaw {
+			clientRaw := clientV.(map[string]interface{})
+
+			addressPrefixesRaw := clientRaw["address_prefixes"].(*pluginsdk.Set).List()
+			for _, prefix := range addressPrefixesRaw {
+				addressPrefixes = append(addressPrefixes, prefix.(string))
+			}
+		}
+
+		configurations = append(configurations, virtualwans.P2SConnectionConfiguration{
+			Name: pointer.To(name),
+			Properties: &virtualwans.P2SConnectionConfigurationProperties{
+				VpnClientAddressPool: &virtualwans.AddressSpace{
+					AddressPrefixes: &addressPrefixes,
+				},
+				RoutingConfiguration:   expandPointToSiteVPNGatewayConnectionRouteConfiguration(raw["route"].([]interface{})),
+				EnableInternetSecurity: pointer.To(raw["internet_security_enabled"].(bool)),
+			},
+		})
+	}
+
+	return &configurations
+}

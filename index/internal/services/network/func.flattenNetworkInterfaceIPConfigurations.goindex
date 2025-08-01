@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/networkinterfaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	lbvalidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenNetworkInterfaceIPConfigurations(input *[]networkinterfaces.NetworkInterfaceIPConfiguration) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	result := make([]interface{}, 0)
+	for _, ipConfig := range *input {
+		props := ipConfig.Properties
+
+		name := ""
+		if ipConfig.Name != nil {
+			name = *ipConfig.Name
+		}
+
+		subnetId := ""
+		if props.Subnet != nil && props.Subnet.Id != nil {
+			subnetId = *props.Subnet.Id
+		}
+
+		privateIPAddress := ""
+		if props.PrivateIPAddress != nil {
+			privateIPAddress = *props.PrivateIPAddress
+		}
+
+		privateIPAllocationMethod := ""
+		if props.PrivateIPAllocationMethod != nil {
+			privateIPAllocationMethod = string(*props.PrivateIPAllocationMethod)
+		}
+
+		privateIPAddressVersion := ""
+		if props.PrivateIPAddressVersion != nil {
+			privateIPAddressVersion = string(*props.PrivateIPAddressVersion)
+		}
+
+		publicIPAddressId := ""
+		if props.PublicIPAddress != nil && props.PublicIPAddress.Id != nil {
+			publicIPAddressId = *props.PublicIPAddress.Id
+		}
+
+		primary := false
+		if props.Primary != nil {
+			primary = *props.Primary
+		}
+
+		gatewayLBFrontendIPConfigId := ""
+		if props.GatewayLoadBalancer != nil && props.GatewayLoadBalancer.Id != nil {
+			gatewayLBFrontendIPConfigId = *props.GatewayLoadBalancer.Id
+		}
+
+		result = append(result, map[string]interface{}{
+			"name":                          name,
+			"primary":                       primary,
+			"private_ip_address":            privateIPAddress,
+			"private_ip_address_allocation": privateIPAllocationMethod,
+			"private_ip_address_version":    privateIPAddressVersion,
+			"public_ip_address_id":          publicIPAddressId,
+			"subnet_id":                     subnetId,
+			"gateway_load_balancer_frontend_ip_configuration_id": gatewayLBFrontendIPConfigId,
+		})
+	}
+	return result
+}

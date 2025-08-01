@@ -1,0 +1,89 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflows"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflowtriggers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceLogicAppComponentUpdate(d *pluginsdk.ResourceData, meta interface{}, kind string, propertyName string, workflowId workflows.WorkflowId, resourceId string, name string, vals map[string]interface{}, resourceName string) error {
+	client := meta.(*clients.Client).Logic.WorkflowClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	log.Printf("[DEBUG] Preparing arguments for Logic App Workspace %s %s %q", workflowId, kind, name)
+
+	// lock to prevent against Actions or Triggers conflicting
+	locks.ByName(workflowId.WorkflowName, logicAppResourceName)
+	defer locks.UnlockByName(workflowId.WorkflowName, logicAppResourceName)
+
+	read, err := client.Get(ctx, workflowId)
+	if err != nil {
+		if response.WasNotFound(read.HttpResponse) {
+			return fmt.Errorf("[ERROR] Logic App Workflow %s was not found", workflowId)
+		}
+
+		return fmt.Errorf("[ERROR] Error making Read request on Logic App Workflow %s: %+v", workflowId, err)
+	}
+
+	if read.Model == nil || read.Model.Properties == nil {
+		return fmt.Errorf("[ERROR] Error parsing Logic App Workflow - `WorkflowProperties` is nil")
+	}
+
+	if read.Model.Properties.Definition == nil {
+		return fmt.Errorf("[ERROR] Error parsing Logic App Workflow - `WorkflowProperties.Definition` is nil")
+	}
+
+	rawDefinition := *read.Model.Properties.Definition
+	definitionMap := rawDefinition.(map[string]interface{})
+	vs := definitionMap[propertyName].(map[string]interface{})
+
+	if d.IsNewResource() {
+		if _, hasExisting := vs[name]; hasExisting {
+			return tf.ImportAsExistsError(resourceName, resourceId)
+		}
+	}
+
+	vs[name] = vals
+	definitionMap[propertyName] = vs
+	rawDefinition = definitionMap
+
+	if read.Model.Identity != nil && read.Model.Identity.IdentityIds != nil {
+		for k := range read.Model.Identity.IdentityIds {
+			read.Model.Identity.IdentityIds[k] = identity.UserAssignedIdentityDetails{
+				// this has to be an empty object due to the API design
+			}
+		}
+	}
+
+	properties := workflows.Workflow{
+		Location: read.Model.Location,
+		Properties: &workflows.WorkflowProperties{
+			Definition:                    &rawDefinition,
+			Parameters:                    read.Model.Properties.Parameters,
+			AccessControl:                 read.Model.Properties.AccessControl,
+			IntegrationAccount:            read.Model.Properties.IntegrationAccount,
+			IntegrationServiceEnvironment: read.Model.Properties.IntegrationServiceEnvironment,
+		},
+		Identity: read.Model.Identity,
+		Tags:     read.Model.Tags,
+	}
+	if _, err = client.CreateOrUpdate(ctx, workflowId, properties); err != nil {
+		return fmt.Errorf("updating Logic App Workflow %s for %s %q: %+v", workflowId, kind, name, err)
+	}
+
+	if d.IsNewResource() {
+		d.SetId(resourceId)
+	}
+
+	return nil
+}

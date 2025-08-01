@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/migration
+import (
+	"context"
+	"log"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/databases"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+)
+func (PostgresqlDatabaseV0ToV1) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		// old
+		//  /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBForPostgreSQL/servers/{serverName}/databases/{databaseName}
+		// new:
+		//  /subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.DBforPostgreSQL/servers/{serverName}/databases/{databaseName}
+		// summary:
+		// Check for `For` and swap to `for`
+		oldId := rawState["id"].(string)
+		if strings.Contains(oldId, "Microsoft.DBForPostgreSQL") {
+			modifiedId := strings.ReplaceAll(oldId, "Microsoft.DBForPostgreSQL", "Microsoft.DBforPostgreSQL")
+
+			newId, err := databases.ParseDatabaseID(modifiedId)
+			if err != nil {
+				return rawState, err
+			}
+			log.Printf("[DEBUG] Updating ID from %q to %q", oldId, newId)
+			rawState["id"] = newId.ID()
+		}
+
+		return rawState, nil
+	}
+}

@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	// nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2020-10-01/roleeligibilityschedulerequests"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2020-10-01/roleeligibilityschedules"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization/validate"
+	billingValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/billing/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func findRoleEligibilityScheduleRequest(ctx context.Context, client *roleeligibilityschedulerequests.RoleEligibilityScheduleRequestsClient, schedule *roleeligibilityschedules.RoleEligibilitySchedule, id *parse.PimRoleAssignmentId) (*roleeligibilityschedulerequests.RoleEligibilityScheduleRequest, error) {
+	// Request ID was provided, so retrieve it individually
+	if schedule.Properties.RoleEligibilityScheduleRequestId != nil {
+		requestId, err := roleeligibilityschedulerequests.ParseScopedRoleEligibilityScheduleRequestID(*schedule.Properties.RoleEligibilityScheduleRequestId)
+		if err != nil { //
+			return nil, err
+		}
+
+		requestResp, err := client.Get(ctx, *requestId)
+		if err != nil && !response.WasNotFound(requestResp.HttpResponse) {
+			return nil, fmt.Errorf("retrieving %s: %+v", requestId, err)
+		}
+
+		if !response.WasNotFound(requestResp.HttpResponse) {
+			return requestResp.Model, nil
+		}
+	}
+
+	// Request ID not provided or was invalid, list by scope and filter by principal for a best-effort search
+	if principalId := schedule.Properties.PrincipalId; principalId != nil && id != nil {
+		scopeId, err := commonids.ParseScopeID(id.Scope)
+		if err != nil {
+			return nil, err
+		}
+
+		requestsResult, err := client.ListForScopeComplete(ctx, *scopeId, roleeligibilityschedulerequests.ListForScopeOperationOptions{
+			Filter: pointer.To(fmt.Sprintf("principalId eq '%s'", *principalId)),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing Role Eligibility Requests for principal_id %q: %+v", *principalId, err)
+		}
+		for _, item := range requestsResult.Items {
+			if props := item.Properties; props != nil {
+				if props.TargetRoleEligibilityScheduleId != nil && strings.EqualFold(*props.TargetRoleEligibilityScheduleId, id.ID()) &&
+					props.RequestType == roleeligibilityschedulerequests.RequestTypeAdminAssign && strings.EqualFold(props.PrincipalId, *principalId) {
+					return pointer.To(item), nil
+				}
+			}
+		}
+	}
+
+	// No request was found, it probably expired
+	return nil, nil
+}

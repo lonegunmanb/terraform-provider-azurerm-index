@@ -1,0 +1,90 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func resourceDataFactoryDatasetAzureBlobRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).DataFactory.DatasetClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.DataSetID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	dataFactoryId := factories.NewFactoryID(id.SubscriptionId, id.ResourceGroup, id.FactoryName)
+
+	resp, err := client.Get(ctx, id.ResourceGroup, id.FactoryName, id.Name, "")
+	if err != nil {
+		if utils.ResponseWasNotFound(resp.Response) {
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.Name)
+	d.Set("data_factory_id", dataFactoryId.ID())
+
+	azureBlobTable, ok := resp.Properties.AsAzureBlobDataset()
+	if !ok {
+		return fmt.Errorf("classifying Data Factory Dataset Azure Blob %s: Expected: %q Received: %T", *id, datafactory.TypeBasicDatasetTypeAzureBlob, resp.Properties)
+	}
+
+	d.Set("additional_properties", azureBlobTable.AdditionalProperties)
+
+	if azureBlobTable.Description != nil {
+		d.Set("description", azureBlobTable.Description)
+	}
+
+	parameters := flattenDataSetParameters(azureBlobTable.Parameters)
+	if err := d.Set("parameters", parameters); err != nil {
+		return fmt.Errorf("setting `parameters`: %+v", err)
+	}
+
+	annotations := flattenDataFactoryAnnotations(azureBlobTable.Annotations)
+	if err := d.Set("annotations", annotations); err != nil {
+		return fmt.Errorf("setting `annotations`: %+v", err)
+	}
+
+	if linkedService := azureBlobTable.LinkedServiceName; linkedService != nil {
+		if linkedService.ReferenceName != nil {
+			d.Set("linked_service_name", linkedService.ReferenceName)
+		}
+	}
+
+	if properties := azureBlobTable.AzureBlobDatasetTypeProperties; properties != nil {
+		filename, dynamicFilenameEnabled := flattenDataFactoryExpressionResultType(properties.FileName)
+		path, dynamicPathEnabled := flattenDataFactoryExpressionResultType(properties.FolderPath)
+		d.Set("filename", filename)
+		d.Set("path", path)
+		d.Set("dynamic_filename_enabled", dynamicFilenameEnabled)
+		d.Set("dynamic_path_enabled", dynamicPathEnabled)
+	}
+
+	if folder := azureBlobTable.Folder; folder != nil {
+		if folder.Name != nil {
+			d.Set("folder", folder.Name)
+		}
+	}
+
+	structureColumns := flattenDataFactoryStructureColumns(azureBlobTable.Structure)
+	if err := d.Set("schema_column", structureColumns); err != nil {
+		return fmt.Errorf("setting `schema_column`: %+v", err)
+	}
+
+	return nil
+}

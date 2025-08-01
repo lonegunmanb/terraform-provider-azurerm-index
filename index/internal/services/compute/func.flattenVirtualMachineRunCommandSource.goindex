@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-03-01/virtualmachineruncommands"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenVirtualMachineRunCommandSource(input *virtualmachineruncommands.VirtualMachineRunCommandScriptSource, config VirtualMachineRunCommandResourceSchema) []VirtualMachineRunCommandScriptSourceSchema {
+	if input == nil {
+		return []VirtualMachineRunCommandScriptSourceSchema{}
+	}
+
+	// if scriptUri is SAS URL, if will not be returned by API
+	scriptUri := pointer.From(input.ScriptUri)
+	var scriptUriManagedIdentity []VirtualMachineRunCommandManagedIdentitySchema
+	if len(config.Source) > 0 {
+		if strings.Contains(config.Source[0].ScriptUri, "sig=") {
+			scriptUri = config.Source[0].ScriptUri
+		}
+		scriptUriManagedIdentity = config.Source[0].ScriptUriManagedIdentity
+	}
+
+	return []VirtualMachineRunCommandScriptSourceSchema{
+		{
+			CommandId:                pointer.From(input.CommandId),
+			Script:                   pointer.From(input.Script),
+			ScriptUri:                scriptUri,
+			ScriptUriManagedIdentity: scriptUriManagedIdentity,
+		},
+	}
+}

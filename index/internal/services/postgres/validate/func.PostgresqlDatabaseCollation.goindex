@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
+func PostgresqlDatabaseCollation(v interface{}, k string) (warnings []string, errors []error) {
+	originalValue, ok := v.(string)
+	if !ok {
+		errors = append(errors, fmt.Errorf("expected type of %s to be string", k))
+		return warnings, errors
+	}
+
+	if _, isSpecialCase := specialCases[originalValue]; isSpecialCase {
+		return warnings, errors
+	}
+
+	value := strings.ToLower(originalValue)
+	value = strings.TrimSuffix(value, ".utf8")
+
+	// based on the string format, determine what we're validating
+	if _, isLanguageCode := languageCodes[value]; isLanguageCode {
+		return warnings, errors
+	}
+
+	// either `en-GB`, `en_GB`, ja_001` or `jv_java_id`
+	languageCodeAndLocaleRegex := regexp.MustCompile("^[a-z]{1,}([-_]{1}([a-z0-9]{1,})){1,2}$")
+	if !languageCodeAndLocaleRegex.MatchString(value) {
+		errors = append(errors, databaseCollationDidNotMatchError(k, originalValue))
+	}
+
+	containsDash := strings.Contains(value, "-")
+	containsUnderscore := strings.Contains(value, "_")
+	if containsDash && containsUnderscore {
+		errors = append(errors, databaseCollationDidNotMatchError(k, originalValue))
+		return warnings, errors
+	}
+
+	var split []string
+	if containsDash {
+		split = strings.Split(value, "-")
+	} else {
+		split = strings.Split(value, "_")
+	}
+	if len(split) == 0 {
+		errors = append(errors, databaseCollationDidNotMatchError(k, originalValue))
+		return warnings, errors
+	}
+
+	// validate the language code is valid
+	languageCode := split[0]
+	if _, languageCodeIsValid := languageCodes[languageCode]; !languageCodeIsValid {
+		errors = append(errors, databaseCollationDidNotMatchError(k, originalValue))
+		return warnings, errors
+	}
+
+	// we can't do much about the locale, so we'll assume that's fine for now
+
+	return warnings, errors
+}

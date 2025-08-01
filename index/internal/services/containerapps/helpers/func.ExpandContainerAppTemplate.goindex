@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/daprcomponents"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/containerapps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandContainerAppTemplate(input []ContainerTemplate, metadata sdk.ResourceMetaData) *containerapps.Template {
+	if len(input) != 1 {
+		return nil
+	}
+
+	config := input[0]
+	template := &containerapps.Template{
+		Containers:     expandContainerAppContainers(config.Containers),
+		InitContainers: expandInitContainerAppContainers(config.InitContainers),
+		Volumes:        expandContainerAppVolumes(config.Volumes),
+	}
+
+	if config.MaxReplicas != 0 {
+		if template.Scale == nil {
+			template.Scale = &containerapps.Scale{}
+		}
+		template.Scale.MaxReplicas = pointer.To(config.MaxReplicas)
+	}
+
+	if config.TerminationGracePeriod != 0 {
+		template.TerminationGracePeriodSeconds = pointer.To(config.TerminationGracePeriod)
+	}
+
+	if config.MinReplicas != 0 {
+		if template.Scale == nil {
+			template.Scale = &containerapps.Scale{}
+		}
+		template.Scale.MinReplicas = pointer.To(config.MinReplicas)
+	}
+
+	if rules := config.expandContainerAppScaleRules(); len(rules) != 0 {
+		if template.Scale == nil {
+			template.Scale = &containerapps.Scale{}
+		}
+
+		template.Scale.Rules = pointer.To(rules)
+	}
+
+	if config.Suffix != "" {
+		if metadata.ResourceData.HasChange("template.0.revision_suffix") {
+			template.RevisionSuffix = pointer.To(config.Suffix)
+		}
+	}
+
+	return template
+}

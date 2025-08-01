@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func flattenDataFactoryTriggerDependency(input *[]datafactory.BasicDependencyReference) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	result := make([]interface{}, 0)
+	for _, item := range *input {
+		var offset, size, triggerName string
+
+		switch item := item.(type) {
+		case datafactory.TumblingWindowTriggerDependencyReference:
+			if item.Size != nil {
+				size = *item.Size
+			}
+			if item.Offset != nil {
+				offset = *item.Offset
+			}
+			if item.ReferenceTrigger != nil && item.ReferenceTrigger.ReferenceName != nil {
+				triggerName = *item.ReferenceTrigger.ReferenceName
+			}
+		case datafactory.SelfDependencyTumblingWindowTriggerReference:
+			if item.Size != nil {
+				size = *item.Size
+			}
+			if item.Offset != nil {
+				offset = *item.Offset
+			}
+		}
+
+		result = append(result, map[string]interface{}{
+			"trigger_name": triggerName,
+			"offset":       offset,
+			"size":         size,
+		})
+	}
+	return result
+}

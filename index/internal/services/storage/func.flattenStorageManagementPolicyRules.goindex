@@ -1,0 +1,219 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"fmt"
+	"log"
+	"time"
+
+	// nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/managementpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenStorageManagementPolicyRules(armRules []managementpolicies.ManagementPolicyRule) []interface{} {
+	rules := make([]interface{}, 0)
+	if armRules == nil {
+		return rules
+	}
+	for _, armRule := range armRules {
+		rule := make(map[string]interface{})
+
+		rule["name"] = armRule.Name
+		rule["enabled"] = armRule.Enabled
+
+		armDefinition := armRule.Definition
+		armFilter := armDefinition.Filters
+		if armFilter != nil {
+			filter := make(map[string]interface{})
+			if armFilter.PrefixMatch != nil {
+				prefixMatches := make([]interface{}, 0)
+				for _, armPrefixMatch := range *armFilter.PrefixMatch {
+					prefixMatches = append(prefixMatches, armPrefixMatch)
+				}
+				filter["prefix_match"] = prefixMatches
+			}
+			if armFilter.BlobTypes != nil {
+				blobTypes := make([]interface{}, 0)
+				for _, armBlobType := range armFilter.BlobTypes {
+					blobTypes = append(blobTypes, armBlobType)
+				}
+				filter["blob_types"] = blobTypes
+			}
+
+			filter["match_blob_index_tag"] = flattenAzureRmStorageBlobIndexMatch(armFilter.BlobIndexMatch)
+
+			rule["filters"] = []interface{}{filter}
+		}
+
+		armAction := armDefinition.Actions
+		action := make(map[string]interface{})
+		armActionBaseBlob := armAction.BaseBlob
+		if armActionBaseBlob != nil {
+			var (
+				tierToCoolSinceMod               = -1
+				tierToCoolSinceAccess            = -1
+				tierToCoolSinceCreate            = -1
+				autoTierToHotOK                  = false
+				tierToArchiveSinceMod            = -1
+				tierToArchiveSinceAccess         = -1
+				tierToArchiveSinceCreate         = -1
+				tierToArchiveSinceLastTierChange = -1
+				tierToColdSinceMod               = -1
+				tierToColdSinceAccess            = -1
+				tierToColdSinceCreate            = -1
+				deleteSinceMod                   = -1
+				deleteSinceAccess                = -1
+				deleteSinceCreate                = -1
+			)
+
+			if v := armActionBaseBlob.EnableAutoTierToHotFromCool; v != nil {
+				autoTierToHotOK = *v
+			}
+			if props := armActionBaseBlob.TierToCool; props != nil {
+				if props.DaysAfterModificationGreaterThan != nil {
+					tierToCoolSinceMod = int(*props.DaysAfterModificationGreaterThan)
+				}
+				if props.DaysAfterLastAccessTimeGreaterThan != nil {
+					tierToCoolSinceAccess = int(*props.DaysAfterLastAccessTimeGreaterThan)
+				}
+				if props.DaysAfterCreationGreaterThan != nil {
+					tierToCoolSinceCreate = int(*props.DaysAfterCreationGreaterThan)
+				}
+			}
+			if props := armActionBaseBlob.TierToArchive; props != nil {
+				if props.DaysAfterModificationGreaterThan != nil {
+					tierToArchiveSinceMod = int(*props.DaysAfterModificationGreaterThan)
+				}
+				if props.DaysAfterLastAccessTimeGreaterThan != nil {
+					tierToArchiveSinceAccess = int(*props.DaysAfterLastAccessTimeGreaterThan)
+				}
+				if props.DaysAfterLastTierChangeGreaterThan != nil {
+					tierToArchiveSinceLastTierChange = int(*props.DaysAfterLastTierChangeGreaterThan)
+				}
+				if props.DaysAfterCreationGreaterThan != nil {
+					tierToArchiveSinceCreate = int(*props.DaysAfterCreationGreaterThan)
+				}
+			}
+			if props := armActionBaseBlob.TierToCold; props != nil {
+				if props.DaysAfterModificationGreaterThan != nil {
+					tierToColdSinceMod = int(*props.DaysAfterModificationGreaterThan)
+				}
+				if props.DaysAfterLastAccessTimeGreaterThan != nil {
+					tierToColdSinceAccess = int(*props.DaysAfterLastAccessTimeGreaterThan)
+				}
+				if props.DaysAfterCreationGreaterThan != nil {
+					tierToColdSinceCreate = int(*props.DaysAfterCreationGreaterThan)
+				}
+			}
+			if props := armActionBaseBlob.Delete; props != nil {
+				if props.DaysAfterModificationGreaterThan != nil {
+					deleteSinceMod = int(*props.DaysAfterModificationGreaterThan)
+				}
+				if props.DaysAfterLastAccessTimeGreaterThan != nil {
+					deleteSinceAccess = int(*props.DaysAfterLastAccessTimeGreaterThan)
+				}
+				if props.DaysAfterCreationGreaterThan != nil {
+					deleteSinceCreate = int(*props.DaysAfterCreationGreaterThan)
+				}
+			}
+			action["base_blob"] = []interface{}{
+				map[string]interface{}{
+					"auto_tier_to_hot_from_cool_enabled":                             autoTierToHotOK,
+					"tier_to_cool_after_days_since_modification_greater_than":        tierToCoolSinceMod,
+					"tier_to_cool_after_days_since_last_access_time_greater_than":    tierToCoolSinceAccess,
+					"tier_to_cool_after_days_since_creation_greater_than":            tierToCoolSinceCreate,
+					"tier_to_archive_after_days_since_modification_greater_than":     tierToArchiveSinceMod,
+					"tier_to_archive_after_days_since_last_access_time_greater_than": tierToArchiveSinceAccess,
+					"tier_to_archive_after_days_since_last_tier_change_greater_than": tierToArchiveSinceLastTierChange,
+					"tier_to_archive_after_days_since_creation_greater_than":         tierToArchiveSinceCreate,
+					"tier_to_cold_after_days_since_modification_greater_than":        tierToColdSinceMod,
+					"tier_to_cold_after_days_since_last_access_time_greater_than":    tierToColdSinceAccess,
+					"tier_to_cold_after_days_since_creation_greater_than":            tierToColdSinceCreate,
+					"delete_after_days_since_modification_greater_than":              deleteSinceMod,
+					"delete_after_days_since_last_access_time_greater_than":          deleteSinceAccess,
+					"delete_after_days_since_creation_greater_than":                  deleteSinceCreate,
+				},
+			}
+		}
+
+		armActionSnaphost := armAction.Snapshot
+		if armActionSnaphost != nil {
+			var (
+				deleteAfterCreation        = -1
+				archiveAfterCreation       = -1
+				archiveAfterLastTierChange = -1
+				coolAfterCreation          = -1
+				tierToColdSinceCreate      = -1
+			)
+			if armActionSnaphost.Delete != nil {
+				deleteAfterCreation = int(armActionSnaphost.Delete.DaysAfterCreationGreaterThan)
+			}
+			if armActionSnaphost.TierToArchive != nil {
+				archiveAfterCreation = int(armActionSnaphost.TierToArchive.DaysAfterCreationGreaterThan)
+
+				if v := armActionSnaphost.TierToArchive.DaysAfterLastTierChangeGreaterThan; v != nil {
+					archiveAfterLastTierChange = int(*v)
+				}
+			}
+			if armActionSnaphost.TierToCold != nil {
+				tierToColdSinceCreate = int(armActionSnaphost.TierToCold.DaysAfterCreationGreaterThan)
+			}
+			if armActionSnaphost.TierToCool != nil {
+				coolAfterCreation = int(armActionSnaphost.TierToCool.DaysAfterCreationGreaterThan)
+			}
+			action["snapshot"] = []interface{}{map[string]interface{}{
+				"delete_after_days_since_creation_greater_than":                  deleteAfterCreation,
+				"change_tier_to_archive_after_days_since_creation":               archiveAfterCreation,
+				"tier_to_archive_after_days_since_last_tier_change_greater_than": archiveAfterLastTierChange,
+				"tier_to_cold_after_days_since_creation_greater_than":            tierToColdSinceCreate,
+				"change_tier_to_cool_after_days_since_creation":                  coolAfterCreation,
+			}}
+		}
+
+		if armActionVersion := armAction.Version; armActionVersion != nil {
+			var (
+				deleteAfterCreation        = -1
+				archiveAfterCreation       = -1
+				archiveAfterLastTierChange = -1
+				coolAfterCreation          = -1
+				tierToColdSinceCreate      = -1
+			)
+			if armActionVersion.Delete != nil {
+				deleteAfterCreation = int(armActionVersion.Delete.DaysAfterCreationGreaterThan)
+			}
+			if armActionVersion.TierToArchive != nil {
+				archiveAfterCreation = int(armActionVersion.TierToArchive.DaysAfterCreationGreaterThan)
+
+				if v := armActionVersion.TierToArchive.DaysAfterLastTierChangeGreaterThan; v != nil {
+					archiveAfterLastTierChange = int(*v)
+				}
+			}
+			if armActionVersion.TierToCold != nil {
+				tierToColdSinceCreate = int(armActionVersion.TierToCold.DaysAfterCreationGreaterThan)
+			}
+			if armActionVersion.TierToCool != nil {
+				coolAfterCreation = int(armActionVersion.TierToCool.DaysAfterCreationGreaterThan)
+			}
+			action["version"] = []interface{}{map[string]interface{}{
+				"delete_after_days_since_creation":                               deleteAfterCreation,
+				"change_tier_to_archive_after_days_since_creation":               archiveAfterCreation,
+				"tier_to_archive_after_days_since_last_tier_change_greater_than": archiveAfterLastTierChange,
+				"tier_to_cold_after_days_since_creation_greater_than":            tierToColdSinceCreate,
+				"change_tier_to_cool_after_days_since_creation":                  coolAfterCreation,
+			}}
+		}
+
+		rule["actions"] = []interface{}{action}
+
+		rules = append(rules, rule)
+	}
+
+	return rules
+}

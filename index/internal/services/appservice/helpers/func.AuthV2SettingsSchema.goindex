@@ -1,0 +1,139 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/kermit/sdk/web/2022-09-01/web"
+)
+func AuthV2SettingsSchema() *pluginsdk.Schema {
+	return &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Optional: true,
+		MaxItems: 1,
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"auth_enabled": {
+					Type:        pluginsdk.TypeBool,
+					Optional:    true,
+					Description: "Should the AuthV2 Settings be enabled. Defaults to `false`",
+				},
+
+				"runtime_version": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					Default:      `~1`,
+					ValidateFunc: validation.StringIsNotEmpty,
+					Description:  "The Runtime Version of the Authentication and Authorisation feature of this App. Defaults to `~1`",
+				},
+
+				"config_file_path": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.StringIsNotEmpty,
+					Description:  "The path to the App Auth settings. **Note:** Relative Paths are evaluated from the Site Root directory.",
+				},
+
+				"require_authentication": {
+					Type:        pluginsdk.TypeBool,
+					Optional:    true,
+					Description: "Should the authentication flow be used for all requests.",
+				},
+
+				"unauthenticated_action": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Default:  string(web.UnauthenticatedClientActionV2RedirectToLoginPage),
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.UnauthenticatedClientActionV2RedirectToLoginPage),
+						string(web.UnauthenticatedClientActionV2AllowAnonymous),
+						string(web.UnauthenticatedClientActionV2Return401),
+						string(web.UnauthenticatedClientActionV2Return403),
+					}, false),
+					Description: "The action to take for requests made without authentication. Possible values include `RedirectToLoginPage`, `AllowAnonymous`, `Return401`, and `Return403`. Defaults to `RedirectToLoginPage`.",
+				},
+
+				"default_provider": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					// ValidateFunc: validation.StringInSlice([]string{}, false), // TODO - find the correct strings for the Auth names
+					Description: "The Default Authentication Provider to use when the `unauthenticated_action` is set to `RedirectToLoginPage`. Possible values include: `apple`, `azureactivedirectory`, `facebook`, `github`, `google`, `twitter` and the `name` of your `custom_oidc_v2` provider.",
+				},
+
+				"excluded_paths": {
+					Type:     pluginsdk.TypeList,
+					Optional: true,
+					Elem: &pluginsdk.Schema{
+						Type: pluginsdk.TypeString,
+					},
+					Description: "The paths which should be excluded from the `unauthenticated_action` when it is set to `RedirectToLoginPage`.",
+				},
+
+				"apple_v2": AppleAuthV2SettingsSchema(),
+
+				"active_directory_v2": AadAuthV2SettingsSchema(),
+
+				"azure_static_web_app_v2": StaticWebAppAuthV2SettingsSchema(),
+
+				"custom_oidc_v2": CustomOIDCAuthV2SettingsSchema(),
+
+				"facebook_v2": FacebookAuthV2SettingsSchema(),
+
+				"github_v2": GithubAuthV2SettingsSchema(),
+
+				"google_v2": GoogleAuthV2SettingsSchema(),
+
+				"microsoft_v2": MicrosoftAuthV2SettingsSchema(),
+
+				"twitter_v2": TwitterAuthV2SettingsSchema(),
+
+				"login": authV2LoginSchema(),
+
+				"require_https": {
+					Type:        pluginsdk.TypeBool,
+					Optional:    true,
+					Default:     true,
+					Description: "Should HTTPS be required on connections? Defaults to true.",
+				},
+
+				"http_route_api_prefix": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					Default:      "/.auth",
+					ValidateFunc: validation.StringIsNotEmpty,
+					Description:  "The prefix that should precede all the authentication and authorisation paths. Defaults to `/.auth`",
+				},
+
+				"forward_proxy_convention": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Default:  string(web.ForwardProxyConventionNoProxy),
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.ForwardProxyConventionNoProxy),
+						string(web.ForwardProxyConventionCustom),
+						string(web.ForwardProxyConventionStandard),
+					}, false),
+					Description: "The convention used to determine the url of the request made. Possible values include `ForwardProxyConventionNoProxy`, `ForwardProxyConventionStandard`, `ForwardProxyConventionCustom`. Defaults to `ForwardProxyConventionNoProxy`",
+				},
+
+				"forward_proxy_custom_host_header_name": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.StringIsNotEmpty,
+					Description:  "The name of the header containing the host of the request.",
+				},
+
+				"forward_proxy_custom_scheme_header_name": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.StringIsNotEmpty,
+					Description:  "The name of the header containing the scheme of the request.",
+				},
+			},
+		},
+	}
+}

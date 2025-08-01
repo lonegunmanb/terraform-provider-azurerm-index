@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/kubernetesconfiguration/2023-05-01/fluxconfiguration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/containers"
+)
+func expandAzureBlobDefinitionModel(inputList []AzureBlobDefinitionModel, storageDomainSuffix string) (*fluxconfiguration.AzureBlobDefinition, error) {
+	if len(inputList) == 0 {
+		return nil, nil
+	}
+
+	input := &inputList[0]
+	output := fluxconfiguration.AzureBlobDefinition{
+		ManagedIdentity:       expandManagedIdentityDefinitionModel(input.ManagedIdentity),
+		ServicePrincipal:      expandServicePrincipalDefinitionModel(input.ServicePrincipal),
+		SyncIntervalInSeconds: &input.SyncIntervalInSeconds,
+		TimeoutInSeconds:      &input.TimeoutInSeconds,
+	}
+	if input.AccountKey != "" {
+		output.AccountKey = &input.AccountKey
+	}
+
+	if input.ContainerID != "" {
+		id, err := containers.ParseContainerID(input.ContainerID, storageDomainSuffix)
+		if err != nil {
+			return nil, err
+		}
+
+		output.ContainerName = &id.ContainerName
+		output.Url = pointer.To(id.AccountId.ID())
+	}
+
+	if input.LocalAuthRef != "" {
+		output.LocalAuthRef = &input.LocalAuthRef
+	}
+
+	if input.SasToken != "" {
+		output.SasToken = &input.SasToken
+	}
+
+	return &output, nil
+}

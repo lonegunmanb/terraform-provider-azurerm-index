@@ -1,0 +1,114 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandAutoHealSettingsWindows(autoHealSettings []AutoHealSettingWindows) *webapps.AutoHealRules {
+	if len(autoHealSettings) == 0 {
+		return &webapps.AutoHealRules{}
+	}
+
+	result := &webapps.AutoHealRules{
+		Triggers: &webapps.AutoHealTriggers{},
+		Actions:  &webapps.AutoHealActions{},
+	}
+
+	autoHeal := autoHealSettings[0]
+	if len(autoHeal.Triggers) == 0 {
+		return result
+	}
+
+	triggers := autoHeal.Triggers[0]
+	if len(triggers.Requests) == 1 {
+		result.Triggers.Requests = &webapps.RequestsBasedTrigger{
+			Count:        pointer.To(triggers.Requests[0].Count),
+			TimeInterval: pointer.To(triggers.Requests[0].Interval),
+		}
+	}
+
+	if len(triggers.SlowRequests) == 1 {
+		result.Triggers.SlowRequests = &webapps.SlowRequestsBasedTrigger{
+			TimeTaken:    pointer.To(triggers.SlowRequests[0].TimeTaken),
+			TimeInterval: pointer.To(triggers.SlowRequests[0].Interval),
+			Count:        pointer.To(triggers.SlowRequests[0].Count),
+		}
+	}
+
+	if len(triggers.SlowRequestsWithPath) > 0 {
+		slowRequestWithPathTriggers := make([]webapps.SlowRequestsBasedTrigger, 0)
+		for _, sr := range triggers.SlowRequestsWithPath {
+			trigger := webapps.SlowRequestsBasedTrigger{
+				TimeTaken:    pointer.To(sr.TimeTaken),
+				TimeInterval: pointer.To(sr.Interval),
+				Count:        pointer.To(sr.Count),
+			}
+			if sr.Path != "" {
+				trigger.Path = pointer.To(sr.Path)
+			}
+			slowRequestWithPathTriggers = append(slowRequestWithPathTriggers, trigger)
+		}
+		result.Triggers.SlowRequestsWithPath = &slowRequestWithPathTriggers
+	}
+
+	if triggers.PrivateMemoryKB != 0 {
+		result.Triggers.PrivateBytesInKB = pointer.To(triggers.PrivateMemoryKB)
+	}
+
+	if len(triggers.StatusCodes) > 0 {
+		statusCodeTriggers := make([]webapps.StatusCodesBasedTrigger, 0)
+		statusCodeRangeTriggers := make([]webapps.StatusCodesRangeBasedTrigger, 0)
+		for _, s := range triggers.StatusCodes {
+			statusCodeTrigger := webapps.StatusCodesBasedTrigger{}
+			statusCodeRangeTrigger := webapps.StatusCodesRangeBasedTrigger{}
+			parts := strings.Split(s.StatusCodeRange, "-")
+			if len(parts) == 2 {
+				statusCodeRangeTrigger.StatusCodes = pointer.To(s.StatusCodeRange)
+				statusCodeRangeTrigger.Count = pointer.To(s.Count)
+				statusCodeRangeTrigger.TimeInterval = pointer.To(s.Interval)
+				if s.Path != "" {
+					statusCodeRangeTrigger.Path = pointer.To(s.Path)
+				}
+				statusCodeRangeTriggers = append(statusCodeRangeTriggers, statusCodeRangeTrigger)
+			} else {
+				statusCode, err := strconv.Atoi(s.StatusCodeRange)
+				if err == nil {
+					statusCodeTrigger.Status = pointer.To(int64(statusCode))
+				}
+				statusCodeTrigger.Count = pointer.To(s.Count)
+				statusCodeTrigger.TimeInterval = pointer.To(s.Interval)
+				if s.Path != "" {
+					statusCodeTrigger.Path = pointer.To(s.Path)
+				}
+				if s.SubStatus != 0 {
+					statusCodeTrigger.SubStatus = pointer.To(s.SubStatus)
+				}
+				if s.Win32Status != 0 {
+					statusCodeTrigger.Win32Status = pointer.To((s.Win32Status))
+				}
+				statusCodeTriggers = append(statusCodeTriggers, statusCodeTrigger)
+			}
+		}
+		result.Triggers.StatusCodes = &statusCodeTriggers
+		result.Triggers.StatusCodesRange = &statusCodeRangeTriggers
+	}
+
+	if len(autoHeal.Actions) > 0 {
+		action := autoHeal.Actions[0]
+		result.Actions.ActionType = pointer.To(webapps.AutoHealActionType(action.ActionType))
+		result.Actions.MinProcessExecutionTime = pointer.To(action.MinimumProcessTime)
+		if len(action.CustomAction) != 0 {
+			customAction := action.CustomAction[0]
+			result.Actions.CustomAction = &webapps.AutoHealCustomAction{
+				Exe:        pointer.To(customAction.Executable),
+				Parameters: pointer.To(customAction.Parameters),
+			}
+		}
+	}
+	return result
+}

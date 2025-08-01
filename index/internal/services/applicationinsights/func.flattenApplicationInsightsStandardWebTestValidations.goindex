@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	webtests "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2022-06-15/webtestsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenApplicationInsightsStandardWebTestValidations(input *webtests.WebTestPropertiesValidationRules) []ValidationRuleModel {
+	if input == nil {
+		return []ValidationRuleModel{}
+	}
+
+	rules := pointer.From(input)
+
+	// API Always returns this block, despite being a pointer as the `SSLCheck` property is always set. It is required, despite being marked as optional in the swagger
+	if rules.ContentValidation == nil && rules.ExpectedHTTPStatusCode == nil && rules.IgnoreHTTPStatusCode == nil && rules.SSLCertRemainingLifetimeCheck == nil && (rules.SSLCheck == nil || !*rules.SSLCheck) {
+		return []ValidationRuleModel{}
+	}
+
+	result := ValidationRuleModel{
+		ExpectedStatusCode:           pointer.From(rules.ExpectedHTTPStatusCode),
+		CertificateRemainingLifetime: pointer.From(rules.SSLCertRemainingLifetimeCheck),
+		SSLCheck:                     pointer.From(rules.SSLCheck),
+		Content:                      flattenApplicationInsightsStandardWebTestContentValidations(rules.ContentValidation),
+	}
+
+	return []ValidationRuleModel{result}
+}

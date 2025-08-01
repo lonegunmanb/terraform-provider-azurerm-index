@@ -1,0 +1,136 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"fmt"
+	"log"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandLogicAppStandardSiteConfig(d *pluginsdk.ResourceData) (webapps.SiteConfig, error) {
+	configs := d.Get("site_config").([]interface{})
+	siteConfig := webapps.SiteConfig{}
+
+	if len(configs) == 0 {
+		return siteConfig, nil
+	}
+
+	config := configs[0].(map[string]interface{})
+
+	if v, ok := config["always_on"]; ok {
+		siteConfig.AlwaysOn = pointer.To(v.(bool))
+	}
+
+	if v, ok := config["use_32_bit_worker_process"]; ok {
+		siteConfig.Use32BitWorkerProcess = pointer.To(v.(bool))
+	}
+
+	if v, ok := config["websockets_enabled"]; ok {
+		siteConfig.WebSocketsEnabled = pointer.To(v.(bool))
+	}
+
+	if v, ok := config["linux_fx_version"]; ok {
+		siteConfig.LinuxFxVersion = pointer.To(v.(string))
+	}
+
+	if v, ok := config["cors"]; ok {
+		expand := expandLogicAppStandardCorsSettings(v)
+		siteConfig.Cors = &expand
+	}
+
+	if v, ok := config["http2_enabled"]; ok {
+		siteConfig.HTTP20Enabled = pointer.To(v.(bool))
+	}
+
+	if v, ok := config["ip_restriction"]; ok {
+		restrictions, err := expandLogicAppStandardIpRestriction(v)
+		if err != nil {
+			return siteConfig, err
+		}
+		siteConfig.IPSecurityRestrictions = &restrictions
+	}
+
+	if v, ok := config["scm_ip_restriction"]; ok {
+		scmIPSecurityRestrictions := v.([]interface{})
+		scmRestrictions, err := expandLogicAppStandardIpRestriction(scmIPSecurityRestrictions)
+		if err != nil {
+			return siteConfig, err
+		}
+		siteConfig.ScmIPSecurityRestrictions = &scmRestrictions
+	}
+
+	if v, ok := config["scm_use_main_ip_restriction"]; ok {
+		siteConfig.ScmIPSecurityRestrictionsUseMain = pointer.To(v.(bool))
+	}
+
+	if v, ok := config["scm_min_tls_version"]; ok {
+		siteConfig.ScmMinTlsVersion = pointer.To(webapps.SupportedTlsVersions(v.(string)))
+	}
+
+	if v, ok := config["scm_type"]; ok {
+		siteConfig.ScmType = pointer.To(webapps.ScmType(v.(string)))
+	}
+
+	if v, ok := config["min_tls_version"]; ok {
+		siteConfig.MinTlsVersion = pointer.To(webapps.SupportedTlsVersions(v.(string)))
+	}
+
+	if v, ok := config["ftps_state"]; ok {
+		siteConfig.FtpsState = pointer.To(webapps.FtpsState(v.(string)))
+	}
+
+	// get value from `d` rather than the `config` map, or it will be covered by the zero-value "0" instead of nil.
+	if v, ok := d.GetOk("site_config.0.pre_warmed_instance_count"); ok {
+		siteConfig.PreWarmedInstanceCount = pointer.To(int64(v.(int)))
+	}
+
+	if v, ok := config["health_check_path"]; ok {
+		siteConfig.HealthCheckPath = pointer.To(v.(string))
+	}
+
+	if v, ok := d.GetOk("site_config.0.elastic_instance_minimum"); ok {
+		siteConfig.MinimumElasticInstanceCount = pointer.To(int64(v.(int)))
+	}
+
+	if v, ok := d.GetOk("site_config.0.app_scale_limit"); ok {
+		siteConfig.FunctionAppScaleLimit = pointer.To(int64(v.(int)))
+	}
+
+	if v, ok := config["runtime_scale_monitoring_enabled"]; ok {
+		siteConfig.FunctionsRuntimeScaleMonitoringEnabled = pointer.To(v.(bool))
+	}
+
+	if v, ok := config["dotnet_framework_version"]; ok {
+		siteConfig.NetFrameworkVersion = pointer.To(v.(string))
+	}
+
+	if v, ok := config["vnet_route_all_enabled"]; ok {
+		siteConfig.VnetRouteAllEnabled = pointer.To(v.(bool))
+	}
+
+	if !features.FivePointOh() {
+		siteConfig.PublicNetworkAccess = pointer.To(reconcilePNA(d))
+	}
+
+	return siteConfig, nil
+}

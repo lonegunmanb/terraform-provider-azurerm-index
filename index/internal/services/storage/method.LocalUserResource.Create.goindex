@@ -1,0 +1,95 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/localusers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computevalidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r LocalUserResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Storage.ResourceManager.LocalUsers
+
+			var plan LocalUserModel
+			if err := metadata.Decode(&plan); err != nil {
+				return fmt.Errorf("decoding %+v", err)
+			}
+
+			// Sanity checks on input
+			if plan.SshKeyEnabled != (len(plan.SshAuthorizedKey) != 0) {
+				if plan.SshKeyEnabled {
+					return errors.New("`ssh_authorized_key` should be specified when `ssh_key_enabled` is enabled")
+				} else {
+					return errors.New("`ssh_authorized_key` should not be specified when `ssh_key_enabled` is disabled")
+				}
+			}
+
+			accountId, err := commonids.ParseStorageAccountID(plan.StorageAccountId)
+			if err != nil {
+				return err
+			}
+
+			id := localusers.NewLocalUserID(accountId.SubscriptionId, accountId.ResourceGroupName, accountId.StorageAccountName, plan.Name)
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			params := localusers.LocalUser{
+				Properties: &localusers.LocalUserProperties{
+					PermissionScopes:  r.expandPermissionScopes(plan.PermissionScope),
+					SshAuthorizedKeys: r.expandSSHAuthorizedKeys(plan.SshAuthorizedKey),
+					HasSshKey:         pointer.To(plan.SshKeyEnabled),
+					HasSshPassword:    pointer.To(plan.SshPasswordEnabled),
+				},
+			}
+
+			if plan.HomeDirectory != "" {
+				params.Properties.HomeDirectory = utils.String(plan.HomeDirectory)
+			}
+
+			if _, err = client.CreateOrUpdate(ctx, id, params); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			state := plan
+			if plan.SshPasswordEnabled {
+				resp, err := client.RegeneratePassword(ctx, id)
+				if err != nil {
+					return fmt.Errorf("generating password for %s: %v", id.ID(), err)
+				}
+				if resp.Model == nil {
+					return fmt.Errorf("unexpected nil of the generate password response model for %s", id.ID())
+				}
+				if v := resp.Model.SshPassword; v != nil {
+					state.Password = *v
+				}
+				if err := metadata.Encode(&state); err != nil {
+					return err
+				}
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

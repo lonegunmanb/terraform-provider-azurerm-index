@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/deviceprovisioningservices/2022-02-05/iotdpsresource"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func expandDpsIPFilterRules(d *pluginsdk.ResourceData) *[]iotdpsresource.IPFilterRule {
+	ipFilterRuleList := d.Get("ip_filter_rule").([]interface{})
+	if len(ipFilterRuleList) == 0 {
+		return nil
+	}
+
+	rules := make([]iotdpsresource.IPFilterRule, 0)
+
+	for _, r := range ipFilterRuleList {
+		rawRule := r.(map[string]interface{})
+		ipFilterTargetType := iotdpsresource.IPFilterTargetType(rawRule["target"].(string))
+		rule := &iotdpsresource.IPFilterRule{
+			FilterName: rawRule["name"].(string),
+			Action:     iotdpsresource.IPFilterActionType(rawRule["action"].(string)),
+			IPMask:     rawRule["ip_mask"].(string),
+			Target:     &ipFilterTargetType,
+		}
+
+		rules = append(rules, *rule)
+	}
+	return &rules
+}

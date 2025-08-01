@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedapplications
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/managedapplications/2021-07-01/applicationdefinitions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/managedapplications/2021-07-01/applications"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedapplications/validate"
+	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenManagedApplicationParameterValuesValueToString(input *interface{}, localParameters map[string]interface{}) (string, error) {
+	if input == nil {
+		return "", nil
+	}
+
+	attrs := *input
+	if _, ok := attrs.(map[string]interface{}); ok {
+		for k, v := range attrs.(map[string]interface{}) {
+			if v != nil {
+				delete(attrs.(map[string]interface{})[k].(map[string]interface{}), "type")
+
+				// Secure values are not returned, thus settings it with local value
+				value := attrs.(map[string]interface{})[k].(map[string]interface{})
+				if _, ok := value["value"]; !ok {
+					value["value"] = ""
+					if localParam, localParamOK := localParameters[k]; localParamOK {
+						if _, oldValueStructTypeOK := localParam.(map[string]interface{}); oldValueStructTypeOK {
+							if localParamValue, localParamValueOK := localParam.(map[string]interface{})["value"]; localParamValueOK {
+								value["value"] = localParamValue
+							}
+						}
+					}
+				}
+			}
+		}
+
+		return compactParameterOrOutputValue(input)
+	}
+
+	return "", nil
+}

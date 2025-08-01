@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceArmLoadBalancerProbe() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceArmLoadBalancerProbeCreateUpdate,
+		Read:   resourceArmLoadBalancerProbeRead,
+		Update: resourceArmLoadBalancerProbeCreateUpdate,
+		Delete: resourceArmLoadBalancerProbeDelete,
+
+		Importer: loadBalancerSubResourceImporter(func(input string) (*loadbalancers.LoadBalancerId, error) {
+			id, err := loadbalancers.ParseProbeID(input)
+			if err != nil {
+				return nil, err
+			}
+
+			lbId := loadbalancers.NewLoadBalancerID(id.SubscriptionId, id.ResourceGroupName, id.LoadBalancerName)
+			return &lbId, nil
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"loadbalancer_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: loadbalancers.ValidateLoadBalancerID,
+			},
+
+			"protocol": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(loadbalancers.ProbeProtocolTcp),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(loadbalancers.ProbeProtocolHTTP),
+					string(loadbalancers.ProbeProtocolHTTPS),
+					string(loadbalancers.ProbeProtocolTcp),
+				}, false),
+			},
+
+			"port": {
+				Type:         pluginsdk.TypeInt,
+				Required:     true,
+				ValidateFunc: validate.PortNumber,
+			},
+
+			"probe_threshold": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      1,
+				ValidateFunc: validation.IntBetween(1, 100),
+			},
+
+			"request_path": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"interval_in_seconds": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      15,
+				ValidateFunc: validation.IntAtLeast(5),
+			},
+
+			"number_of_probes": {
+				Type:     pluginsdk.TypeInt,
+				Optional: true,
+				Default:  2,
+			},
+
+			"load_balancer_rules": {
+				Type:     pluginsdk.TypeSet,
+				Computed: true,
+				Elem: &pluginsdk.Schema{
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: validation.StringIsNotEmpty,
+				},
+				Set: pluginsdk.HashString,
+			},
+		},
+	}
+}

@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func dataSourceVirtualNetworkGatewayRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.VirtualNetworkGateways
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := virtualnetworkgateways.NewVirtualNetworkGatewayID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+
+	resp, err := client.Get(ctx, id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return fmt.Errorf("%s was not found", id)
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	d.Set("name", id.VirtualNetworkGatewayName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.NormalizeNilable(model.Location))
+
+		props := model.Properties
+		d.Set("type", string(pointer.From(props.GatewayType)))
+		d.Set("enable_bgp", props.EnableBgp)
+		d.Set("private_ip_address_enabled", props.EnablePrivateIPAddress)
+		d.Set("active_active", props.ActiveActive)
+		d.Set("generation", string(pointer.From(props.VpnGatewayGeneration)))
+
+		if props.VpnType != nil {
+			d.Set("vpn_type", string(pointer.From(props.VpnType)))
+		}
+
+		if props.GatewayDefaultSite != nil {
+			d.Set("default_local_network_gateway_id", props.GatewayDefaultSite.Id)
+		}
+
+		if props.Sku != nil {
+			d.Set("sku", string(pointer.From(props.Sku.Name)))
+		}
+
+		if err := d.Set("ip_configuration", flattenVirtualNetworkGatewayDataSourceIPConfigurations(props.IPConfigurations)); err != nil {
+			return fmt.Errorf("setting `ip_configuration`: %+v", err)
+		}
+
+		vpnConfigFlat := flattenVirtualNetworkGatewayDataSourceVpnClientConfig(props.VpnClientConfiguration)
+		if err := d.Set("vpn_client_configuration", vpnConfigFlat); err != nil {
+			return fmt.Errorf("setting `vpn_client_configuration`: %+v", err)
+		}
+
+		bgpSettingsFlat := flattenVirtualNetworkGatewayDataSourceBgpSettings(props.BgpSettings)
+		if err := d.Set("bgp_settings", bgpSettingsFlat); err != nil {
+			return fmt.Errorf("setting `bgp_settings`: %+v", err)
+		}
+
+		if err := d.Set("custom_route", flattenVirtualNetworkGatewayAddressSpace(props.CustomRoutes)); err != nil {
+			return fmt.Errorf("setting `custom_route`: %+v", err)
+		}
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+
+	return nil
+}

@@ -1,0 +1,119 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func (r IotHubEndpointCosmosDBAccountResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.IoTHub.ResourceClient
+
+			id, err := parse.EndpointCosmosDBAccountID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			locks.ByName(id.IotHubName, IothubResourceName)
+			defer locks.UnlockByName(id.IotHubName, IothubResourceName)
+
+			var state IotHubEndpointCosmosDBAccountModel
+			if err = metadata.Decode(&state); err != nil {
+				return err
+			}
+
+			iothub, err := client.Get(ctx, id.ResourceGroup, id.IotHubName)
+			if err != nil {
+				if utils.ResponseWasNotFound(iothub.Response) {
+					return fmt.Errorf("%q was not found", id)
+				}
+
+				return fmt.Errorf("retrieving %q: %+v", id, err)
+			}
+
+			if iothub.Properties == nil || iothub.Properties.Routing == nil || iothub.Properties.Routing.Endpoints == nil || iothub.Properties.Routing.Endpoints.CosmosDBSQLCollections == nil {
+				return fmt.Errorf("%q was not found", id)
+			}
+
+			for i, endpoint := range pointer.From(iothub.Properties.Routing.Endpoints.CosmosDBSQLCollections) {
+				if strings.EqualFold(pointer.From(endpoint.Name), id.EndpointName) {
+					authenticationType := devices.AuthenticationType(state.AuthenticationType)
+
+					if authenticationType == devices.AuthenticationTypeKeyBased {
+						if state.PrimaryKey == "" || state.SecondaryKey == "" {
+							return fmt.Errorf("`primary_key` and `secondary_key` must be specified when `authentication_type` is `keyBased`")
+						}
+
+						endpoint.PrimaryKey = pointer.To(state.PrimaryKey)
+						endpoint.SecondaryKey = pointer.To(state.SecondaryKey)
+						endpoint.Identity = nil
+					} else {
+						if state.PrimaryKey != "" || state.SecondaryKey != "" {
+							return fmt.Errorf("`primary_key` or `secondary_key` cannot be specified when `authentication_type` is `identityBased`")
+						}
+
+						endpoint.PrimaryKey = nil
+						endpoint.SecondaryKey = nil
+						if state.IdentityId != "" {
+							endpoint.Identity = &devices.ManagedIdentity{
+								UserAssignedIdentity: pointer.To(state.IdentityId),
+							}
+						} else {
+							endpoint.Identity = nil
+						}
+					}
+
+					if metadata.ResourceData.HasChange("authentication_type") {
+						endpoint.AuthenticationType = authenticationType
+					}
+
+					if metadata.ResourceData.HasChange("partition_key_name") {
+						if state.PartitionKeyName == "" {
+							endpoint.PartitionKeyName = nil
+						} else {
+							endpoint.PartitionKeyName = pointer.To(state.PartitionKeyName)
+						}
+					}
+
+					if metadata.ResourceData.HasChange("partition_key_template") {
+						if state.PartitionKeyTemplate == "" {
+							endpoint.PartitionKeyTemplate = nil
+						} else {
+							endpoint.PartitionKeyTemplate = pointer.To(state.PartitionKeyTemplate)
+						}
+					}
+
+					(*iothub.Properties.Routing.Endpoints.CosmosDBSQLCollections)[i] = endpoint
+
+					future, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.IotHubName, iothub, "")
+					if err != nil {
+						return fmt.Errorf("updating %s: %+v", id, err)
+					}
+
+					if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+						return fmt.Errorf("waiting for the completion of the update of %s: %+v", id, err)
+					}
+
+					return nil
+				}
+			}
+
+			return fmt.Errorf("%q was not found", id)
+		},
+		Timeout: 30 * time.Minute,
+	}
+}

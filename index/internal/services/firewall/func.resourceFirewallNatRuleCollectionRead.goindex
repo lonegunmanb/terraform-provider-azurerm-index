@@ -1,0 +1,95 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/azurefirewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceFirewallNatRuleCollectionRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.AzureFirewalls
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.FirewallNatRuleCollectionID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	firewallId := azurefirewalls.NewAzureFirewallID(id.SubscriptionId, id.ResourceGroup, id.AzureFirewallName)
+
+	read, err := client.Get(ctx, firewallId)
+	if err != nil {
+		if response.WasNotFound(read.HttpResponse) {
+			log.Printf("[DEBUG] Azure Firewall %s  was not found - removing from state!", *id)
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving Azure Firewall %s : %+v", *id, err)
+	}
+
+	if read.Model == nil {
+		return fmt.Errorf("retrieving NAT Rule Collection %q (Firewall %q / Resource Group %q): `model` was nil", id.NatRuleCollectionName, id.AzureFirewallName, id.ResourceGroup)
+	}
+
+	if read.Model.Properties == nil {
+		return fmt.Errorf("retrieving NAT Rule Collection %q (Firewall %q / Resource Group %q): `props` was nil", id.NatRuleCollectionName, id.AzureFirewallName, id.ResourceGroup)
+	}
+
+	props := *read.Model.Properties
+
+	if props.NatRuleCollections == nil {
+		return fmt.Errorf("retrieving NAT Rule Collection %q (Firewall %q / Resource Group %q): `props.NetworkRuleCollections` was nil", id.NatRuleCollectionName, id.AzureFirewallName, id.ResourceGroup)
+	}
+
+	var rule *azurefirewalls.AzureFirewallNatRuleCollection
+	for _, r := range *props.NatRuleCollections {
+		if r.Name == nil {
+			continue
+		}
+
+		if *r.Name == id.NatRuleCollectionName {
+			rule = &r
+			break
+		}
+	}
+
+	if rule == nil {
+		log.Printf("[DEBUG] NAT Rule Collection %q was not found on Firewall %q (Resource Group %q) - removing from state!", id.NatRuleCollectionName, id.AzureFirewallName, id.ResourceGroup)
+		d.SetId("")
+		return nil
+	}
+
+	d.Set("name", id.NatRuleCollectionName)
+	d.Set("azure_firewall_name", id.AzureFirewallName)
+	d.Set("resource_group_name", id.ResourceGroup)
+
+	if props := rule.Properties; props != nil {
+		if action := props.Action; action != nil {
+			d.Set("action", string(pointer.From(action.Type)))
+		}
+
+		if priority := props.Priority; priority != nil {
+			d.Set("priority", int(*priority))
+		}
+
+		flattenedRules := flattenFirewallNatRuleCollectionRules(props.Rules)
+		if err := d.Set("rule", flattenedRules); err != nil {
+			return fmt.Errorf("setting `rule`: %+v", err)
+		}
+	}
+
+	return nil
+}

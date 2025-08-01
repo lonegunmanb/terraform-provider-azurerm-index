@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	schema2 "github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/md"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func crossCheckProperty(r *schema.Resource, md *model.ResourceDoc) (res []Checker) {
+	// check property exists in r not md, or in md not in r
+
+	// exist in tf schema but not in document
+	docProps := md.AllProp()
+	for key, val := range r.Schema.Schema {
+		field := docProps[key]
+		if field == nil && md.Attr != nil {
+			field = md.Attr[key]
+		}
+		res = append(res, diffDocMiss(r.ResourceType, key, val, field)...)
+	}
+
+	for key, f := range docProps {
+		sub := r.Schema.Schema[key]
+		subDiff := diffCodeMiss(r.ResourceType, key, f, sub)
+		res = append(res, subDiff...)
+	}
+	// if there is just one miss in doc and on miss in code, maybe a misspelling
+	res = mergeMisspelling(res)
+	return
+}

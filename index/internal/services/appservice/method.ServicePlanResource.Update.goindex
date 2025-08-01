@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/appserviceplans"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	webValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/web/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r ServicePlanResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 60 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			id, err := commonids.ParseAppServicePlanID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			client := metadata.Client.AppService.ServicePlanClient
+
+			var state ServicePlanModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("reading %s: %+v", id, err)
+			}
+
+			model := *existing.Model
+
+			if metadata.ResourceData.HasChange("per_site_scaling_enabled") {
+				model.Properties.PerSiteScaling = pointer.To(state.PerSiteScaling)
+			}
+
+			if metadata.ResourceData.HasChange("sku_name") {
+				model.Sku.Name = utils.String(state.Sku)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				model.Tags = pointer.To(state.Tags)
+			}
+
+			if metadata.ResourceData.HasChange("worker_count") {
+				model.Sku.Capacity = pointer.To(state.WorkerCount)
+			}
+
+			if metadata.ResourceData.HasChange("premium_plan_auto_scale_enabled") {
+				model.Properties.ElasticScaleEnabled = pointer.To(state.PremiumPlanAutoScaleEnabled)
+			}
+
+			if metadata.ResourceData.HasChange("maximum_elastic_worker_count") {
+				model.Properties.MaximumElasticWorkerCount = pointer.To(state.MaximumElasticWorkerCount)
+			}
+
+			if err = client.CreateOrUpdateThenPoll(ctx, *id, model); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

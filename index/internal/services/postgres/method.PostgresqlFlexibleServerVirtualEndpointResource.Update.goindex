@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2023-06-01-preview/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2024-08-01/virtualendpoints"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r PostgresqlFlexibleServerVirtualEndpointResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var virtualEndpoint PostgresqlFlexibleServerVirtualEndpointModel
+			client := metadata.Client.Postgres.VirtualEndpointClient
+
+			if err := metadata.Decode(&virtualEndpoint); err != nil {
+				return err
+			}
+
+			id, err := virtualendpoints.ParseVirtualEndpointID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			replicaServerId, err := servers.ParseFlexibleServerID(virtualEndpoint.ReplicaServerId)
+			if err != nil {
+				return err
+			}
+
+			locks.ByName(id.FlexibleServerName, postgresqlFlexibleServerResourceName)
+			defer locks.UnlockByName(id.FlexibleServerName, postgresqlFlexibleServerResourceName)
+
+			if err := client.UpdateThenPoll(ctx, *id, virtualendpoints.VirtualEndpointResourceForPatch{
+				Properties: &virtualendpoints.VirtualEndpointResourceProperties{
+					EndpointType: pointer.To(virtualendpoints.VirtualEndpointType(virtualEndpoint.Type)),
+					Members:      pointer.To([]string{replicaServerId.FlexibleServerName}),
+				},
+			}); err != nil {
+				return fmt.Errorf("updating %q: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

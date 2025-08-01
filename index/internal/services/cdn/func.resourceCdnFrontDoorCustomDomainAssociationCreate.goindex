@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceCdnFrontDoorCustomDomainAssociationCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Cdn.FrontDoorCustomDomainsClient
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	log.Printf("[INFO] preparing arguments for CDN FrontDoor Route <-> CDN FrontDoor Custom Domain Association creation")
+
+	cdId, err := parse.FrontDoorCustomDomainID(d.Get("cdn_frontdoor_custom_domain_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := parse.NewFrontDoorCustomDomainAssociationID(cdId.SubscriptionId, cdId.ResourceGroup, cdId.ProfileName, cdId.CustomDomainName)
+
+	existing, err := client.Get(ctx, cdId.ResourceGroup, cdId.ProfileName, cdId.CustomDomainName)
+	if err != nil {
+		if utils.ResponseWasNotFound(existing.Response) {
+			return fmt.Errorf("creating %s: %s was not found", id, cdId)
+		}
+
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	// make sure the routes exist and are valid for this custom domain...
+	routes, err := validateRoutes(d, meta, cdId)
+	if err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	d.Set("cdn_frontdoor_custom_domain_id", cdId.ID())
+	d.Set("cdn_frontdoor_route_ids", routes)
+
+	return resourceCdnFrontDoorCustomDomainAssociationRead(d, meta)
+}

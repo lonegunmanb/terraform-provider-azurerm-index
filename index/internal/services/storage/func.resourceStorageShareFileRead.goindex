@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/file/files"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/file/shares"
+)
+func resourceStorageShareFileRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	storageClient := meta.(*clients.Client).Storage
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := files.ParseFileID(d.Id(), storageClient.StorageDomainSuffix)
+	if err != nil {
+		return err
+	}
+
+	account, err := storageClient.FindAccount(ctx, subscriptionId, id.AccountId.AccountName)
+	if err != nil {
+		return fmt.Errorf("retrieving Account %q for File %q (Share %q): %s", id.AccountId.AccountName, id.FileName, id.ShareName, err)
+	}
+	if account == nil {
+		log.Printf("[WARN] Unable to determine Storage Account for %s - assuming removed & removing from state", id)
+		d.SetId("")
+		return nil
+	}
+
+	client, err := storageClient.FileShareFilesDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingAnyAuthMethod())
+	if err != nil {
+		return fmt.Errorf("building File Share Client for Storage Account %s: %s", id.AccountId, err)
+	}
+
+	props, err := client.GetProperties(ctx, id.ShareName, id.DirectoryPath, id.FileName)
+	if err != nil {
+		log.Printf("retrieving %s: %s", id, err)
+		d.SetId("")
+		return nil
+	}
+
+	d.Set("name", id.FileName)
+	d.Set("path", id.DirectoryPath)
+	d.Set("storage_share_id", shares.NewShareID(id.AccountId, id.ShareName).ID())
+
+	if err = d.Set("metadata", FlattenMetaData(props.MetaData)); err != nil {
+		return fmt.Errorf("setting `metadata`: %s", err)
+	}
+	d.Set("content_type", props.ContentType)
+	d.Set("content_encoding", props.ContentEncoding)
+
+	// Set the ContentMD5 value to md5 hash in hex
+	contentMD5 := ""
+	if props.ContentMD5 != "" {
+		contentMD5, err = convertBase64ToHexEncoding(props.ContentMD5)
+		if err != nil {
+			return fmt.Errorf("converting hex to base64 encoding for content_md5: %v", err)
+		}
+	}
+	d.Set("content_md5", contentMD5)
+
+	d.Set("content_disposition", props.ContentDisposition)
+
+	if props.ContentLength == nil {
+		return fmt.Errorf("file share file properties %q returned no information about the content-length", id.FileName)
+	}
+
+	d.Set("content_length", int(*props.ContentLength))
+
+	return nil
+}

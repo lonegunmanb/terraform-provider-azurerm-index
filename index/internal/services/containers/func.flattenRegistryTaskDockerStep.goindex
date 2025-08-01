@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2019-06-01-preview/tasks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenRegistryTaskDockerStep(step tasks.TaskStepProperties, model ContainerRegistryTaskModel) []DockerStep {
+	if step == nil {
+		return nil
+	}
+
+	dockerStep, ok := step.(tasks.DockerBuildStep)
+	if !ok {
+		return nil
+	}
+
+	obj := DockerStep{
+		Arguments: flattenRegistryTaskArguments(dockerStep.Arguments),
+	}
+
+	if dockerStep.ContextPath != nil {
+		obj.ContextPath = *dockerStep.ContextPath
+	}
+	obj.DockerfilePath = dockerStep.DockerFilePath
+
+	if dockerStep.ImageNames != nil {
+		obj.ImageNames = *dockerStep.ImageNames
+	}
+	if dockerStep.IsPushEnabled != nil {
+		obj.IsPushEnabled = *dockerStep.IsPushEnabled
+	}
+	if dockerStep.NoCache != nil {
+		obj.IsCacheEnabled = !(*dockerStep.NoCache)
+	}
+	if dockerStep.Target != nil {
+		obj.Target = *dockerStep.Target
+	}
+
+	if len(model.DockerStep) == 1 {
+		// The ContextAccessToken is sensitive and won't return from API, setting it from the config.
+		obj.ContextAccessToken = model.DockerStep[0].ContextAccessToken
+
+		// The SecretArguments is sensitive and won't return from API, setting it from the config.
+		obj.SecretArguments = model.DockerStep[0].SecretArguments
+	}
+
+	return []DockerStep{obj}
+}

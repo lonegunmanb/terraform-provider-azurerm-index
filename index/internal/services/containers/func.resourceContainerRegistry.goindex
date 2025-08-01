@@ -1,0 +1,136 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"log"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/operation"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/replications"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceContainerRegistry() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceContainerRegistryCreate,
+		Read:   resourceContainerRegistryRead,
+		Update: resourceContainerRegistryUpdate,
+		Delete: resourceContainerRegistryDelete,
+
+		SchemaVersion: 2,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.RegistryV0ToV1{},
+			1: migration.RegistryV1ToV2{},
+		}),
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := registries.ParseRegistryID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: resourceContainerRegistrySchema(),
+
+		CustomizeDiff: pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			sku := d.Get("sku").(string)
+
+			geoReplications := d.Get("georeplications").([]interface{})
+			// if locations have been specified for geo-replication then, the SKU has to be Premium
+			if len(geoReplications) > 0 && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+				return fmt.Errorf("ACR geo-replication can only be applied when using the Premium Sku.")
+			}
+
+			// ensure location is different than any location of the geo-replication
+			var geoReplicationLocations []string
+			for _, v := range geoReplications {
+				v := v.(map[string]interface{})
+				geoReplicationLocations = append(geoReplicationLocations, azure.NormalizeLocation(v["location"]))
+			}
+			location := location.Normalize(d.Get("location").(string))
+			for _, loc := range geoReplicationLocations {
+				if loc == location {
+					return fmt.Errorf("The `georeplications` list cannot contain the location where the Container Registry exists.")
+				}
+			}
+
+			quarantinePolicyEnabled := d.Get("quarantine_policy_enabled").(bool)
+			if quarantinePolicyEnabled && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+				return fmt.Errorf("ACR quarantine policy can only be applied when using the Premium Sku. If you are downgrading from a Premium SKU please unset quarantine_policy_enabled")
+			}
+
+			retentionPolicyEnabled, ok := d.GetOk("retention_policy_in_days")
+			if ok && retentionPolicyEnabled.(int) > 0 && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+				return fmt.Errorf("ACR retention policy can only be applied when using the Premium Sku. If you are downgrading from a Premium SKU please unset `retention_policy_in_days`")
+			}
+
+			trustPolicyEnabled, ok := d.GetOk("trust_policy_enabled")
+			if ok && trustPolicyEnabled.(bool) && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+				return fmt.Errorf("ACR trust policy can only be applied when using the Premium Sku. If you are downgrading from a Premium SKU please unset `trust_policy_enabled` or set `trust_policy_enabled = false`")
+			}
+
+			exportPolicyEnabled := d.Get("export_policy_enabled").(bool)
+			if !exportPolicyEnabled {
+				if !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+					return fmt.Errorf("ACR export policy can only be disabled when using the Premium Sku. If you are downgrading from a Premium SKU please unset `export_policy_enabled` or set `export_policy_enabled = true`")
+				}
+				if d.Get("public_network_access_enabled").(bool) {
+					return fmt.Errorf("To disable export of artifacts, `public_network_access_enabled` must also be `false`")
+				}
+			}
+
+			encryptionEnabled, ok := d.GetOk("encryption")
+			if ok && len(encryptionEnabled.([]interface{})) > 0 && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+				return fmt.Errorf("ACR encryption can only be applied when using the Premium Sku.")
+			}
+
+			// zone redundancy is only available for Premium Sku.
+			zoneRedundancyEnabled, ok := d.GetOk("zone_redundancy_enabled")
+			if ok && zoneRedundancyEnabled.(bool) && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+				return fmt.Errorf("ACR zone redundancy can only be applied when using the Premium Sku")
+			}
+			for _, loc := range geoReplications {
+				loc := loc.(map[string]interface{})
+				zoneRedundancyEnabled, ok := loc["zone_redundancy_enabled"]
+				if ok && zoneRedundancyEnabled.(bool) && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+					return fmt.Errorf("ACR zone redundancy can only be applied when using the Premium Sku")
+				}
+			}
+
+			// anonymous pull is only available for Standard/Premium Sku.
+			if d.Get("anonymous_pull_enabled").(bool) && (!strings.EqualFold(sku, string(registries.SkuNameStandard)) && !strings.EqualFold(sku, string(registries.SkuNamePremium))) {
+				return fmt.Errorf("`anonymous_pull_enabled` can only be applied when using the Standard/Premium Sku")
+			}
+
+			// data endpoint is only available for Premium Sku.
+			if d.Get("data_endpoint_enabled").(bool) && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+				return fmt.Errorf("`data_endpoint_enabled` can only be applied when using the Premium Sku")
+			}
+
+			return nil
+		}),
+	}
+}

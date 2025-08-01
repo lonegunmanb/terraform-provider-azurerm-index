@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func keyVaultChildItemRefreshFunc(secretUri string) pluginsdk.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+		log.Printf("[DEBUG] Checking to see if KeyVault Secret %q is available..", secretUri)
+
+		PTransport := &http.Transport{Proxy: http.ProxyFromEnvironment}
+
+		client := &http.Client{
+			Transport: PTransport,
+		}
+
+		conn, err := client.Get(secretUri)
+		if err != nil {
+			log.Printf("[DEBUG] Didn't find KeyVault secret at %q", secretUri)
+			return nil, "pending", fmt.Errorf("checking secret at %q: %s", secretUri, err)
+		}
+
+		defer conn.Body.Close()
+
+		log.Printf("[DEBUG] Found KeyVault Secret %q", secretUri)
+		return "available", "available", nil
+	}
+}

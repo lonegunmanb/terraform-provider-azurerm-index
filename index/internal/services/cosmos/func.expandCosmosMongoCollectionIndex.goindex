@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cosmos-db/mgmt/2021-10-15/documentdb" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandCosmosMongoCollectionIndex(indexes []interface{}, defaultTtl *int) (*[]documentdb.MongoIndex, bool) {
+	results := make([]documentdb.MongoIndex, 0)
+
+	hasIdKey := false
+
+	if len(indexes) != 0 {
+		for _, v := range indexes {
+			index := v.(map[string]interface{})
+			keys := index["keys"].([]interface{})
+
+			for _, key := range keys {
+				if strings.EqualFold("_id", key.(string)) {
+					hasIdKey = true
+				}
+			}
+
+			results = append(results, documentdb.MongoIndex{
+				Key: &documentdb.MongoIndexKeys{
+					Keys: utils.ExpandStringSlice(index["keys"].([]interface{})),
+				},
+				Options: &documentdb.MongoIndexOptions{
+					Unique: utils.Bool(index["unique"].(bool)),
+				},
+			})
+		}
+	}
+
+	if defaultTtl != nil {
+		results = append(results, documentdb.MongoIndex{
+			Key: &documentdb.MongoIndexKeys{
+				Keys: &[]string{"_ts"},
+			},
+			Options: &documentdb.MongoIndexOptions{
+				ExpireAfterSeconds: pointer.To(int32(*defaultTtl)),
+			},
+		})
+	}
+
+	return &results, hasIdKey
+}

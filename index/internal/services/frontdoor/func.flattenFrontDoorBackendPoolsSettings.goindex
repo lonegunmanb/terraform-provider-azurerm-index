@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFrontDoorBackendPoolsSettings(input *frontdoors.BackendPoolsSettings) flattenedBackendPoolSettings {
+	if input == nil {
+		return flattenedBackendPoolSettings{
+			enforceBackendPoolsCertificateNameCheck: true,
+			backendPoolsSendReceiveTimeoutSeconds:   60,
+		}
+	}
+
+	enforceCertificateNameCheck := false
+	sendReceiveTimeoutSeconds := 0
+	if input.EnforceCertificateNameCheck != nil && *input.EnforceCertificateNameCheck != "" && *input.EnforceCertificateNameCheck == frontdoors.EnforceCertificateNameCheckEnabledStateEnabled {
+		enforceCertificateNameCheck = true
+	}
+	if input.SendRecvTimeoutSeconds != nil {
+		sendReceiveTimeoutSeconds = int(*input.SendRecvTimeoutSeconds)
+	}
+
+	return flattenedBackendPoolSettings{
+		enforceBackendPoolsCertificateNameCheck: enforceCertificateNameCheck,
+		backendPoolsSendReceiveTimeoutSeconds:   sendReceiveTimeoutSeconds,
+	}
+}

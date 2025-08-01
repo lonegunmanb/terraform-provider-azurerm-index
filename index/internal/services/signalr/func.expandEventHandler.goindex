@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2023-02-01/webpubsub"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	eventhubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandEventHandler(input []interface{}) *[]webpubsub.EventHandler {
+	if len(input) == 0 {
+		return nil
+	}
+
+	results := make([]webpubsub.EventHandler, 0)
+
+	for _, eventHandlerItem := range input {
+		block := eventHandlerItem.(map[string]interface{})
+		eventHandlerSettings := webpubsub.EventHandler{
+			UrlTemplate: block["url_template"].(string),
+		}
+
+		if v, ok := block["user_event_pattern"]; ok {
+			eventHandlerSettings.UserEventPattern = utils.String(v.(string))
+		}
+
+		if v, ok := block["system_events"]; ok {
+			systemEvents := make([]string, 0)
+			for _, item := range v.(*pluginsdk.Set).List() {
+				systemEvents = append(systemEvents, item.(string))
+			}
+			eventHandlerSettings.SystemEvents = &systemEvents
+		}
+
+		if v, ok := block["auth"].([]interface{}); ok {
+			if len(v) > 0 {
+				eventHandlerSettings.Auth = expandAuth(v)
+			}
+		}
+
+		results = append(results, eventHandlerSettings)
+	}
+	return &results
+}

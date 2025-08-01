@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/chaosstudio
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/chaosstudio/2023-11-01/experiments"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/chaosstudio/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenSelector(input []experiments.Selector) (*[]SelectorSchema, error) {
+	output := make([]SelectorSchema, 0)
+
+	if len(input) == 0 {
+		return &output, nil
+	}
+
+	for _, selector := range input {
+		targetIds := make([]string, 0)
+		ls, ok := selector.(experiments.ListSelector)
+		if !ok {
+			return nil, fmt.Errorf("selector is not of type ListSelector")
+		}
+		for _, t := range ls.Targets {
+			targetIds = append(targetIds, t.Id)
+		}
+		output = append(output, SelectorSchema{
+			Name:      ls.Id,
+			TargetIds: targetIds,
+		})
+	}
+
+	return &output, nil
+}

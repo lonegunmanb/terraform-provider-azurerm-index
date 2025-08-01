@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenOrchestratedVirtualMachineScaleSetNetworkInterfaceIPConfiguration(input *[]virtualmachinescalesets.VirtualMachineScaleSetIPConfiguration) []VirtualMachineScaleSetNetworkInterfaceIPConfiguration {
+	if input == nil {
+		return []VirtualMachineScaleSetNetworkInterfaceIPConfiguration{}
+	}
+
+	ipConfigurations := make([]VirtualMachineScaleSetNetworkInterfaceIPConfiguration, 0)
+	for _, v := range *input {
+		var subnetId string
+		var primary bool
+		if props := v.Properties; props != nil {
+			if props.Subnet != nil && props.Subnet.Id != nil {
+				subnetId = *props.Subnet.Id
+			}
+
+			if props.Primary != nil {
+				primary = *props.Primary
+			}
+
+			ipConfigurations = append(ipConfigurations, VirtualMachineScaleSetNetworkInterfaceIPConfiguration{
+				Name:                                    v.Name,
+				SubnetId:                                subnetId,
+				Primary:                                 primary,
+				PublicIPAddress:                         flattenOrchestratedVirtualMachineScaleSetPublicIPAddress(props.PublicIPAddressConfiguration),
+				ApplicationGatewayBackendAddressPoolIds: flattenSubResourcesToStringIDs(props.ApplicationGatewayBackendAddressPools),
+				ApplicationSecurityGroupIds:             flattenSubResourcesToStringIDs(props.ApplicationSecurityGroups),
+				LoadBalancerBackendAddressPoolIds:       flattenSubResourcesToStringIDs(props.LoadBalancerBackendAddressPools),
+			})
+		}
+	}
+
+	return ipConfigurations
+}

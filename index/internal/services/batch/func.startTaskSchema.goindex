@@ -1,0 +1,169 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/batch/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func startTaskSchema() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"command_line": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"container": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"run_options": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"image_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"registry": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						Elem: &pluginsdk.Resource{
+							Schema: containerRegistry(),
+						},
+					},
+					"working_directory": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						ValidateFunc: validation.StringInSlice([]string{
+							string(pool.ContainerWorkingDirectoryTaskWorkingDirectory),
+							string(pool.ContainerWorkingDirectoryContainerImageDefault),
+						}, false),
+					},
+				},
+			},
+		},
+
+		"task_retry_maximum": {
+			Type:     pluginsdk.TypeInt,
+			Optional: true,
+		},
+
+		"wait_for_success": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+		},
+
+		"common_environment_properties": {
+			Type:     pluginsdk.TypeMap,
+			Optional: true,
+			Elem: &pluginsdk.Schema{
+				Type: pluginsdk.TypeString,
+			},
+		},
+
+		"user_identity": {
+			Type:     pluginsdk.TypeList,
+			Required: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"user_name": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						AtLeastOneOf: []string{"start_task.0.user_identity.0.user_name", "start_task.0.user_identity.0.auto_user"},
+					},
+					"auto_user": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						MaxItems: 1,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"elevation_level": {
+									Type:     pluginsdk.TypeString,
+									Optional: true,
+									Default:  string(pool.ElevationLevelNonAdmin),
+									ValidateFunc: validation.StringInSlice([]string{
+										string(pool.ElevationLevelNonAdmin),
+										string(pool.ElevationLevelAdmin),
+									}, false),
+								},
+								"scope": {
+									Type:     pluginsdk.TypeString,
+									Optional: true,
+									Default:  string(pool.AutoUserScopeTask),
+									ValidateFunc: validation.StringInSlice([]string{
+										string(pool.AutoUserScopeTask),
+										string(pool.AutoUserScopePool),
+									}, false),
+								},
+							},
+						},
+						AtLeastOneOf: []string{"start_task.0.user_identity.0.user_name", "start_task.0.user_identity.0.auto_user"},
+					},
+				},
+			},
+		},
+		// lintignore:XS003
+		"resource_file": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"auto_storage_container_name": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+					"blob_prefix": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+					"file_mode": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+					"file_path": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+					"http_url": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+					"storage_container_url": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+					"user_assigned_identity_id": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+				},
+			},
+		},
+	}
+}

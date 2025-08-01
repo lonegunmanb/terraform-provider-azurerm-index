@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/md
+import (
+	"fmt"
+	"os"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func (m *Mark) buildStruct() {
+	fillField := func(f *model.Field, parent string) {
+		if f.Typ == model.FieldTypeBlock {
+			// find block
+			if b, msg := m.blockOfName(f.BlockTypeName, parent, f.Pos); b != nil {
+				f.Subs = b.asProperties()
+				if msg != "" {
+					f.FormatErr = msg
+				}
+			} else {
+				if b2, _ := m.blockOfName(f.Name, parent, f.Pos); b2 != nil {
+					f.FormatErr = fmt.Sprintf("misspell of name from `%s` to `%s`", f.Name, f.BlockTypeName)
+				} else {
+					f.FormatErr = fmt.Sprintf("`%s` %s", util.ItalicCode(f.Name), BlcokNotDefined)
+				}
+			}
+		}
+	}
+
+	for _, f := range m.Fields {
+		fillField(f, "")
+	}
+
+	// build for block fields
+	for _, b := range m.Blocks {
+		for _, f := range b.Fields {
+			fillField(f, b.Name)
+		}
+	}
+}

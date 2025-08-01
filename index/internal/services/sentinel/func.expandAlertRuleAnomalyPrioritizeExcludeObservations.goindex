@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/workspaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
+)
+func expandAlertRuleAnomalyPrioritizeExcludeObservations(builtInRule *[]azuresdkhacks.AnomalySecurityMLAnalyticsPrioritizeExcludeObservations, input []AnomalyRulePriorityModel) (*[]azuresdkhacks.AnomalySecurityMLAnalyticsPrioritizeExcludeObservations, error) {
+	if builtInRule != nil && len(*builtInRule) < len(input) {
+		return nil, fmt.Errorf("the number of `prioritized_exclude_observation` must equals or less than %d", len(*builtInRule))
+	}
+
+	if builtInRule == nil {
+		return nil, nil
+	}
+
+	inputValueMap := make(map[string]AnomalyRulePriorityModel)
+	for _, v := range input {
+		inputValueMap[strings.ToLower(v.Name)] = v
+	}
+
+	output := make([]azuresdkhacks.AnomalySecurityMLAnalyticsPrioritizeExcludeObservations, 0)
+	for _, v := range *builtInRule {
+		if v.Name == nil {
+			return nil, fmt.Errorf("the name of built in `multi_select_observation` is nil")
+		}
+		// copy from built in rule
+		o := azuresdkhacks.AnomalySecurityMLAnalyticsPrioritizeExcludeObservations{
+			Name:           v.Name,
+			Description:    v.Description,
+			Prioritize:     v.Prioritize,
+			Exclude:        v.Exclude,
+			DataType:       v.DataType,
+			SequenceNumber: v.SequenceNumber,
+			Rerun:          v.Rerun,
+		}
+		if in, ok := inputValueMap[strings.ToLower(*v.Name)]; ok {
+			o.Exclude = &in.Exclude
+			o.Prioritize = &in.Prioritize
+			delete(inputValueMap, strings.ToLower(*v.Name))
+		}
+		output = append(output, o)
+	}
+
+	if len(inputValueMap) != 0 {
+		keys := make([]string, 0)
+		for k := range inputValueMap {
+			keys = append(keys, k)
+		}
+		return nil, fmt.Errorf("the following `prioritized_exclude_observation` are not supported: %s", strings.Join(keys, ", "))
+	}
+
+	return &output, nil
+}

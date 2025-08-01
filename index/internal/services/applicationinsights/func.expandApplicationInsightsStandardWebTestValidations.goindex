@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	webtests "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2022-06-15/webtestsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationInsightsStandardWebTestValidations(input []ValidationRuleModel) webtests.WebTestPropertiesValidationRules {
+	rules := webtests.WebTestPropertiesValidationRules{
+		SSLCheck: pointer.To(false),
+	}
+
+	if len(input) == 0 {
+		return rules
+	}
+
+	validationsInput := input[0]
+	rules.ExpectedHTTPStatusCode = pointer.To(validationsInput.ExpectedStatusCode)
+
+	// if URL http, sslCheck cannot be enabled - Catch in CustomiseDiff
+	rules.SSLCheck = pointer.To(validationsInput.SSLCheck)
+	// if sslCheck not enabled, SSLCertRemainingLifetimeCheck cannot be enabled
+	if validationsInput.CertificateRemainingLifetime != 0 && validationsInput.SSLCheck {
+		rules.SSLCertRemainingLifetimeCheck = pointer.To(validationsInput.CertificateRemainingLifetime)
+	}
+	rules.ContentValidation = expandApplicationInsightsStandardWebTestContentValidations(validationsInput.Content)
+
+	return rules
+}

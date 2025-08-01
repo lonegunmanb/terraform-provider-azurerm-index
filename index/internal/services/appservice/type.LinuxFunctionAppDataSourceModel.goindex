@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+type LinuxFunctionAppDataSourceModel struct {
+	Name               string `tfschema:"name"`
+	ResourceGroup      string `tfschema:"resource_group_name"`
+	Location           string `tfschema:"location"`
+	ServicePlanId      string `tfschema:"service_plan_id"`
+	StorageAccountName string `tfschema:"storage_account_name"`
+
+	StorageAccountKey       string `tfschema:"storage_account_access_key"`
+	StorageUsesMSI          bool   `tfschema:"storage_uses_managed_identity"` // Storage uses MSI not account key
+	StorageKeyVaultSecretID string `tfschema:"storage_key_vault_secret_id"`
+
+	AppSettings                      map[string]string                    `tfschema:"app_settings"`
+	AuthSettings                     []helpers.AuthSettings               `tfschema:"auth_settings"`
+	AuthV2Settings                   []helpers.AuthV2Settings             `tfschema:"auth_settings_v2"`
+	Availability                     string                               `tfschema:"availability"`
+	Backup                           []helpers.Backup                     `tfschema:"backup"` // Not supported on Dynamic or Basic plans
+	BuiltinLogging                   bool                                 `tfschema:"builtin_logging_enabled"`
+	ClientCertEnabled                bool                                 `tfschema:"client_certificate_enabled"`
+	ClientCertMode                   string                               `tfschema:"client_certificate_mode"`
+	ClientCertExclusionPaths         string                               `tfschema:"client_certificate_exclusion_paths"`
+	ConnectionStrings                []helpers.ConnectionString           `tfschema:"connection_string"`
+	DailyMemoryTimeQuota             int64                                `tfschema:"daily_memory_time_quota"`
+	Enabled                          bool                                 `tfschema:"enabled"`
+	FunctionExtensionsVersion        string                               `tfschema:"functions_extension_version"`
+	ForceDisableContentShare         bool                                 `tfschema:"content_share_force_disabled"`
+	HttpsOnly                        bool                                 `tfschema:"https_only"`
+	PublicNetworkAccess              bool                                 `tfschema:"public_network_access_enabled"`
+	PublishingDeployBasicAuthEnabled bool                                 `tfschema:"webdeploy_publish_basic_authentication_enabled"`
+	PublishingFTPBasicAuthEnabled    bool                                 `tfschema:"ftp_publish_basic_authentication_enabled"`
+	SiteConfig                       []helpers.SiteConfigLinuxFunctionApp `tfschema:"site_config"`
+	StickySettings                   []helpers.StickySettings             `tfschema:"sticky_settings"`
+	Tags                             map[string]string                    `tfschema:"tags"`
+
+	VirtualNetworkSubnetID        string   `tfschema:"virtual_network_subnet_id"`
+	CustomDomainVerificationId    string   `tfschema:"custom_domain_verification_id"`
+	DefaultHostname               string   `tfschema:"default_hostname"`
+	HostingEnvId                  string   `tfschema:"hosting_environment_id"`
+	Kind                          string   `tfschema:"kind"`
+	OutboundIPAddresses           string   `tfschema:"outbound_ip_addresses"`
+	OutboundIPAddressList         []string `tfschema:"outbound_ip_address_list"`
+	PossibleOutboundIPAddresses   string   `tfschema:"possible_outbound_ip_addresses"`
+	PossibleOutboundIPAddressList []string `tfschema:"possible_outbound_ip_address_list"`
+	Usage                         string   `tfschema:"usage"`
+
+	SiteCredentials []helpers.SiteCredential `tfschema:"site_credential"`
+}

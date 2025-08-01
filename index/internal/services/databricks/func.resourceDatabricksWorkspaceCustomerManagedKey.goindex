@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/migration"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceDatabricksWorkspaceCustomerManagedKey() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: databricksWorkspaceCustomerManagedKeyCreateUpdate,
+		Read:   databricksWorkspaceCustomerManagedKeyRead,
+		Update: databricksWorkspaceCustomerManagedKeyCreateUpdate,
+		Delete: databricksWorkspaceCustomerManagedKeyDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		DeprecationMessage: "The resource `azurerm_databricks_workspace_customer_managed_key` will be removed in v5.0 of the AzureRM Provider in favour of the `azurerm_databricks_workspace_root_dbfs_customer_managed_key` resource.",
+
+		Importer: pluginsdk.ImporterValidatingResourceIdThen(func(id string) error {
+			_, err := workspaces.ParseWorkspaceID(id)
+			return err
+		}, func(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) ([]*pluginsdk.ResourceData, error) {
+			// validate that the passed ID is a valid CMK configuration ID
+			id, err := workspaces.ParseWorkspaceID(d.Id())
+			if err != nil {
+				return []*pluginsdk.ResourceData{d}, err
+			}
+
+			// set the new values for the CMK resource
+			d.SetId(id.ID())
+			d.Set("workspace_id", id.ID())
+
+			return []*pluginsdk.ResourceData{d}, nil
+		}),
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.CustomerManagedKeyV0ToV1{},
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"workspace_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: workspaces.ValidateWorkspaceID,
+			},
+
+			// Make this key vault key id and abstract everything from the string...
+			"key_vault_key_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: keyVaultValidate.KeyVaultChildID,
+			},
+		},
+	}
+}

@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/synapse/mgmt/v2.0/synapse" // nolint: staticcheck
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	mssqlValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSynapseSqlPoolRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	sqlClient := meta.(*clients.Client).Synapse.SqlPoolClient
+	sqlPTDEClient := meta.(*clients.Client).Synapse.SqlPoolTransparentDataEncryptionClient
+	geoBackUpClient := meta.(*clients.Client).Synapse.SqlPoolGeoBackupPoliciesClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.SqlPoolID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := sqlClient.Get(ctx, id.ResourceGroup, id.WorkspaceName, id.Name)
+	if err != nil {
+		if utils.ResponseWasNotFound(resp.Response) {
+			log.Printf("[INFO] %s was not found - removing from state", *id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
+	}
+
+	transparentDataEncryption, err := sqlPTDEClient.Get(ctx, id.ResourceGroup, id.WorkspaceName, id.Name)
+	if err != nil {
+		return fmt.Errorf("retrieving Transparent Data Encryption settings of %s: %+v", *id, err)
+	}
+
+	geoBackupPolicy, err := geoBackUpClient.Get(ctx, id.ResourceGroup, id.WorkspaceName, id.Name)
+	if err != nil {
+		return fmt.Errorf("retrieving Geo Backup Policy of %s: %+v", *id, err)
+	}
+
+	workspaceId := parse.NewWorkspaceID(id.SubscriptionId, id.ResourceGroup, id.WorkspaceName).ID()
+	d.Set("name", id.Name)
+	d.Set("synapse_workspace_id", workspaceId)
+	if resp.Sku != nil {
+		d.Set("sku_name", resp.Sku.Name)
+	}
+
+	if props := resp.SQLPoolResourceProperties; props != nil {
+		d.Set("collation", props.Collation)
+		d.Set("storage_account_type", props.StorageAccountType)
+	}
+
+	geoBackupEnabled := true
+	if geoBackupProps := geoBackupPolicy.GeoBackupPolicyProperties; geoBackupProps != nil {
+		geoBackupEnabled = geoBackupProps.State == synapse.GeoBackupPolicyStateEnabled
+	}
+	d.Set("geo_backup_policy_enabled", geoBackupEnabled)
+
+	if tdeProps := transparentDataEncryption.TransparentDataEncryptionProperties; tdeProps != nil {
+		d.Set("data_encrypted", tdeProps.Status == synapse.TransparentDataEncryptionStatusEnabled)
+	}
+
+	// whole "restore" block is not returned. to avoid conflict, so set it from the old state
+	d.Set("restore", d.Get("restore").([]interface{}))
+
+	return tags.FlattenAndSet(d, resp.Tags)
+}

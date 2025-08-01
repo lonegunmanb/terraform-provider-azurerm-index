@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/customermanagedkeys
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	hsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func ExpandKeyVaultOrManagedHSMKeyWithCustomFieldKey(d interface{}, requireVersion VersionType, keyVaultFieldName, hsmFieldName string, keyVaultEnv, hsmEnv environments.Api) (*KeyVaultOrManagedHSMKey, error) {
+	key := &KeyVaultOrManagedHSMKey{}
+	var err error
+	var vaultKeyStr, hsmKeyStr string
+	if rd, ok := d.(*pluginsdk.ResourceData); ok {
+		if keyRaw, ok := rd.GetOk(keyVaultFieldName); ok {
+			vaultKeyStr = keyRaw.(string)
+		} else if keyRaw, ok = rd.GetOk(hsmFieldName); ok {
+			hsmKeyStr = keyRaw.(string)
+		}
+	} else if obj, ok := d.(map[string]interface{}); ok {
+		if keyRaw, ok := obj[keyVaultFieldName]; ok {
+			vaultKeyStr, _ = keyRaw.(string)
+		}
+		if keyRaw, ok := obj[hsmFieldName]; ok {
+			hsmKeyStr, _ = keyRaw.(string)
+		}
+	} else {
+		return nil, fmt.Errorf("not supported data type to parse CMK: %T", d)
+	}
+
+	switch {
+	case vaultKeyStr != "":
+		if key.KeyVaultKeyId, err = parseKeyvaultID(vaultKeyStr, requireVersion, keyVaultEnv); err != nil {
+			return nil, err
+		}
+	case hsmKeyStr != "":
+		if key.ManagedHSMKeyId, key.ManagedHSMKeyVersionlessId, err = parseManagedHSMKey(hsmKeyStr, requireVersion, hsmEnv); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, nil
+	}
+	return key, err
+}

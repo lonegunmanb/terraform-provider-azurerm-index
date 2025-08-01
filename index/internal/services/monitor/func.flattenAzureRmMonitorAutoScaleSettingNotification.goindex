@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2022-10-01/autoscalesettings"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAzureRmMonitorAutoScaleSettingNotification(notifications *[]autoscalesettings.AutoscaleNotification) []interface{} {
+	results := make([]interface{}, 0)
+
+	if notifications == nil {
+		return results
+	}
+
+	for _, notification := range *notifications {
+		result := make(map[string]interface{})
+
+		emails := make([]interface{}, 0)
+		if email := notification.Email; email != nil {
+			block := make(map[string]interface{})
+
+			if send := email.SendToSubscriptionAdministrator; send != nil {
+				block["send_to_subscription_administrator"] = *send
+			}
+
+			if send := email.SendToSubscriptionCoAdministrators; send != nil {
+				block["send_to_subscription_co_administrator"] = *send
+			}
+
+			customEmails := make([]interface{}, 0)
+			if custom := email.CustomEmails; custom != nil {
+				for _, v := range *custom {
+					customEmails = append(customEmails, v)
+				}
+			}
+			block["custom_emails"] = customEmails
+
+			emails = append(emails, block)
+		}
+		result["email"] = emails
+
+		webhooks := make([]interface{}, 0)
+		if hooks := notification.WebHooks; hooks != nil {
+			for _, v := range *hooks {
+				hook := make(map[string]interface{})
+
+				if v.ServiceUri != nil {
+					hook["service_uri"] = *v.ServiceUri
+				}
+
+				props := make(map[string]string)
+				if webHookProps := v.Properties; webHookProps != nil {
+					for key, value := range *v.Properties {
+						props[key] = value
+					}
+					hook["properties"] = props
+					webhooks = append(webhooks, hook)
+				}
+			}
+		}
+
+		result["webhook"] = webhooks
+
+		results = append(results, result)
+	}
+	return results
+}

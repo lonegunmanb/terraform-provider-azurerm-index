@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"fmt"
+	"log"
+	"net/url"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	eventhubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	servicebusValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func expandIoTHubRoutes(d *pluginsdk.ResourceData) *[]devices.RouteProperties {
+	routeList := d.Get("route").([]interface{})
+
+	routeProperties := make([]devices.RouteProperties, 0)
+
+	for _, routeRaw := range routeList {
+		route := routeRaw.(map[string]interface{})
+
+		name := route["name"].(string)
+		source := devices.RoutingSource(route["source"].(string))
+		condition := route["condition"].(string)
+
+		endpointNamesRaw := route["endpoint_names"].([]interface{})
+
+		isEnabled := route["enabled"].(bool)
+
+		routeProperties = append(routeProperties, devices.RouteProperties{
+			Name:          &name,
+			Source:        source,
+			Condition:     &condition,
+			EndpointNames: utils.ExpandStringSlice(endpointNamesRaw),
+			IsEnabled:     &isEnabled,
+		})
+	}
+
+	return &routeProperties
+}

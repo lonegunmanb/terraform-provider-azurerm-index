@@ -1,0 +1,74 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/entities"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
+)
+func flattenEntity(entity map[string]interface{}) map[string]interface{} {
+	delete(entity, "PartitionKey")
+	delete(entity, "RowKey")
+	delete(entity, "Timestamp")
+
+	result := map[string]interface{}{}
+	for k, v := range entity {
+		// skip ODATA annotation returned with fullmetadata
+		if strings.HasPrefix(k, "odata.") || strings.HasSuffix(k, "@odata.type") {
+			continue
+		}
+		if dtype, ok := entity[k+"@odata.type"]; ok {
+			switch dtype {
+			case "Edm.Boolean":
+				result[k] = fmt.Sprint(v)
+			case "Edm.Double":
+				result[k] = fmt.Sprintf("%f", v)
+			case "Edm.Int32", "Edm.Int64":
+				// `v` returned as string for int 64
+				result[k] = fmt.Sprint(v)
+			case "Edm.String":
+				result[k] = v
+			default:
+				log.Printf("[WARN] key %q with unexpected @odata.type %q", k, dtype)
+				continue
+			}
+
+			result[k+"@odata.type"] = dtype
+		} else {
+			// special handling for property types that do not require the annotation to be present
+			// https://docs.microsoft.com/en-us/rest/api/storageservices/payload-format-for-table-service-operations#property-types-in-a-json-feed
+			switch c := v.(type) {
+			case bool:
+				result[k] = fmt.Sprint(v)
+				result[k+"@odata.type"] = "Edm.Boolean"
+			case float64:
+				f64 := v.(float64)
+				if v == float64(int64(f64)) {
+					result[k] = fmt.Sprintf("%d", int64(f64))
+					result[k+"@odata.type"] = "Edm.Int32"
+				} else {
+					// fmt.Sprintf("%f", v) will return `123.123000` for `123.123`, have to use fmt.Sprint
+					result[k] = fmt.Sprint(v)
+					result[k+"@odata.type"] = "Edm.Double"
+				}
+			case string:
+				result[k] = v
+			default:
+				log.Printf("[WARN] key %q with unexpected type %T", k, c)
+			}
+		}
+	}
+
+	return result
+}

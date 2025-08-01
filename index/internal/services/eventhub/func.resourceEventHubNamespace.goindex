@@ -1,0 +1,273 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/authorizationrulesnamespaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/eventhubsclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/networkrulesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2022-01-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceEventHubNamespace() *pluginsdk.Resource {
+	resource := &pluginsdk.Resource{
+		Create: resourceEventHubNamespaceCreate,
+		Read:   resourceEventHubNamespaceRead,
+		Update: resourceEventHubNamespaceUpdate,
+		Delete: resourceEventHubNamespaceDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := namespaces.ParseNamespaceID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.ValidateEventHubNamespaceName(),
+			},
+
+			"location": commonschema.Location(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"sku": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(namespaces.SkuNameBasic),
+					string(namespaces.SkuNameStandard),
+					string(namespaces.SkuNamePremium),
+				}, false),
+			},
+
+			"capacity": {
+				Type:     pluginsdk.TypeInt,
+				Optional: true,
+				Default:  1,
+			},
+
+			"auto_inflate_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"dedicated_cluster_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: eventhubsclusters.ValidateClusterID,
+			},
+
+			"identity": commonschema.SystemAssignedUserAssignedIdentityOptional(),
+
+			"maximum_throughput_units": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntBetween(0, 40),
+			},
+
+			"network_rulesets": {
+				Type:       pluginsdk.TypeList,
+				Optional:   true,
+				MaxItems:   1,
+				Computed:   true,
+				ConfigMode: pluginsdk.SchemaConfigModeAttr,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"default_action": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(networkrulesets.DefaultActionAllow),
+								string(networkrulesets.DefaultActionDeny),
+							}, false),
+						},
+
+						"public_network_access_enabled": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  true,
+						},
+
+						"trusted_service_access_enabled": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+						},
+
+						// 128 limit per https://docs.microsoft.com/azure/event-hubs/event-hubs-quotas
+						// Returned value of the `virtual_network_rule` array does not honor the input order,
+						// possibly a service design, thus changed to TypeSet
+						"virtual_network_rule": {
+							Type:       pluginsdk.TypeSet,
+							Optional:   true,
+							MaxItems:   128,
+							ConfigMode: pluginsdk.SchemaConfigModeAttr,
+							Set:        resourceVnetRuleHash,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									// the API returns the subnet ID's resource group name in lowercase
+									// https://github.com/Azure/azure-sdk-for-go/issues/5855
+									"subnet_id": {
+										Type:             pluginsdk.TypeString,
+										Required:         true,
+										ValidateFunc:     commonids.ValidateSubnetID,
+										DiffSuppressFunc: suppress.CaseDifference,
+									},
+
+									"ignore_missing_virtual_network_service_endpoint": {
+										Type:     pluginsdk.TypeBool,
+										Optional: true,
+									},
+								},
+							},
+						},
+
+						// 128 limit per https://docs.microsoft.com/azure/event-hubs/event-hubs-quotas
+						"ip_rule": {
+							Type:       pluginsdk.TypeList,
+							Optional:   true,
+							MaxItems:   128,
+							ConfigMode: pluginsdk.SchemaConfigModeAttr,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"ip_mask": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+									},
+
+									"action": {
+										Type:     pluginsdk.TypeString,
+										Optional: true,
+										Default:  string(networkrulesets.NetworkRuleIPActionAllow),
+										ValidateFunc: validation.StringInSlice([]string{
+											string(networkrulesets.NetworkRuleIPActionAllow),
+										}, false),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"local_authentication_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"minimum_tls_version": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(namespaces.TlsVersionOnePointTwo),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(namespaces.TlsVersionOnePointTwo),
+				}, false),
+			},
+
+			"public_network_access_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"default_primary_connection_string_alias": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"default_secondary_connection_string_alias": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"default_primary_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"default_primary_key": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"default_secondary_connection_string": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"default_secondary_key": {
+				Type:      pluginsdk.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
+
+			"tags": commonschema.Tags(),
+		},
+
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+				oldSku, newSku := d.GetChange("sku")
+				if d.HasChange("sku") {
+					if strings.EqualFold(newSku.(string), string(namespaces.SkuNamePremium)) || strings.EqualFold(oldSku.(string), string(namespaces.SkuTierPremium)) {
+						log.Printf("[DEBUG] cannot migrate a namespace from or to Premium SKU")
+						d.ForceNew("sku")
+					}
+				}
+				return nil
+			}),
+			pluginsdk.CustomizeDiffShim(eventhubTLSVersionDiff),
+		),
+	}
+
+	if !features.FivePointOh() {
+		resource.Schema["minimum_tls_version"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  string(namespaces.TlsVersionOnePointTwo),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(namespaces.TlsVersionOnePointZero),
+				string(namespaces.TlsVersionOnePointOne),
+				string(namespaces.TlsVersionOnePointTwo),
+			}, false),
+		}
+	}
+	return resource
+}

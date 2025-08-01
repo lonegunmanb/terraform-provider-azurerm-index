@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenVpnSiteLinks(input *[]virtualwans.VpnSiteLink) []interface{} {
+	if input == nil {
+		return make([]interface{}, 0)
+	}
+
+	output := make([]interface{}, 0)
+
+	for _, e := range *input {
+		var name string
+		if e.Name != nil {
+			name = *e.Name
+		}
+
+		id := ""
+		if e.Id != nil {
+			id = *e.Id
+		}
+
+		var (
+			ipAddress        string
+			fqdn             string
+			linkProviderName string
+			linkSpeed        int
+			bgpProperty      []interface{}
+		)
+
+		if prop := e.Properties; prop != nil {
+			if prop.IPAddress != nil {
+				ipAddress = *prop.IPAddress
+			}
+
+			if prop.Fqdn != nil {
+				fqdn = *prop.Fqdn
+			}
+
+			if linkProp := prop.LinkProperties; linkProp != nil {
+				if linkProp.LinkProviderName != nil {
+					linkProviderName = *linkProp.LinkProviderName
+				}
+				if linkProp.LinkSpeedInMbps != nil {
+					linkSpeed = int(*linkProp.LinkSpeedInMbps)
+				}
+			}
+
+			bgpProperty = flattenVpnSiteVpnSiteBgpSettings(prop.BgpProperties)
+		}
+
+		link := map[string]interface{}{
+			"name":          name,
+			"id":            id,
+			"provider_name": linkProviderName,
+			"speed_in_mbps": linkSpeed,
+			"ip_address":    ipAddress,
+			"fqdn":          fqdn,
+			"bgp":           bgpProperty,
+		}
+
+		output = append(output, link)
+	}
+
+	return output
+}

@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"github.com/google/uuid"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/jackofallops/giovanni/storage/accesscontrol"
+)
+func FlattenDataLakeGen2AceList(d *pluginsdk.ResourceData, acl accesscontrol.ACL) []interface{} {
+	existingACLs, _ := ExpandDataLakeGen2AceList(d.Get("ace").(*pluginsdk.Set).List())
+	output := make([]interface{}, 0)
+
+	for _, v := range acl.Entries {
+		// Filter ACL defalt entries (ones without ID value, for scopes 'user', 'group', 'other', 'mask').
+		//    Include default entries, only if use in a configuration, to match the state file.
+		if v.TagQualifier == nil && existingACLs != nil && !isACLContainingEntry(existingACLs, v.TagType, v.TagQualifier, v.IsDefault) {
+			continue
+		}
+
+		ace := make(map[string]interface{})
+
+		scope := "access"
+		if v.IsDefault {
+			scope = "default"
+		}
+		ace["scope"] = scope
+		ace["type"] = string(v.TagType)
+		id := ""
+		if v.TagQualifier != nil {
+			id = v.TagQualifier.String()
+		}
+		ace["id"] = id
+		ace["permissions"] = v.Permissions
+
+		output = append(output, ace)
+	}
+
+	return output
+}

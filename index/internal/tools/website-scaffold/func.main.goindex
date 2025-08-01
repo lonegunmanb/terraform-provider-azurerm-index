@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/magodo/terraform-provider-azurerm-example-gen/examplegen"
+)
+func main() {
+	f := flag.NewFlagSet("example", flag.ExitOnError)
+
+	resourceName := f.String("name", "", "The name of the Data Source/Resource which should be generated")
+	brandName := f.String("brand-name", "", "The friendly/brand name of this Data Source/Resource (e.g. Resource Group)")
+	resourceId := f.String("resource-id", "", "An Azure Resource ID showing an example of how to Import this Resource")
+	resourceType := f.String("type", "", "Whether this is a Data Source (data) or a Resource (resource)")
+	websitePath := f.String("website-path", "", "The relative path to the website folder")
+
+	// example generation related flags
+	genExample := f.Bool("example", false, "Wether to generate the Terraform configuration example from AccTest")
+	rootDir := f.String("root-dir", "", "The path to the project root. Required when `-example` is set.")
+	servicePkg := f.String("service-pkg", "", "The service package where the AccTest resides in. Required when `-example` is set.")
+	testCase := f.String("testcase", "", "The name of the AccTest where the Terraform configuration derives from. Required when `-example` is set.")
+
+	_ = f.Parse(os.Args[1:])
+
+	quitWithError := func(message string) {
+		log.Print(message)
+		os.Exit(1)
+	}
+
+	if resourceName == nil || *resourceName == "" {
+		quitWithError("The name of the Data Source/Resource must be specified via `-name`")
+		return
+	}
+
+	if brandName == nil || *brandName == "" {
+		quitWithError("The friendly/brannd name of the Data Source/Resource must be specified via `-brand`")
+		return
+	}
+
+	if resourceType == nil || *resourceType == "" {
+		quitWithError("The type of the Data Source/Resource must be specified via `-type`")
+		return
+	}
+
+	if *resourceType != "data" && *resourceType != "resource" {
+		quitWithError("The type of the Data Source/Resource specified via `-type` must be either `data` or `resource`")
+		return
+	}
+
+	if websitePath == nil || *websitePath == "" {
+		quitWithError("The Relative Website Path must be specified via `-website-path`")
+		return
+	}
+
+	isResource := *resourceType == "resource"
+	if isResource && (resourceId == nil || *resourceId == "") {
+		quitWithError("An example of an Azure Resource ID must be specified via `-resource-id` when scaffolding for a Resource")
+		return
+	}
+
+	var expsrc *examplegen.ExampleSource
+	if *genExample {
+		expsrc = &examplegen.ExampleSource{
+			RootDir:     *rootDir,
+			ServicePkgs: []string{*servicePkg},
+			TestCase:    *testCase,
+		}
+	}
+
+	if err := run(*resourceName, *brandName, resourceId, isResource, *websitePath, expsrc); err != nil {
+		panic(err)
+	}
+}

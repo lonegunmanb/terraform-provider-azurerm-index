@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/kermit/sdk/web/2022-09-01/web"
+)
+func expandAadAuthV2Settings(input []AadAuthV2Settings) *webapps.AzureActiveDirectory {
+	result := &webapps.AzureActiveDirectory{
+		Enabled: pointer.To(false),
+	}
+
+	if len(input) == 1 {
+		aad := input[0]
+		result = &webapps.AzureActiveDirectory{
+			Enabled: pointer.To(true),
+			Registration: &webapps.AzureActiveDirectoryRegistration{
+				OpenIdIssuer: pointer.To(aad.TenantAuthURI),
+				ClientId:     pointer.To(aad.ClientId),
+			},
+			Login: &webapps.AzureActiveDirectoryLogin{
+				DisableWWWAuthenticate: pointer.To(aad.DisableWWWAuth),
+			},
+		}
+
+		if aad.ClientSecretSettingName != "" {
+			result.Registration.ClientSecretSettingName = pointer.To(aad.ClientSecretSettingName)
+		}
+
+		if aad.ClientSecretCertificateThumbprint != "" {
+			result.Registration.ClientSecretCertificateThumbprint = pointer.To(aad.ClientSecretCertificateThumbprint)
+		}
+
+		if len(aad.LoginParameters) > 0 {
+			params := make([]string, 0)
+			for k, v := range aad.LoginParameters {
+				params = append(params, fmt.Sprintf("%s=%s", k, v))
+			}
+			result.Login.LoginParameters = &params
+		}
+
+		if len(aad.JWTAllowedGroups) != 0 || len(aad.JWTAllowedClientApps) != 0 {
+			if result.Validation == nil {
+				result.Validation = &webapps.AzureActiveDirectoryValidation{}
+			}
+			result.Validation.JwtClaimChecks = &webapps.JwtClaimChecks{}
+			if len(aad.JWTAllowedGroups) != 0 {
+				result.Validation.JwtClaimChecks.AllowedGroups = pointer.To(aad.JWTAllowedGroups)
+			}
+			if len(aad.JWTAllowedClientApps) != 0 {
+				result.Validation.JwtClaimChecks.AllowedClientApplications = pointer.To(aad.JWTAllowedClientApps)
+			}
+		}
+
+		if len(aad.AllowedGroups) > 0 || len(aad.AllowedIdentities) > 0 {
+			if result.Validation == nil {
+				result.Validation = &webapps.AzureActiveDirectoryValidation{}
+			}
+			result.Validation.DefaultAuthorizationPolicy = &webapps.DefaultAuthorizationPolicy{
+				AllowedPrincipals: &webapps.AllowedPrincipals{},
+			}
+			if len(aad.AllowedGroups) > 0 {
+				result.Validation.DefaultAuthorizationPolicy.AllowedPrincipals.Groups = pointer.To(aad.AllowedGroups)
+			}
+			if len(aad.AllowedIdentities) > 0 {
+				result.Validation.DefaultAuthorizationPolicy.AllowedPrincipals.Identities = pointer.To(aad.AllowedIdentities)
+			}
+		}
+		if len(aad.AllowedAudiences) > 0 {
+			if result.Validation == nil {
+				result.Validation = &webapps.AzureActiveDirectoryValidation{}
+			}
+			result.Validation.AllowedAudiences = pointer.To(aad.AllowedAudiences)
+		}
+
+		if len(aad.AllowedApplications) > 0 {
+			if result.Validation == nil {
+				result.Validation = &webapps.AzureActiveDirectoryValidation{}
+			}
+			if result.Validation.DefaultAuthorizationPolicy == nil {
+				result.Validation.DefaultAuthorizationPolicy = &webapps.DefaultAuthorizationPolicy{}
+			}
+			result.Validation.DefaultAuthorizationPolicy.AllowedApplications = pointer.To(aad.AllowedApplications)
+		}
+	}
+
+	return result
+}

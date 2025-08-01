@@ -1,0 +1,77 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apioperation"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceApiManagementApiOperationCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).ApiManagement.ApiOperationsClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := apioperation.NewOperationID(subscriptionId, d.Get("resource_group_name").(string), d.Get("api_management_name").(string), d.Get("api_name").(string), d.Get("operation_id").(string))
+
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %s", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_api_management_api_operation", id.ID())
+		}
+	}
+
+	description := d.Get("description").(string)
+	displayName := d.Get("display_name").(string)
+	method := d.Get("method").(string)
+	urlTemplate := d.Get("url_template").(string)
+
+	requestContractRaw := d.Get("request").([]interface{})
+	requestContract, err := expandApiManagementOperationRequestContract(d, "request", requestContractRaw)
+	if err != nil {
+		return err
+	}
+
+	responseContractsRaw := d.Get("response").([]interface{})
+	responseContracts, err := expandApiManagementOperationResponseContract(d, "response", responseContractsRaw)
+	if err != nil {
+		return err
+	}
+
+	templateParametersRaw := d.Get("template_parameter").([]interface{})
+	templateParameters := schemaz.ExpandApiManagementOperationParameterContract(d, "template_parameter", templateParametersRaw)
+
+	parameters := apioperation.OperationContract{
+		Properties: &apioperation.OperationContractProperties{
+			Description:        pointer.To(description),
+			DisplayName:        displayName,
+			Method:             method,
+			Request:            requestContract,
+			Responses:          responseContracts,
+			TemplateParameters: templateParameters,
+			UrlTemplate:        urlTemplate,
+		},
+	}
+
+	if _, err := client.CreateOrUpdate(ctx, id, parameters, apioperation.CreateOrUpdateOperationOptions{}); err != nil {
+		return fmt.Errorf("creating/updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceApiManagementApiOperationRead(d, meta)
+}

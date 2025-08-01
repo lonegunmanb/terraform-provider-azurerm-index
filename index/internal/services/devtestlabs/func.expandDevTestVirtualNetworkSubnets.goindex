@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devtestlabs
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devtestlab/2018-09-15/virtualnetworks"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/devtestlabs/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/devtestlabs/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandDevTestVirtualNetworkSubnets(input []interface{}, subscriptionId, resourceGroupName, virtualNetworkName string) *[]virtualnetworks.SubnetOverride {
+	results := make([]virtualnetworks.SubnetOverride, 0)
+	// default found from the Portal
+	name := fmt.Sprintf("%sSubnet", virtualNetworkName)
+	subnetId := commonids.NewSubnetID(subscriptionId, resourceGroupName, virtualNetworkName, name)
+	allow := virtualnetworks.UsagePermissionTypeAllow
+
+	if len(input) == 0 {
+		result := virtualnetworks.SubnetOverride{
+			ResourceId:                   pointer.To(subnetId.ID()),
+			LabSubnetName:                pointer.To(name),
+			UsePublicIPAddressPermission: &allow,
+			UseInVMCreationPermission:    &allow,
+		}
+		results = append(results, result)
+		return &results
+	}
+
+	for _, val := range input {
+		v := val.(map[string]interface{})
+
+		subnet := virtualnetworks.SubnetOverride{
+			ResourceId:                         pointer.To(subnetId.ID()),
+			LabSubnetName:                      pointer.To(name),
+			UsePublicIPAddressPermission:       pointer.To(virtualnetworks.UsagePermissionType(v["use_public_ip_address"].(string))),
+			UseInVMCreationPermission:          pointer.To(virtualnetworks.UsagePermissionType(v["use_in_virtual_machine_creation"].(string))),
+			SharedPublicIPAddressConfiguration: expandDevTestVirtualNetworkSubnetIpAddressConfiguration(v["shared_public_ip_address"].([]interface{})),
+		}
+		results = append(results, subnet)
+	}
+
+	return &results
+}

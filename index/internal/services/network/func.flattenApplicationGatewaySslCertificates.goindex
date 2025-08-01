@@ -1,0 +1,87 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenApplicationGatewaySslCertificates(input *[]applicationgateways.ApplicationGatewaySslCertificate, d *pluginsdk.ResourceData) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	for _, v := range *input {
+		output := map[string]interface{}{}
+		if v.Name == nil {
+			continue
+		}
+
+		name := *v.Name
+
+		if v.Id != nil {
+			output["id"] = *v.Id
+		}
+
+		output["name"] = name
+
+		if props := v.Properties; props != nil {
+			if data := props.PublicCertData; data != nil {
+				output["public_cert_data"] = *data
+			}
+
+			if kvsid := props.KeyVaultSecretId; kvsid != nil {
+				output["key_vault_secret_id"] = *kvsid
+			}
+		}
+
+		// since the certificate data isn't returned we have to load it from the same index
+		if existing, ok := d.GetOk("ssl_certificate"); ok && existing != nil {
+			existingVals := existing.(*schema.Set).List()
+
+			for _, existingVal := range existingVals {
+				existingCerts := existingVal.(map[string]interface{})
+				existingName := existingCerts["name"].(string)
+
+				if name == existingName {
+					if data := existingCerts["data"]; data != nil {
+						v := utils.Base64EncodeIfNot(data.(string))
+						output["data"] = v
+					}
+
+					if password := existingCerts["password"]; password != nil {
+						output["password"] = password.(string)
+					}
+				}
+			}
+		}
+
+		results = append(results, output)
+	}
+
+	return results
+}

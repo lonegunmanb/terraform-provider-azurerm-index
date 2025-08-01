@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/resource
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2021-07-01/features"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-09-01/providers"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ResourceProviderRegistrationResource) checkIfManagedByTerraform(name string, account *clients.ResourceManagerAccount) error {
+	for resourceProvider := range account.RegisteredResourceProviders {
+		if resourceProvider == name {
+			fmtStr := `The Resource Provider %[1]q is automatically registered by Terraform.
+
+To manage this Resource Provider registration with the "azurerm_resource_provider_registration" resource, you need to
+prevent Terraform from managing this Resource Provider automatically by one of these methods:
+
+1. Disable automatic Resource Provider registration by setting the following in the Provider block:
+
+   resource_provider_registrations = "none"
+
+2. Choose a set of Provider Registrations to automatically register, that do not include %[1]q. Refer to the
+   provider documentation for more information:
+
+   https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs#resource_provider_registrations
+`
+			return fmt.Errorf(fmtStr, name)
+		}
+	}
+
+	return nil
+}

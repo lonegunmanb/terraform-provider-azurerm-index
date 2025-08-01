@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func diffTimeout(r *schema.Resource, md *model.ResourceDoc) (res []Checker) {
+	to := r.Schema.Timeouts
+	if to == nil {
+		return
+	}
+	var items []TimeoutDiffItem
+	if md.Timeouts == nil {
+		items = append(items, NewTimeoutDiffItem(0, TimeoutMissed, 0))
+		md.Timeouts = &model.Timeouts{} // use an empty timeouts object
+	}
+
+	if ptr := to.Read; ptr != nil {
+		val := int64((*ptr) / time.Second)
+		if mdVal := md.Timeouts.Read; val != mdVal.Value {
+			items = append(items, NewTimeoutDiffItem(mdVal.Line, TimeoutRead, val))
+		}
+	}
+
+	if ptr := to.Create; ptr != nil {
+		val := int64((*ptr) / time.Second)
+		if mdVal := md.Timeouts.Create; val != mdVal.Value {
+			items = append(items, NewTimeoutDiffItem(mdVal.Line, TimeoutCreate, val))
+		}
+	}
+
+	if ptr := to.Update; ptr != nil {
+		val := int64((*ptr) / time.Second)
+		if mdVal := md.Timeouts.Update; val != mdVal.Value {
+			items = append(items, NewTimeoutDiffItem(mdVal.Line, TimeoutUpdate, val))
+		}
+	}
+	if ptr := to.Delete; ptr != nil {
+		val := int64((*ptr) / time.Second)
+		if mdVal := md.Timeouts.Delete; val != mdVal.Value {
+			items = append(items, NewTimeoutDiffItem(mdVal.Line, TimeoutDelete, val))
+		}
+	}
+
+	if len(items) > 0 {
+		res = append(res, newTimeoutDiff(newCheckBase(md.Timeouts.Read.Line, "", nil), items))
+	}
+	return res
+}

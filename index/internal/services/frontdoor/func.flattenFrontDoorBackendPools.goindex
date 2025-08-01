@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFrontDoorBackendPools(input *[]frontdoors.BackendPool, frontDoorId frontdoors.FrontDoorId, explicitOrder []interface{}) (*[]interface{}, error) {
+	if input == nil {
+		return &[]interface{}{}, nil
+	}
+
+	output := make([]interface{}, 0)
+
+	if len(explicitOrder) > 0 {
+		orderedBackendPools := explicitOrder[0].(map[string]interface{})
+		orderedBackendPoolsIds := orderedBackendPools["backend_pool_ids"].([]interface{})
+		combinedBackendPools, err := combineBackendPools(*input, orderedBackendPoolsIds, frontDoorId)
+		if err == nil {
+			output = combinedBackendPools
+		} else {
+			return nil, err
+		}
+	} else {
+		for _, backend := range *input {
+			backendPool, err := flattenSingleFrontDoorBackendPools(&backend, frontDoorId)
+			if err == nil {
+				output = append(output, backendPool)
+			} else {
+				return nil, err
+			}
+		}
+	}
+
+	return &output, nil
+}

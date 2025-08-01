@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/managedvirtualnetworks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/purview/2021-07-01/account"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenVSTSRepoConfiguration(input factories.FactoryRepoConfiguration) []interface{} {
+	output := make([]interface{}, 0)
+
+	if v, ok := input.(factories.FactoryVSTSConfiguration); ok {
+		tenantId := ""
+		if v.TenantId != nil {
+			tenantId = *v.TenantId
+		}
+		publishingEnabled := true
+		if v.DisablePublish != nil {
+			publishingEnabled = !*v.DisablePublish
+		}
+		output = append(output, map[string]interface{}{
+			"account_name":       v.AccountName,
+			"branch_name":        v.CollaborationBranch,
+			"project_name":       v.ProjectName,
+			"publishing_enabled": publishingEnabled,
+			"repository_name":    v.RepositoryName,
+			"root_folder":        v.RootFolder,
+			"tenant_id":          tenantId,
+		})
+	}
+
+	return output
+}

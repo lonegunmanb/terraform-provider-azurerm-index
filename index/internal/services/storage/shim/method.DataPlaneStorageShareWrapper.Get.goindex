@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/shim
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/file/shares"
+)
+func (w DataPlaneStorageShareWrapper) Get(ctx context.Context, shareName string) (*StorageShareProperties, error) {
+	props, err := w.client.GetProperties(ctx, shareName)
+	if err != nil {
+		if props.HttpResponse == nil {
+			return nil, pollers.PollingDroppedConnectionError{
+				Message: err.Error(),
+			}
+		}
+		if response.WasNotFound(props.HttpResponse) {
+			return nil, nil
+		}
+
+		return nil, err
+	}
+
+	acls, err := w.client.GetACL(ctx, shareName)
+	if err != nil {
+		return nil, err
+	}
+
+	return &StorageShareProperties{
+		MetaData:        props.MetaData,
+		QuotaGB:         props.QuotaInGB,
+		ACLs:            acls.SignedIdentifiers,
+		EnabledProtocol: props.EnabledProtocol,
+		AccessTier:      props.AccessTier,
+	}, nil
+}

@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/routefilters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/expressroutecircuitconnections"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/expressroutecircuitpeerings"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenExpressRouteCircuitIpv6PeeringConfig(input *expressroutecircuitpeerings.IPv6ExpressRouteCircuitPeeringConfig) []interface{} {
+	if input == nil {
+		return make([]interface{}, 0)
+	}
+
+	var primaryPeerAddressPrefix string
+	if input.PrimaryPeerAddressPrefix != nil {
+		primaryPeerAddressPrefix = *input.PrimaryPeerAddressPrefix
+	}
+	var secondaryPeerAddressPrefix string
+	if input.SecondaryPeerAddressPrefix != nil {
+		secondaryPeerAddressPrefix = *input.SecondaryPeerAddressPrefix
+	}
+	routeFilterId := ""
+	if input.RouteFilter != nil && input.RouteFilter.Id != nil {
+		routeFilterId = *input.RouteFilter.Id
+	}
+	return []interface{}{
+		map[string]interface{}{
+			"microsoft_peering":             flattenExpressRouteCircuitPeeringMicrosoftConfig(input.MicrosoftPeeringConfig),
+			"primary_peer_address_prefix":   primaryPeerAddressPrefix,
+			"secondary_peer_address_prefix": secondaryPeerAddressPrefix,
+			"route_filter_id":               routeFilterId,
+			"enabled":                       pointer.From(input.State) == expressroutecircuitpeerings.ExpressRouteCircuitPeeringStateEnabled,
+		},
+	}
+}

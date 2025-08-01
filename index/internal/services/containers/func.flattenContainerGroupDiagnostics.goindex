@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerinstance/2023-05-01/containerinstance"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenContainerGroupDiagnostics(d *pluginsdk.ResourceData, input *containerinstance.ContainerGroupDiagnostics) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	logAnalytics := make([]interface{}, 0)
+
+	if la := input.LogAnalytics; la != nil {
+		output := make(map[string]interface{})
+
+		logType := ""
+		if la.LogType != nil {
+			logType = string(*la.LogType)
+		}
+		output["log_type"] = logType
+
+		metadata := make(map[string]interface{})
+		if la.Metadata != nil {
+			for k, v := range *la.Metadata {
+				metadata[k] = v
+			}
+		}
+		output["metadata"] = metadata
+		output["workspace_id"] = la.WorkspaceId
+
+		// the existing config may not exist at Import time, protect against it.
+		workspaceKey := ""
+		if existingDiags := d.Get("diagnostics").([]interface{}); len(existingDiags) > 0 {
+			existingDiag := existingDiags[0].(map[string]interface{})
+			if existingLA := existingDiag["log_analytics"].([]interface{}); len(existingLA) > 0 {
+				vs := existingLA[0].(map[string]interface{})
+				if key := vs["workspace_key"]; key != nil && key.(string) != "" {
+					workspaceKey = key.(string)
+				}
+			}
+		}
+		output["workspace_key"] = workspaceKey
+
+		logAnalytics = append(logAnalytics, output)
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"log_analytics": logAnalytics,
+		},
+	}
+}

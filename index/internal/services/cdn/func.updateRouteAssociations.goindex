@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func updateRouteAssociations(d *pluginsdk.ResourceData, meta interface{}, routeId *parse.FrontDoorRouteId, customDomains []interface{}, props *cdn.RouteProperties, customDomainID *parse.FrontDoorCustomDomainId) error {
+	client := meta.(*clients.Client).Cdn.FrontDoorRoutesClient
+	workaroundsClient := azuresdkhacks.NewCdnFrontDoorRoutesWorkaroundClient(client)
+	ctx, routeCancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer routeCancel()
+
+	updateProps := azuresdkhacks.RouteUpdatePropertiesParameters{
+		CustomDomains: expandCustomDomainActivatedResourceArray(customDomains),
+	}
+
+	// NOTE: You must pull the Cache Configuration from the existing route else you will get a diff
+	// because a nil value means disabled
+	if props.CacheConfiguration != nil {
+		updateProps.CacheConfiguration = props.CacheConfiguration
+	}
+
+	// NOTE: If there are no more custom domains associated with the route you must flip the
+	// 'link to default domain' field to 'true' else the route will be in an invalid state...
+	if len(customDomains) == 0 {
+		updateProps.LinkToDefaultDomain = cdn.LinkToDefaultDomainEnabled
+	}
+
+	updateParams := azuresdkhacks.RouteUpdateParameters{
+		RouteUpdatePropertiesParameters: &updateProps,
+	}
+
+	future, err := workaroundsClient.Update(ctx, routeId.ResourceGroup, routeId.ProfileName, routeId.AfdEndpointName, routeId.RouteName, updateParams)
+	if err != nil {
+		return fmt.Errorf("%s: updating the association with %s: %+v", *customDomainID, *routeId, err)
+	}
+
+	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("%s: waiting to update the association with %s: %+v", *customDomainID, *routeId, err)
+	}
+
+	return nil
+}

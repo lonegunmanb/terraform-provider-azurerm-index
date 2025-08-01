@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/daprcomponents"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/containerapps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenContainerAppStartupProbe(input containerapps.ContainerAppProbe) []ContainerAppStartupProbe {
+	result := make([]ContainerAppStartupProbe, 0)
+	probe := ContainerAppStartupProbe{
+		InitialDelay:           pointer.From(input.InitialDelaySeconds),
+		Interval:               pointer.From(input.PeriodSeconds),
+		Timeout:                pointer.From(input.TimeoutSeconds),
+		FailureThreshold:       pointer.From(input.FailureThreshold),
+		TerminationGracePeriod: pointer.From(input.TerminationGracePeriodSeconds),
+	}
+
+	if httpGet := input.HTTPGet; httpGet != nil {
+		if httpGet.Scheme != nil {
+			probe.Transport = string(*httpGet.Scheme)
+		}
+		probe.Host = pointer.From(httpGet.Host)
+		probe.Port = httpGet.Port
+		probe.Path = pointer.From(httpGet.Path)
+
+		if httpGet.HTTPHeaders != nil {
+			headers := make([]HttpHeader, 0)
+			for _, h := range *httpGet.HTTPHeaders {
+				headers = append(headers, HttpHeader{
+					Name:  h.Name,
+					Value: h.Value,
+				})
+			}
+			probe.Headers = headers
+		}
+	}
+
+	if tcpSocket := input.TcpSocket; tcpSocket != nil {
+		probe.Transport = "TCP"
+		probe.Host = pointer.From(tcpSocket.Host)
+		probe.Port = tcpSocket.Port
+	}
+
+	result = append(result, probe)
+
+	return result
+}

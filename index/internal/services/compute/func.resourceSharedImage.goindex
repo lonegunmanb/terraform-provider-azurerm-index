@@ -1,0 +1,278 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryimages"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryimageversions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceSharedImage() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSharedImageCreate,
+		Read:   resourceSharedImageRead,
+		Update: resourceSharedImageUpdate,
+		Delete: resourceSharedImageDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := galleryimages.ParseGalleryImageID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.SharedImageName,
+			},
+
+			"gallery_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.SharedImageGalleryName,
+			},
+
+			"location": commonschema.Location(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"architecture": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(galleryimages.ArchitectureXSixFour),
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(galleryimages.ArchitectureXSixFour),
+					string(galleryimages.ArchitectureArmSixFour),
+				}, false),
+			},
+
+			"os_type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(galleryimages.OperatingSystemTypesLinux),
+					string(galleryimages.OperatingSystemTypesWindows),
+				}, false),
+			},
+
+			"disk_types_not_allowed": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(galleryimageversions.StorageAccountTypeStandardLRS),
+						string(galleryimageversions.StorageAccountTypePremiumLRS),
+					}, false),
+				},
+			},
+
+			"end_of_life_date": {
+				Type:             pluginsdk.TypeString,
+				Optional:         true,
+				DiffSuppressFunc: suppress.RFC3339Time,
+				ValidateFunc:     validation.IsRFC3339Time,
+			},
+
+			"hyper_v_generation": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(galleryimages.HyperVGenerationVOne),
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(galleryimages.HyperVGenerationVOne),
+					string(galleryimages.HyperVGenerationVTwo),
+				}, false),
+			},
+
+			"identifier": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"publisher": {
+							Type:         pluginsdk.TypeString,
+							ForceNew:     true,
+							Required:     true,
+							ValidateFunc: validate.SharedImageIdentifierAttribute(128),
+						},
+						"offer": {
+							Type:         pluginsdk.TypeString,
+							ForceNew:     true,
+							Required:     true,
+							ValidateFunc: validate.SharedImageIdentifierAttribute(64),
+						},
+						"sku": {
+							Type:         pluginsdk.TypeString,
+							ForceNew:     true,
+							Required:     true,
+							ValidateFunc: validate.SharedImageIdentifierAttribute(64),
+						},
+					},
+				},
+			},
+
+			"description": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"eula": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+			},
+
+			"purchase_plan": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ForceNew:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+						"publisher": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ForceNew:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+						"product": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ForceNew:     true,
+							ValidateFunc: validation.StringIsNotEmpty,
+						},
+					},
+				},
+			},
+
+			"privacy_statement_uri": {
+				Type:     pluginsdk.TypeString,
+				ForceNew: true,
+				Optional: true,
+			},
+
+			"max_recommended_vcpu_count": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntBetween(1, 80),
+			},
+
+			"min_recommended_vcpu_count": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntBetween(1, 80),
+			},
+
+			"max_recommended_memory_in_gb": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntBetween(1, 640),
+			},
+
+			"min_recommended_memory_in_gb": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntBetween(1, 640),
+			},
+
+			"release_note_uri": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"specialized": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				ForceNew: true,
+			},
+
+			"trusted_launch_supported": {
+				Type:          pluginsdk.TypeBool,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"trusted_launch_enabled", "confidential_vm_supported", "confidential_vm_enabled"},
+			},
+
+			"trusted_launch_enabled": {
+				Type:          pluginsdk.TypeBool,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"trusted_launch_supported", "confidential_vm_supported", "confidential_vm_enabled"},
+			},
+
+			"confidential_vm_supported": {
+				Type:          pluginsdk.TypeBool,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"trusted_launch_supported", "trusted_launch_enabled", "confidential_vm_enabled"},
+			},
+
+			"confidential_vm_enabled": {
+				Type:          pluginsdk.TypeBool,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"trusted_launch_supported", "trusted_launch_enabled", "confidential_vm_supported"},
+			},
+
+			"accelerated_network_support_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				ForceNew: true,
+			},
+
+			"hibernation_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				ForceNew: true,
+			},
+
+			"disk_controller_type_nvme_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				ForceNew: true,
+			},
+
+			"tags": commonschema.Tags(),
+		},
+
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			pluginsdk.ForceNewIfChange("end_of_life_date", func(ctx context.Context, old, new, meta interface{}) bool {
+				return old.(string) != "" && new.(string) == ""
+			}),
+		),
+	}
+}

@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func EncodeFunctionAppLinuxFxVersion(input []ApplicationStackLinuxFunctionApp) *string {
+	if len(input) == 0 || input[0].CustomHandler {
+		return utils.String("")
+	}
+
+	appStack := input[0]
+	var appType, appString string
+	switch {
+	case appStack.NodeVersion != "":
+		appType = string(FxStringPrefixNode)
+		appString = appStack.NodeVersion
+
+	case appStack.DotNetVersion != "":
+		if appStack.DotNetIsolated {
+			appType = string(FxStringPrefixDotNetIsolated)
+		} else {
+			appType = string(FxStringPrefixDotNet)
+		}
+		appString = appStack.DotNetVersion
+
+	case appStack.PythonVersion != "":
+		appType = string(FxStringPrefixPython)
+		appString = appStack.PythonVersion
+
+	case appStack.JavaVersion != "":
+		appType = string(FxStringPrefixJava)
+		appString = appStack.JavaVersion
+
+	case appStack.PowerShellCoreVersion != "":
+		appType = string(FxStringPrefixPowerShell)
+		appString = appStack.PowerShellCoreVersion
+
+	case len(appStack.Docker) > 0 && appStack.Docker[0].ImageName != "":
+		appType = string(FxStringPrefixDocker)
+		dockerCfg := appStack.Docker[0]
+		if dockerCfg.RegistryURL != "" {
+			dockerUrl := dockerCfg.RegistryURL
+			httpPrefixes := []string{"https://", "http://"}
+			for _, prefix := range httpPrefixes {
+				dockerUrl = strings.TrimPrefix(dockerUrl, prefix)
+			}
+			appString = fmt.Sprintf("%s/%s:%s", dockerUrl, dockerCfg.ImageName, dockerCfg.ImageTag)
+		} else {
+			appString = fmt.Sprintf("%s:%s", dockerCfg.ImageName, dockerCfg.ImageTag)
+		}
+	}
+
+	return utils.String(fmt.Sprintf("%s|%s", appType, appString))
+}

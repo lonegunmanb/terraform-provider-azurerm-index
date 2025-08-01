@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/security/2019-01-01-preview/automations"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandSecurityCenterAutomationActions(actionsRaw []interface{}) (*[]automations.AutomationAction, error) {
+	if len(actionsRaw) == 0 {
+		return &[]automations.AutomationAction{}, nil
+	}
+
+	output := make([]automations.AutomationAction, 0)
+
+	for _, actionRaw := range actionsRaw {
+		actionMap := actionRaw.(map[string]interface{})
+
+		var autoAction automations.AutomationAction
+		var resourceID string
+		var actionType string
+		var ok bool
+
+		// No checking, as fields are enforced by resource schema
+		resourceID = actionMap["resource_id"].(string)
+		actionType = actionMap["type"].(string)
+
+		// Ignore case on type field
+		switch strings.ToLower(actionType) {
+		// Handle LogicApp action type
+		case typeLogicApp:
+			var triggerURL string
+			if triggerURL, ok = actionMap["trigger_url"].(string); !ok || triggerURL == "" {
+				return nil, fmt.Errorf("Security Center automation, trigger_url is required for LogicApp action")
+			}
+			autoAction = automations.AutomationActionLogicApp{
+				LogicAppResourceId: &resourceID,
+				Uri:                &triggerURL,
+			}
+
+			// Handle LogAnalytics action type
+		case typeLogAnalytics:
+			autoAction = automations.AutomationActionWorkspace{
+				WorkspaceResourceId: &resourceID,
+			}
+
+			// Handle EventHub action type
+		case typeEventHub:
+			var connString string
+			if connString, ok = actionMap["connection_string"].(string); !ok || connString == "" {
+				return nil, fmt.Errorf("Security Center automation, connection_string is required for EventHub action")
+			}
+			autoAction = automations.AutomationActionEventHub{
+				EventHubResourceId: &resourceID,
+				ConnectionString:   &connString,
+			}
+		default:
+			return nil, fmt.Errorf("Security Center automation, expected action type to be one of: %s, %s or %s", automations.ActionTypeEventHub, automations.ActionTypeWorkspace, automations.ActionTypeLogicApp)
+		}
+		output = append(output, autoAction)
+	}
+
+	return &output, nil
+}

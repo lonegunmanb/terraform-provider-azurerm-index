@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/kermit/sdk/web/2022-09-01/web"
+)
+func flattenAuthV2LoginSettings(input *webapps.Login) []AuthV2Login {
+	if input == nil {
+		return []AuthV2Login{}
+	}
+	result := AuthV2Login{
+		PreserveURLFragmentsForLogins: pointer.From(input.PreserveURLFragmentsForLogins),
+		AllowedExternalRedirectURLs:   pointer.From(input.AllowedExternalRedirectURLs),
+	}
+	if routes := input.Routes; routes != nil {
+		result.LogoutEndpoint = pointer.From(routes.LogoutEndpoint)
+	}
+	if token := input.TokenStore; token != nil {
+		result.TokenStoreEnabled = pointer.From(token.Enabled)
+		result.TokenRefreshExtension = pointer.From(token.TokenRefreshExtensionHours)
+		if fs := token.FileSystem; fs != nil {
+			result.TokenFilesystemPath = pointer.From(fs.Directory)
+		}
+		if bs := token.AzureBlobStorage; bs != nil {
+			result.TokenBlobStorageSAS = pointer.From(bs.SasURLSettingName)
+		}
+	}
+
+	if nonce := input.Nonce; nonce != nil {
+		result.NonceExpirationTime = pointer.From(nonce.NonceExpirationInterval)
+		result.ValidateNonce = pointer.From(nonce.ValidateNonce)
+	}
+
+	if cookie := input.CookieExpiration; cookie != nil {
+		result.CookieExpirationConvention = string(pointer.From(cookie.Convention))
+		result.CookieExpirationTime = pointer.From(cookie.TimeToExpiration)
+	}
+
+	return []AuthV2Login{result}
+}

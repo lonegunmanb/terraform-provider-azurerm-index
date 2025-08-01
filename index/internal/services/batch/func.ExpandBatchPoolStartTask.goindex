@@ -1,0 +1,148 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandBatchPoolStartTask(list []interface{}) (*pool.StartTask, error) {
+	if len(list) == 0 || list[0] == nil {
+		return nil, fmt.Errorf("batch pool start task should be defined")
+	}
+
+	startTaskValue := list[0].(map[string]interface{})
+
+	startTaskCmdLine := startTaskValue["command_line"].(string)
+
+	maxTaskRetryCount := int64(1)
+
+	if v := startTaskValue["task_retry_maximum"].(int); v > 0 {
+		maxTaskRetryCount = int64(v)
+	}
+
+	waitForSuccess := startTaskValue["wait_for_success"].(bool)
+
+	userIdentityList := startTaskValue["user_identity"].([]interface{})
+	if len(userIdentityList) == 0 {
+		return nil, fmt.Errorf("batch pool start task user identity should be defined")
+	}
+
+	userIdentityValue := userIdentityList[0].(map[string]interface{})
+	userIdentity := pool.UserIdentity{}
+
+	if autoUserValue, ok := userIdentityValue["auto_user"]; ok {
+		autoUser := autoUserValue.([]interface{})
+		if len(autoUser) != 0 {
+			autoUserMap := autoUser[0].(map[string]interface{})
+			userIdentity.AutoUser = &pool.AutoUserSpecification{
+				ElevationLevel: pointer.To(pool.ElevationLevel(autoUserMap["elevation_level"].(string))),
+				Scope:          pointer.To(pool.AutoUserScope(autoUserMap["scope"].(string))),
+			}
+		}
+	}
+	if userNameValue, ok := userIdentityValue["user_name"]; ok {
+		userName := userNameValue.(string)
+		if len(userName) != 0 {
+			userIdentity.UserName = &userName
+		}
+	}
+
+	resourceFileList := startTaskValue["resource_file"].([]interface{})
+	resourceFiles := make([]pool.ResourceFile, 0)
+	for _, resourceFileValueTemp := range resourceFileList {
+		if resourceFileValueTemp == nil {
+			continue
+		}
+		resourceFileValue := resourceFileValueTemp.(map[string]interface{})
+		resourceFile := pool.ResourceFile{}
+		if v, ok := resourceFileValue["auto_storage_container_name"]; ok {
+			autoStorageContainerName := v.(string)
+			if autoStorageContainerName != "" {
+				resourceFile.AutoStorageContainerName = &autoStorageContainerName
+			}
+		}
+		if v, ok := resourceFileValue["storage_container_url"]; ok {
+			storageContainerURL := v.(string)
+			if storageContainerURL != "" {
+				resourceFile.StorageContainerURL = &storageContainerURL
+			}
+		}
+		if v, ok := resourceFileValue["http_url"]; ok {
+			httpURL := v.(string)
+			if httpURL != "" {
+				resourceFile.HTTPURL = &httpURL
+			}
+		}
+		if v, ok := resourceFileValue["blob_prefix"]; ok {
+			blobPrefix := v.(string)
+			if blobPrefix != "" {
+				resourceFile.BlobPrefix = &blobPrefix
+			}
+		}
+		if v, ok := resourceFileValue["file_path"]; ok {
+			filePath := v.(string)
+			if filePath != "" {
+				resourceFile.FilePath = &filePath
+			}
+		}
+		if v, ok := resourceFileValue["file_mode"]; ok {
+			fileMode := v.(string)
+			if fileMode != "" {
+				resourceFile.FileMode = &fileMode
+			}
+		}
+		if v, ok := resourceFileValue["user_assigned_identity_id"]; ok {
+			resourceId := v.(string)
+			if resourceId != "" {
+				identityReference := pool.ComputeNodeIdentityReference{
+					ResourceId: utils.String(resourceId),
+				}
+				resourceFile.IdentityReference = &identityReference
+			}
+		}
+		resourceFiles = append(resourceFiles, resourceFile)
+	}
+
+	startTask := &pool.StartTask{
+		CommandLine:       &startTaskCmdLine,
+		MaxTaskRetryCount: &maxTaskRetryCount,
+		WaitForSuccess:    &waitForSuccess,
+		UserIdentity:      &userIdentity,
+		ResourceFiles:     &resourceFiles,
+	}
+
+	if v := startTaskValue["common_environment_properties"].(map[string]interface{}); len(v) > 0 {
+		startTask.EnvironmentSettings = expandCommonEnvironmentProperties(v)
+	}
+
+	if startTaskValue["container"] != nil && len(startTaskValue["container"].([]interface{})) > 0 {
+		var containerSettings pool.TaskContainerSettings
+		containerSettingsList := startTaskValue["container"].([]interface{})
+
+		if len(containerSettingsList) > 0 && containerSettingsList[0] != nil {
+			settingMap := containerSettingsList[0].(map[string]interface{})
+			containerSettings.ImageName = settingMap["image_name"].(string)
+			if containerRunOptions, ok := settingMap["run_options"]; ok {
+				containerSettings.ContainerRunOptions = utils.String(containerRunOptions.(string))
+			}
+			if registries, ok := settingMap["registry"].([]interface{}); ok && len(registries) > 0 && registries[0] != nil {
+				containerRegMap := registries[0].(map[string]interface{})
+				if containerRegistryRef, err := expandBatchPoolContainerRegistry(containerRegMap); err == nil {
+					containerSettings.Registry = containerRegistryRef
+				}
+			}
+			if workingDir, ok := settingMap["working_directory"]; ok {
+				containerSettings.WorkingDirectory = pointer.To(pool.ContainerWorkingDirectory(workingDir.(string)))
+			}
+		}
+		startTask.ContainerSettings = &containerSettings
+	}
+
+	return startTask, nil
+}

@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2023-03-02-preview/trustedaccess"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r KubernetesClusterTrustedAccessRoleBindingResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ContainerService.V20230302Preview.TrustedAccess
+			schema := KubernetesClusterTrustedAccessRoleBindingResourceSchema{}
+
+			id, err := trustedaccess.ParseTrustedAccessRoleBindingID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			kubernetesClusterId := commonids.NewKubernetesClusterID(id.SubscriptionId, id.ResourceGroupName, id.ManagedClusterName)
+
+			resp, err := client.RoleBindingsGet(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(*id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				schema.KubernetesClusterId = kubernetesClusterId.ID()
+				schema.Name = id.TrustedAccessRoleBindingName
+				if err := r.mapTrustedAccessRoleBindingToKubernetesClusterTrustedAccessRoleBindingResourceSchema(*model, &schema); err != nil {
+					return fmt.Errorf("flattening model: %+v", err)
+				}
+			}
+
+			return metadata.Encode(&schema)
+		},
+	}
+}

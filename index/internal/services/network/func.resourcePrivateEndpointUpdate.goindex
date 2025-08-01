@@ -1,0 +1,172 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	mariadbServers "github.com/hashicorp/go-azure-sdk/resource-manager/mariadb/2018-06-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2017-12-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privatednszonegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privateendpoints"
+	postgresqlServers "github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redis/2024-03-01/redis"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/signalr/2023-02-01/signalr"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	cosmosParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePrivateEndpointUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.PrivateEndpoints
+	dnsClient := meta.(*clients.Client).Network.PrivateDnsZoneGroups
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := privateendpoints.ParsePrivateEndpointID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	if err := validatePrivateEndpointSettings(d); err != nil {
+		return fmt.Errorf("validating the configuration for %s: %+v", id, err)
+	}
+
+	// Ensure we don't overwrite the existing ApplicationSecurityGroups
+	existing, err := client.Get(ctx, *id, privateendpoints.DefaultGetOperationOptions())
+	if err != nil {
+		return fmt.Errorf("retrieving existing %s: %+v", *id, err)
+	}
+	if existing.Model == nil {
+		return fmt.Errorf("retrieving existing %s: `model` was nil", *id)
+	}
+	if existing.Model.Properties == nil {
+		return fmt.Errorf("retrieving existing %s: `model.Properties` was nil", *id)
+	}
+
+	applicationSecurityGroupAssociation := existing.Model.Properties.ApplicationSecurityGroups
+	location := azure.NormalizeLocation(d.Get("location").(string))
+	privateDnsZoneGroup := d.Get("private_dns_zone_group").([]interface{})
+	privateServiceConnections := d.Get("private_service_connection").([]interface{})
+	ipConfigurations := d.Get("ip_configuration").([]interface{})
+	subnetId := d.Get("subnet_id").(string)
+	customNicName := d.Get("custom_network_interface_name").(string)
+
+	// TODO: in future it'd be nice to support conditional updates here, but one problem at a time
+	parameters := privateendpoints.PrivateEndpoint{
+		Location: pointer.To(location),
+		Properties: &privateendpoints.PrivateEndpointProperties{
+			ApplicationSecurityGroups:           applicationSecurityGroupAssociation,
+			PrivateLinkServiceConnections:       expandPrivateLinkEndpointServiceConnection(privateServiceConnections, false),
+			ManualPrivateLinkServiceConnections: expandPrivateLinkEndpointServiceConnection(privateServiceConnections, true),
+			Subnet: &privateendpoints.Subnet{
+				Id: pointer.To(subnetId),
+			},
+			IPConfigurations:           expandPrivateEndpointIPConfigurations(ipConfigurations),
+			CustomNetworkInterfaceName: pointer.To(customNicName),
+		},
+		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	err = validatePrivateLinkServiceId(*parameters.Properties.PrivateLinkServiceConnections)
+	if err != nil {
+		return err
+	}
+	err = validatePrivateLinkServiceId(*parameters.Properties.ManualPrivateLinkServiceConnections)
+	if err != nil {
+		return err
+	}
+
+	err = pluginsdk.Retry(d.Timeout(pluginsdk.TimeoutCreate), func() *pluginsdk.RetryError {
+		if err = client.CreateOrUpdateThenPoll(ctx, *id, parameters); err != nil {
+			switch {
+			case strings.EqualFold(err.Error(), "is missing required parameter 'group Id'"):
+				{
+					return &pluginsdk.RetryError{
+						Err:       fmt.Errorf("updating %s due to missing 'group Id', ensure that the 'subresource_names' type is populated: %+v", id, err),
+						Retryable: false,
+					}
+				}
+			case strings.Contains(err.Error(), "PrivateLinkServiceId Invalid private link service id"):
+				{
+					return &pluginsdk.RetryError{
+						Err:       fmt.Errorf("creating Private Endpoint %s: %+v", id, err),
+						Retryable: true,
+					}
+				}
+			default:
+				return &pluginsdk.RetryError{
+					Err: fmt.Errorf("updating %s: %+v", id, err),
+				}
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// 1 Private Endpoint can have 1 Private DNS Zone Group - so to update we need to Delete & Recreate
+	if d.HasChange("private_dns_zone_group") {
+		existingDnsZoneGroups, err := retrievePrivateDnsZoneGroupsForPrivateEndpoint(ctx, dnsClient, *id)
+		if err != nil {
+			return err
+		}
+
+		newDnsZoneGroups := d.Get("private_dns_zone_group").([]interface{})
+		newDnsZoneName := ""
+		if len(newDnsZoneGroups) > 0 {
+			groupRaw := newDnsZoneGroups[0].(map[string]interface{})
+			newDnsZoneName = groupRaw["name"].(string)
+		}
+
+		needToRemove := newDnsZoneName == ""
+		nameHasChanged := false
+		if existingDnsZoneGroups != nil && newDnsZoneName != "" {
+			needToRemove = len(*existingDnsZoneGroups) > 0 && len(newDnsZoneGroups) == 0
+
+			// there should only be a single one, but there's no harm checking all returned
+			for _, existing := range *existingDnsZoneGroups {
+				if existing.PrivateDnsZoneGroupName != newDnsZoneName {
+					nameHasChanged = true
+					break
+				}
+			}
+		}
+
+		if needToRemove || nameHasChanged {
+			log.Printf("[DEBUG] Deleting the Existing Private DNS Zone Group associated with %s..", id)
+			if err := deletePrivateDnsZoneGroupForPrivateEndpoint(ctx, dnsClient, *id); err != nil {
+				return err
+			}
+			log.Printf("[DEBUG] Deleted the Existing Private DNS Zone Group associated with %s.", id)
+		}
+
+		if len(privateDnsZoneGroup) > 0 {
+			log.Printf("[DEBUG] Creating Private DNS Zone Group associated with %s..", id)
+			if err := createPrivateDnsZoneGroupForPrivateEndpoint(ctx, dnsClient, *id, privateDnsZoneGroup); err != nil {
+				return err
+			}
+			log.Printf("[DEBUG] Created the Existing Private DNS Zone Group associated with %s", id)
+		}
+	}
+
+	return resourcePrivateEndpointRead(d, meta)
+}

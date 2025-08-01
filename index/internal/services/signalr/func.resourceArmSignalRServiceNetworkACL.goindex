@@ -1,0 +1,140 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/privateendpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/signalr/2023-02-01/signalr"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceArmSignalRServiceNetworkACL() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSignalRServiceNetworkACLCreateUpdate,
+		Read:   resourceSignalRServiceNetworkACLRead,
+		Update: resourceSignalRServiceNetworkACLCreateUpdate,
+		Delete: resourceSignalRServiceNetworkACLDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.NetworkAclV0ToV1{},
+		}),
+		SchemaVersion: 1,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := signalr.ParseSignalRID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"signalr_service_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: signalr.ValidateSignalRID,
+			},
+
+			"default_action": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(signalr.ACLActionAllow),
+					string(signalr.ACLActionDeny),
+				}, false),
+			},
+
+			"public_network": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"allowed_request_types": {
+							Type:          pluginsdk.TypeSet,
+							Optional:      true,
+							ConflictsWith: []string{"public_network.0.denied_request_types"},
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice([]string{
+									string(signalr.SignalRRequestTypeClientConnection),
+									string(signalr.SignalRRequestTypeRESTAPI),
+									string(signalr.SignalRRequestTypeServerConnection),
+									string(signalr.SignalRRequestTypeTrace),
+								}, false),
+							},
+						},
+
+						"denied_request_types": {
+							Type:          pluginsdk.TypeSet,
+							Optional:      true,
+							ConflictsWith: []string{"public_network.0.allowed_request_types"},
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice([]string{
+									string(signalr.SignalRRequestTypeClientConnection),
+									string(signalr.SignalRRequestTypeRESTAPI),
+									string(signalr.SignalRRequestTypeServerConnection),
+									string(signalr.SignalRRequestTypeTrace),
+								}, false),
+							},
+						},
+					},
+				},
+			},
+
+			"private_endpoint": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: privateendpoints.ValidatePrivateEndpointID,
+						},
+
+						"allowed_request_types": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice([]string{
+									string(signalr.SignalRRequestTypeClientConnection),
+									string(signalr.SignalRRequestTypeRESTAPI),
+									string(signalr.SignalRRequestTypeServerConnection),
+									string(signalr.SignalRRequestTypeTrace),
+								}, false),
+							},
+						},
+
+						"denied_request_types": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+								ValidateFunc: validation.StringInSlice([]string{
+									string(signalr.SignalRRequestTypeClientConnection),
+									string(signalr.SignalRRequestTypeRESTAPI),
+									string(signalr.SignalRRequestTypeServerConnection),
+									string(signalr.SignalRRequestTypeTrace),
+								}, false),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

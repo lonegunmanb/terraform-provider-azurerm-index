@@ -1,0 +1,89 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/synapse/mgmt/v2.0/synapse" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceSynapseSQLPoolWorkloadGroup() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSynapseSQLPoolWorkloadGroupCreateUpdate,
+		Read:   resourceSynapseSQLPoolWorkloadGroupRead,
+		Update: resourceSynapseSQLPoolWorkloadGroupCreateUpdate,
+		Delete: resourceSynapseSQLPoolWorkloadGroupDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.SqlPoolWorkloadGroupID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"sql_pool_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.SqlPoolID,
+			},
+
+			"max_resource_percent": {
+				Type:         pluginsdk.TypeInt,
+				Required:     true,
+				ValidateFunc: validation.IntBetween(1, 100),
+			},
+
+			"min_resource_percent": {
+				Type:         pluginsdk.TypeInt,
+				Required:     true,
+				ValidateFunc: validation.IntBetween(0, 100),
+			},
+
+			"importance": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Default:      "normal",
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"max_resource_percent_per_request": {
+				Type:         pluginsdk.TypeFloat,
+				Optional:     true,
+				Default:      3,
+				ValidateFunc: validation.FloatBetween(0, 100),
+			},
+
+			"min_resource_percent_per_request": {
+				Type:         pluginsdk.TypeFloat,
+				Optional:     true,
+				ValidateFunc: validation.FloatBetween(0, 100),
+			},
+
+			"query_execution_timeout_in_seconds": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntAtLeast(0),
+			},
+		},
+	}
+}

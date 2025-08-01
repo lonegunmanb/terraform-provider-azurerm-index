@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func resourceDataFactoryDataFlowCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).DataFactory.DataFlowClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	dataFactoryId, err := factories.ParseFactoryID(d.Get("data_factory_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := parse.NewDataFlowID(subscriptionId, dataFactoryId.ResourceGroupName, dataFactoryId.FactoryName, d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id.ResourceGroup, id.FactoryName, id.Name, "")
+		if err != nil {
+			if !utils.ResponseWasNotFound(existing.Response) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+
+		if !utils.ResponseWasNotFound(existing.Response) {
+			return tf.ImportAsExistsError("azurerm_data_factory_data_flow", id.ID())
+		}
+	}
+
+	mappingDataFlow := datafactory.MappingDataFlow{
+		MappingDataFlowTypeProperties: &datafactory.MappingDataFlowTypeProperties{
+			Script:          utils.String(d.Get("script").(string)),
+			Sinks:           expandDataFactoryDataFlowSink(d.Get("sink").([]interface{})),
+			Sources:         expandDataFactoryDataFlowSource(d.Get("source").([]interface{})),
+			Transformations: expandDataFactoryDataFlowTransformation(d.Get("transformation").([]interface{})),
+		},
+		Description: utils.String(d.Get("description").(string)),
+		Type:        datafactory.TypeBasicDataFlowTypeMappingDataFlow,
+	}
+
+	if v, ok := d.GetOk("annotations"); ok {
+		annotations := v.([]interface{})
+		mappingDataFlow.Annotations = &annotations
+	}
+
+	if v, ok := d.GetOk("folder"); ok {
+		mappingDataFlow.Folder = &datafactory.DataFlowFolder{
+			Name: utils.String(v.(string)),
+		}
+	}
+
+	if v, ok := d.GetOk("script_lines"); ok {
+		mappingDataFlow.ScriptLines = utils.ExpandStringSlice(v.([]interface{}))
+	}
+
+	dataFlow := datafactory.DataFlowResource{
+		Properties: &mappingDataFlow,
+	}
+
+	if _, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.FactoryName, id.Name, dataFlow, ""); err != nil {
+		return fmt.Errorf(" creating/updating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceDataFactoryDataFlowRead(d, meta)
+}

@@ -1,0 +1,150 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceStorageAccountRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Storage.ResourceManager.StorageAccounts
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	storageDomainSuffix, ok := meta.(*clients.Client).Account.Environment.Storage.DomainSuffix()
+	if !ok {
+		return fmt.Errorf("could not determine Storage domain suffix for environment %q", meta.(*clients.Client).Account.Environment.Name)
+	}
+
+	id := commonids.NewStorageAccountID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	resp, err := client.GetProperties(ctx, id, storageaccounts.DefaultGetPropertiesOperationOptions())
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return fmt.Errorf("%s was not found", id)
+		}
+
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	listKeysOpts := storageaccounts.DefaultListKeysOperationOptions()
+	listKeysOpts.Expand = pointer.To(storageaccounts.ListKeyExpandKerb)
+	keys, err := client.ListKeys(ctx, id, listKeysOpts)
+	if err != nil {
+		hasWriteLock := response.WasConflict(keys.HttpResponse)
+		doesntHavePermissions := response.WasForbidden(keys.HttpResponse) || response.WasStatusCode(keys.HttpResponse, http.StatusUnauthorized)
+		if !hasWriteLock && !doesntHavePermissions {
+			return fmt.Errorf("listing Keys for %s: %+v", id, err)
+		}
+	}
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.Normalize(model.Location))
+		d.Set("account_kind", string(pointer.From(model.Kind)))
+
+		// NOTE: we should expose EdgeZone in the future
+
+		if sku := model.Sku; sku != nil {
+			d.Set("account_tier", pointer.From(sku.Tier))
+			d.Set("account_replication_type", strings.Split(string(sku.Name), "_")[1])
+		}
+
+		flattenedIdentity, err := identity.FlattenLegacySystemAndUserAssignedMap(model.Identity)
+		if err != nil {
+			return fmt.Errorf("flattening `identity`: %+v", err)
+		}
+		if err := d.Set("identity", flattenedIdentity); err != nil {
+			return fmt.Errorf("setting `identity`: %+v", err)
+		}
+
+		if err := tags.FlattenAndSet(d, model.Tags); err != nil {
+			return err
+		}
+
+		if props := model.Properties; props != nil {
+			d.Set("access_tier", pointer.From(props.AccessTier))
+			d.Set("allow_nested_items_to_be_public", pointer.From(props.AllowBlobPublicAccess))
+			if err := d.Set("custom_domain", flattenAccountCustomDomain(props.CustomDomain)); err != nil {
+				return fmt.Errorf("setting `custom_domain`: %+v", err)
+			}
+			d.Set("https_traffic_only_enabled", pointer.From(props.SupportsHTTPSTrafficOnly))
+			d.Set("is_hns_enabled", pointer.From(props.IsHnsEnabled))
+			d.Set("nfsv3_enabled", pointer.From(props.IsNfsV3Enabled))
+			d.Set("primary_location", location.NormalizeNilable(props.PrimaryLocation))
+			d.Set("secondary_location", location.NormalizeNilable(props.SecondaryLocation))
+
+			// Setting the encryption key type to "Service" in PUT. The following GET will not return the queue/table in the service list of its response.
+			// So defaults to setting the encryption key type to "Service" if it is absent in the GET response. Also, define the default value as "Service" in the schema.
+			infrastructureEncryption := false
+			queueEncryptionKeyType := string(storageaccounts.KeyTypeService)
+			tableEncryptionKeyType := string(storageaccounts.KeyTypeService)
+			if encryption := props.Encryption; encryption != nil {
+				infrastructureEncryption = pointer.From(encryption.RequireInfrastructureEncryption)
+
+				if encryption.Services != nil {
+					if encryption.Services.Queue != nil && encryption.Services.Queue.KeyType != nil {
+						queueEncryptionKeyType = string(*encryption.Services.Queue.KeyType)
+					}
+					if encryption.Services.Table != nil && encryption.Services.Table.KeyType != nil {
+						tableEncryptionKeyType = string(*encryption.Services.Table.KeyType)
+					}
+				}
+			}
+			d.Set("infrastructure_encryption_enabled", infrastructureEncryption)
+			d.Set("queue_encryption_key_type", queueEncryptionKeyType)
+			d.Set("table_encryption_key_type", tableEncryptionKeyType)
+
+			// For storage account created using old API, the response of GET call will not return "min_tls_version"
+			minTlsVersion := string(storageaccounts.MinimumTlsVersionTLSOneZero)
+			if props.MinimumTlsVersion != nil {
+				minTlsVersion = string(*props.MinimumTlsVersion)
+			}
+			d.Set("min_tls_version", minTlsVersion)
+
+			// DNSEndpointType is null when unconfigured - therefore default this to Standard
+			dnsEndpointType := storageaccounts.DnsEndpointTypeStandard
+			if props.DnsEndpointType != nil {
+				dnsEndpointType = *props.DnsEndpointType
+			}
+			d.Set("dns_endpoint_type", string(dnsEndpointType))
+
+			if err := d.Set("azure_files_authentication", flattenAccountAzureFilesAuthentication(props.AzureFilesIdentityBasedAuthentication)); err != nil {
+				return fmt.Errorf("setting `azure_files_authentication`: %+v", err)
+			}
+		}
+	}
+
+	var primaryEndpoints *storageaccounts.Endpoints
+	var secondaryEndpoints *storageaccounts.Endpoints
+	var routingPreference *storageaccounts.RoutingPreference
+	if model := resp.Model; model != nil && model.Properties != nil {
+		primaryEndpoints = model.Properties.PrimaryEndpoints
+		routingPreference = model.Properties.RoutingPreference
+		secondaryEndpoints = model.Properties.SecondaryEndpoints
+	}
+	endpoints := flattenAccountEndpoints(primaryEndpoints, secondaryEndpoints, routingPreference)
+	endpoints.set(d)
+
+	storageAccountKeys := make([]storageaccounts.StorageAccountKey, 0)
+	if keys.Model != nil && keys.Model.Keys != nil {
+		storageAccountKeys = *keys.Model.Keys
+	}
+	keysAndConnectionStrings := flattenAccountAccessKeysAndConnectionStrings(id.StorageAccountName, *storageDomainSuffix, storageAccountKeys, endpoints)
+	keysAndConnectionStrings.set(d)
+
+	return nil
+}

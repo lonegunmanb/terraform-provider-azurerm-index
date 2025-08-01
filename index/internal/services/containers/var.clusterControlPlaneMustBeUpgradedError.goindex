@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+var clusterControlPlaneMustBeUpgradedError = func(resourceGroup, clusterName, nodePoolName string, clusterVersion *string, desiredNodePoolVersion string, availableVersions []string) error {
+	versions := make([]string, 0)
+	for _, version := range availableVersions {
+		versions = append(versions, fmt.Sprintf(" * %s", version))
+	}
+	versionsList := strings.Join(versions, "\n")
+	clusterVersionDetails := "We were unable to determine the version of Kubernetes available on the Kubernetes Cluster."
+	if clusterVersion != nil {
+		clusterVersionDetails = fmt.Sprintf("The Kubernetes Cluster is running version %q.", *clusterVersion)
+	}
+
+	return fmt.Errorf(`
+The Kubernetes/Orchestrator Version %q is not available for Node Pool %q.
+
+Please confirm that this version is supported by the Kubernetes Cluster %q
+(Resource Group %q) - which may need to be upgraded first.
+
+%s
+
+The supported Orchestrator Versions for this Node Pool/supported by this Kubernetes Cluster are:
+%s
+
+Node Pools cannot use a version of Kubernetes that is not supported on the Control Plane. More
+details can be found at https://aka.ms/version-skew-policy.
+`, desiredNodePoolVersion, nodePoolName, clusterName, resourceGroup, clusterVersionDetails, versionsList)
+}

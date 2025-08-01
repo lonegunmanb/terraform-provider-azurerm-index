@@ -1,0 +1,28 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/sdk
+import (
+	"fmt"
+	"reflect"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+)
+func (rmd ResourceMetaData) Encode(input interface{}) error {
+	if reflect.TypeOf(input).Kind() != reflect.Ptr {
+		return fmt.Errorf("need a pointer")
+	}
+
+	objType := reflect.TypeOf(input).Elem()
+	objVal := reflect.ValueOf(input).Elem()
+
+	serialized, err := recurse(objType, objVal, rmd.serializationDebugLogger)
+	if err != nil {
+		return err
+	}
+
+	for k, v := range serialized {
+		// lintignore:R001
+		if err := rmd.ResourceData.Set(k, v); err != nil {
+			return fmt.Errorf("setting %q: %+v", k, err)
+		}
+	}
+	return nil
+}

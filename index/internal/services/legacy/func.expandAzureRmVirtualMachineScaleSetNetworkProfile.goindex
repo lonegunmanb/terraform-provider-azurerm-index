@@ -1,0 +1,176 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	validate2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAzureRmVirtualMachineScaleSetNetworkProfile(d *pluginsdk.ResourceData) *virtualmachinescalesets.VirtualMachineScaleSetNetworkProfile {
+	scaleSetNetworkProfileConfigs := d.Get("network_profile").(*pluginsdk.Set).List()
+	networkProfileConfig := make([]virtualmachinescalesets.VirtualMachineScaleSetNetworkConfiguration, 0, len(scaleSetNetworkProfileConfigs))
+
+	for _, npProfileConfig := range scaleSetNetworkProfileConfigs {
+		config := npProfileConfig.(map[string]interface{})
+
+		name := config["name"].(string)
+		primary := config["primary"].(bool)
+		acceleratedNetworking := config["accelerated_networking"].(bool)
+		ipForwarding := config["ip_forwarding"].(bool)
+
+		dnsSettingsConfigs := config["dns_settings"].([]interface{})
+		dnsSettings := virtualmachinescalesets.VirtualMachineScaleSetNetworkConfigurationDnsSettings{}
+		for _, dnsSettingsConfig := range dnsSettingsConfigs {
+			dns_settings := dnsSettingsConfig.(map[string]interface{})
+
+			if v := dns_settings["dns_servers"]; v != nil {
+				dns_servers := dns_settings["dns_servers"].([]interface{})
+				if len(dns_servers) > 0 {
+					var dnsServers []string
+					for _, v := range dns_servers {
+						str := v.(string)
+						dnsServers = append(dnsServers, str)
+					}
+					dnsSettings.DnsServers = &dnsServers
+				}
+			}
+		}
+		ipConfigurationConfigs := config["ip_configuration"].([]interface{})
+		ipConfigurations := make([]virtualmachinescalesets.VirtualMachineScaleSetIPConfiguration, 0, len(ipConfigurationConfigs))
+		for _, ipConfigConfig := range ipConfigurationConfigs {
+			ipconfig := ipConfigConfig.(map[string]interface{})
+			name := ipconfig["name"].(string)
+			primary := ipconfig["primary"].(bool)
+			subnetId := ipconfig["subnet_id"].(string)
+
+			ipConfiguration := virtualmachinescalesets.VirtualMachineScaleSetIPConfiguration{
+				Name: name,
+				Properties: &virtualmachinescalesets.VirtualMachineScaleSetIPConfigurationProperties{
+					Subnet: &virtualmachinescalesets.ApiEntityReference{
+						Id: &subnetId,
+					},
+				},
+			}
+
+			ipConfiguration.Properties.Primary = &primary
+
+			if v := ipconfig["application_gateway_backend_address_pool_ids"]; v != nil {
+				pools := v.(*pluginsdk.Set).List()
+				resources := make([]virtualmachinescalesets.SubResource, 0, len(pools))
+				for _, p := range pools {
+					id := p.(string)
+					resources = append(resources, virtualmachinescalesets.SubResource{
+						Id: &id,
+					})
+				}
+				ipConfiguration.Properties.ApplicationGatewayBackendAddressPools = &resources
+			}
+
+			if v := ipconfig["application_security_group_ids"]; v != nil {
+				asgs := v.(*pluginsdk.Set).List()
+				resources := make([]virtualmachinescalesets.SubResource, 0, len(asgs))
+				for _, p := range asgs {
+					id := p.(string)
+					resources = append(resources, virtualmachinescalesets.SubResource{
+						Id: &id,
+					})
+				}
+				ipConfiguration.Properties.ApplicationSecurityGroups = &resources
+			}
+
+			if v := ipconfig["load_balancer_backend_address_pool_ids"]; v != nil {
+				pools := v.(*pluginsdk.Set).List()
+				resources := make([]virtualmachinescalesets.SubResource, 0, len(pools))
+				for _, p := range pools {
+					id := p.(string)
+					resources = append(resources, virtualmachinescalesets.SubResource{
+						Id: &id,
+					})
+				}
+				ipConfiguration.Properties.LoadBalancerBackendAddressPools = &resources
+			}
+
+			if v := ipconfig["load_balancer_inbound_nat_rules_ids"]; v != nil {
+				rules := v.(*pluginsdk.Set).List()
+				rulesResources := make([]virtualmachinescalesets.SubResource, 0, len(rules))
+				for _, m := range rules {
+					id := m.(string)
+					rulesResources = append(rulesResources, virtualmachinescalesets.SubResource{
+						Id: &id,
+					})
+				}
+				ipConfiguration.Properties.LoadBalancerInboundNatPools = &rulesResources
+			}
+
+			if v := ipconfig["public_ip_address_configuration"]; v != nil {
+				publicIpConfigs := v.([]interface{})
+				for _, publicIpConfigConfig := range publicIpConfigs {
+					publicIpConfig := publicIpConfigConfig.(map[string]interface{})
+
+					dnsSettings := virtualmachinescalesets.VirtualMachineScaleSetPublicIPAddressConfigurationDnsSettings{
+						DomainNameLabel: publicIpConfig["domain_name_label"].(string),
+					}
+
+					idleTimeout := int64(publicIpConfig["idle_timeout"].(int))
+					prop := virtualmachinescalesets.VirtualMachineScaleSetPublicIPAddressConfigurationProperties{
+						DnsSettings:          &dnsSettings,
+						IdleTimeoutInMinutes: &idleTimeout,
+					}
+
+					config := virtualmachinescalesets.VirtualMachineScaleSetPublicIPAddressConfiguration{
+						Name:       publicIpConfig["name"].(string),
+						Properties: &prop,
+					}
+					ipConfiguration.Properties.PublicIPAddressConfiguration = &config
+				}
+			}
+
+			ipConfigurations = append(ipConfigurations, ipConfiguration)
+		}
+
+		nProfile := virtualmachinescalesets.VirtualMachineScaleSetNetworkConfiguration{
+			Name: name,
+			Properties: &virtualmachinescalesets.VirtualMachineScaleSetNetworkConfigurationProperties{
+				Primary:                     &primary,
+				IPConfigurations:            ipConfigurations,
+				EnableAcceleratedNetworking: &acceleratedNetworking,
+				EnableIPForwarding:          &ipForwarding,
+				DnsSettings:                 &dnsSettings,
+			},
+		}
+
+		if v := config["network_security_group_id"].(string); v != "" {
+			networkSecurityGroupId := virtualmachinescalesets.SubResource{
+				Id: &v,
+			}
+			nProfile.Properties.NetworkSecurityGroup = &networkSecurityGroupId
+		}
+
+		networkProfileConfig = append(networkProfileConfig, nProfile)
+	}
+
+	return &virtualmachinescalesets.VirtualMachineScaleSetNetworkProfile{
+		NetworkInterfaceConfigurations: &networkProfileConfig,
+	}
+}

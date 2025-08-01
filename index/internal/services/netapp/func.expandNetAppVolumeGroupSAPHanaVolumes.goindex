@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumesreplication"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandNetAppVolumeGroupSAPHanaVolumes(input []netAppModels.NetAppVolumeGroupSAPHanaVolume) (*[]volumegroups.VolumeGroupVolumeProperties, error) {
+	if len(input) == 0 {
+		return &[]volumegroups.VolumeGroupVolumeProperties{}, fmt.Errorf("received empty NetAppVolumeGroupSAPHanaVolume slice")
+	}
+
+	results := make([]volumegroups.VolumeGroupVolumeProperties, 0)
+
+	for _, item := range input {
+		name := item.Name
+		volumePath := item.VolumePath
+		serviceLevel := volumegroups.ServiceLevel(item.ServiceLevel)
+		subnetID := item.SubnetId
+		capacityPoolID := item.CapacityPoolId
+		protocols := item.Protocols
+		snapshotDirectoryVisible := item.SnapshotDirectoryVisible
+		securityStyle := volumegroups.SecurityStyle(item.SecurityStyle)
+		storageQuotaInGB := item.StorageQuotaInGB * 1073741824
+		exportPolicyRule := expandNetAppVolumeGroupVolumeExportPolicyRule(item.ExportPolicy)
+		dataProtectionReplication := expandNetAppVolumeGroupDataProtectionReplication(item.DataProtectionReplication)
+		dataProtectionSnapshotPolicy := expandNetAppVolumeGroupDataProtectionSnapshotPolicy(item.DataProtectionSnapshotPolicy)
+
+		volumeProperties := &volumegroups.VolumeGroupVolumeProperties{
+			Name: utils.String(name),
+			Properties: volumegroups.VolumeProperties{
+				CapacityPoolResourceId:   utils.String(capacityPoolID),
+				CreationToken:            volumePath,
+				ServiceLevel:             &serviceLevel,
+				SubnetId:                 subnetID,
+				ProtocolTypes:            &protocols,
+				SecurityStyle:            &securityStyle,
+				UsageThreshold:           storageQuotaInGB,
+				ExportPolicy:             exportPolicyRule,
+				SnapshotDirectoryVisible: utils.Bool(snapshotDirectoryVisible),
+				ThroughputMibps:          utils.Float(item.ThroughputInMibps),
+				VolumeSpecName:           utils.String(item.VolumeSpecName),
+				DataProtection: &volumegroups.VolumePropertiesDataProtection{
+					Replication: dataProtectionReplication.Replication,
+					Snapshot:    dataProtectionSnapshotPolicy.Snapshot,
+				},
+			},
+			Tags: &item.Tags,
+		}
+
+		if v := item.ProximityPlacementGroupId; v != "" {
+			volumeProperties.Properties.ProximityPlacementGroup = pointer.To(pointer.From(pointer.To(v)))
+		}
+
+		results = append(results, *volumeProperties)
+	}
+
+	return &results, nil
+}

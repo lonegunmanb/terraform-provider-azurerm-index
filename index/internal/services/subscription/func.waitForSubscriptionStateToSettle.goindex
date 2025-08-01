@@ -1,0 +1,80 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/subscription
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-12-01/subscriptions"
+	tagsSdk "github.com/hashicorp/go-azure-sdk/resource-manager/resources/2023-07-01/tags"
+	subscriptionAlias "github.com/hashicorp/go-azure-sdk/resource-manager/subscription/2021-10-01/subscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	billingValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/billing/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/subscription/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/subscription/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func waitForSubscriptionStateToSettle(ctx context.Context, client *subscriptions.SubscriptionsClient, subscriptionId commonids.SubscriptionId, targetState string, timeout time.Duration) error {
+	stateConf := &pluginsdk.StateChangeConf{
+		Refresh: func() (result interface{}, state string, err error) {
+			status, err := client.Get(ctx, subscriptionId)
+			if err != nil {
+				return status, "Failed", err
+			}
+			if status.Model == nil || status.Model.State == nil {
+				return status, "Unknown", err
+			}
+
+			return status, string(*status.Model.State), err
+		},
+		PollInterval:              10 * time.Second,
+		Timeout:                   timeout,
+		ContinuousTargetOccurence: 4,
+		Delay:                     60 * time.Second,
+	}
+	switch targetState {
+	case "Cancelled":
+		stateConf.Target = []string{
+			string(subscriptions.SubscriptionStateDisabled),
+			string(subscriptions.SubscriptionStateWarned),
+		}
+		stateConf.Pending = []string{
+			string(subscriptions.SubscriptionStateEnabled),
+			"", // The `State` field can be empty whilst being updated
+		}
+
+	case "Active":
+		stateConf.Target = []string{
+			string(subscriptions.SubscriptionStateEnabled),
+		}
+		stateConf.Pending = []string{
+			string(subscriptions.SubscriptionStateDisabled),
+			string(subscriptions.SubscriptionStateWarned),
+			"", // The `State` field can be empty whilst being updated
+		}
+	default:
+		return fmt.Errorf("unsupported target state %q for Subscription %q", targetState, subscriptionId)
+	}
+
+	if actual, err := stateConf.WaitForStateContext(ctx); err != nil {
+		sub, ok := actual.(subscriptions.Subscription)
+		if !ok {
+			return fmt.Errorf("failure in parsing response while waiting for Subscription %q to become %q: %+v", subscriptionId, targetState, err)
+		}
+		actualState := string(pointer.From(sub.State))
+		return fmt.Errorf("waiting for Subscription %q to become %q, currently %q", subscriptionId, targetState, actualState)
+	}
+
+	return nil
+}

@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/certificates"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ContainerAppEnvironmentCertificateResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ContainerApps.CertificatesClient
+			environmentsClient := metadata.Client.ContainerApps.ManagedEnvironmentClient
+
+			var cert ContainerAppCertificateModel
+
+			if err := metadata.Decode(&cert); err != nil {
+				return err
+			}
+
+			envId, err := managedenvironments.ParseManagedEnvironmentID(cert.ManagedEnvironmentId)
+			if err != nil {
+				return err
+			}
+
+			id := certificates.NewCertificateID(metadata.Client.Account.SubscriptionId, envId.ResourceGroupName, envId.ManagedEnvironmentName, cert.Name)
+			env, err := environmentsClient.Get(ctx, *envId)
+			if err != nil {
+				return fmt.Errorf("reading %s for %s: %+v", *envId, id, err)
+			}
+
+			model := certificates.Certificate{
+				Location: env.Model.Location,
+				Name:     pointer.To(id.CertificateName),
+				Properties: &certificates.CertificateProperties{
+					Password: pointer.To(cert.CertificatePassword),
+					Value:    pointer.To(cert.CertificateBlob),
+				},
+				Tags: tags.Expand(cert.Tags),
+			}
+
+			if _, err := client.CreateOrUpdate(ctx, id, model); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			return nil
+		},
+	}
+}

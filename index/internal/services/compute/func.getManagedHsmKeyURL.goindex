@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-02/diskencryptionsets"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func getManagedHsmKeyURL(ctx context.Context, managedkeyBundleClient *keyvault.BaseClient, managedHsmKeyId string, rotationToLatestKeyVersionEnabled bool, env environments.Environment) (string, error) {
+	domainSuffix, ok := env.ManagedHSM.DomainSuffix()
+	if !ok {
+		return "", fmt.Errorf("managed HSM is not supported in this Environment")
+	}
+	managedHsmVersionedKey, err := managedHsmParse.ManagedHSMDataPlaneVersionedKeyID(managedHsmKeyId, domainSuffix)
+	if err == nil {
+		err = validateKeyAndRotationEnabled(rotationToLatestKeyVersionEnabled, true, managedHsmVersionedKey.ID())
+		if err != nil {
+			return "", err
+		}
+		return managedHsmVersionedKey.ID(), nil
+	} else {
+		managedHsmVersionlessKey, err := managedHsmParse.ManagedHSMDataPlaneVersionlessKeyID(managedHsmKeyId, domainSuffix)
+		if err != nil {
+			return "", err
+		}
+		err = validateKeyAndRotationEnabled(rotationToLatestKeyVersionEnabled, false, managedHsmVersionlessKey.ID())
+		if err != nil {
+			return "", err
+		}
+		keyBundle, err := managedkeyBundleClient.GetKey(ctx, managedHsmVersionlessKey.BaseUri(), managedHsmVersionlessKey.KeyName, "")
+		if err != nil {
+			return "", err
+		}
+
+		if keyBundle.Key.Kid != nil {
+			return pointer.From(keyBundle.Key.Kid), nil
+		}
+		return "", fmt.Errorf("retrieving key version for key %s: Key Vault did not return a version", managedHsmKeyId)
+	}
+}

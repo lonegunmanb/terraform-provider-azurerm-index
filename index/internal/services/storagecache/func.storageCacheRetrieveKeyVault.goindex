@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/caches"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func storageCacheRetrieveKeyVault(ctx context.Context, keyVaultsClient *client.Client, subscriptionId string, id string) (*storageCacheKeyVault, error) {
+	keyVaultKeyId, err := keyVaultParse.ParseNestedItemID(id)
+	if err != nil {
+		return nil, err
+	}
+	subscriptionResourceId := commonids.NewSubscriptionID(subscriptionId)
+	keyVaultID, err := keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, subscriptionResourceId, keyVaultKeyId.KeyVaultBaseUrl)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving the Resource ID the Key Vault at URL %q: %s", keyVaultKeyId.KeyVaultBaseUrl, err)
+	}
+	if keyVaultID == nil {
+		return nil, fmt.Errorf("Unable to determine the Resource ID for the Key Vault at URL %q", keyVaultKeyId.KeyVaultBaseUrl)
+	}
+
+	parsedKeyVaultID, err := commonids.ParseKeyVaultID(*keyVaultID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := keyVaultsClient.VaultsClient.Get(ctx, *parsedKeyVaultID)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving %s: %+v", *parsedKeyVaultID, err)
+	}
+
+	loc := ""
+	purgeProtectionEnabled := false
+	softDeleteEnabled := false
+	if model := resp.Model; model != nil {
+		loc = location.NormalizeNilable(model.Location)
+		if model.Properties.EnableSoftDelete != nil {
+			softDeleteEnabled = *model.Properties.EnableSoftDelete
+		}
+
+		if model.Properties.EnablePurgeProtection != nil {
+			purgeProtectionEnabled = *model.Properties.EnablePurgeProtection
+		}
+	}
+
+	return &storageCacheKeyVault{
+		keyVaultId:             *keyVaultID,
+		resourceGroupName:      parsedKeyVaultID.ResourceGroupName,
+		keyVaultName:           parsedKeyVaultID.VaultName,
+		location:               loc,
+		purgeProtectionEnabled: purgeProtectionEnabled,
+		softDeleteEnabled:      softDeleteEnabled,
+	}, nil
+}

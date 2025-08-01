@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2023-04-03/azuremonitorworkspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r WorkspaceResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Monitor.WorkspacesClient
+
+			id, err := azuremonitorworkspaces.ParseAccountID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			state := WorkspaceResourceModel{
+				Name:              id.AccountName,
+				ResourceGroupName: id.ResourceGroupName,
+			}
+
+			if model := resp.Model; model != nil {
+				state.Tags = pointer.From(model.Tags)
+				state.Location = location.Normalize(model.Location)
+
+				if properties := model.Properties; properties != nil {
+					publicNetworkAccess := true
+					if properties.PublicNetworkAccess != nil {
+						publicNetworkAccess = azuremonitorworkspaces.PublicNetworkAccessEnabled == *properties.PublicNetworkAccess
+					}
+					state.PublicNetworkAccessEnabled = publicNetworkAccess
+
+					if properties.Metrics != nil && properties.Metrics.PrometheusQueryEndpoint != nil {
+						state.QueryEndpoint = *properties.Metrics.PrometheusQueryEndpoint
+					}
+
+					if properties.DefaultIngestionSettings != nil {
+						if properties.DefaultIngestionSettings.DataCollectionEndpointResourceId != nil {
+							state.DefaultDataCollectionEndpointId = *properties.DefaultIngestionSettings.DataCollectionEndpointResourceId
+						}
+						if properties.DefaultIngestionSettings.DataCollectionRuleResourceId != nil {
+							state.DefaultDataCollectionRuleId = *properties.DefaultIngestionSettings.DataCollectionRuleResourceId
+						}
+					}
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

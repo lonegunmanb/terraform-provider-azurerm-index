@@ -1,0 +1,102 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	frsUUID "github.com/gofrs/uuid"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	accesscontrol "github.com/jackofallops/kermit/sdk/synapse/2020-08-01-preview/synapse"
+)
+func resourceSynapseRoleAssignment() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceSynapseRoleAssignmentCreate,
+		Read:   resourceSynapseRoleAssignmentRead,
+		Delete: resourceSynapseRoleAssignmentDelete,
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.RoleAssignmentV0ToV1{},
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.RoleAssignmentID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"synapse_workspace_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ExactlyOneOf: []string{"synapse_workspace_id", "synapse_spark_pool_id"},
+				ValidateFunc: validate.WorkspaceID,
+			},
+
+			"synapse_spark_pool_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ExactlyOneOf: []string{"synapse_workspace_id", "synapse_spark_pool_id"},
+				ValidateFunc: validate.SparkPoolID,
+			},
+
+			"principal_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.IsUUID,
+			},
+
+			"principal_type": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"User",
+					"Group",
+					"ServicePrincipal",
+				}, false),
+			},
+
+			"role_name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				DiffSuppressFunc: func(_, old, new string, d *pluginsdk.ResourceData) bool {
+					return migration.MigrateToNewRole(old) == migration.MigrateToNewRole(new)
+				},
+				ValidateFunc: validation.StringInSlice([]string{
+					"Apache Spark Administrator",
+					"Synapse Administrator",
+					"Synapse Artifact Publisher",
+					"Synapse Artifact User",
+					"Synapse Compute Operator",
+					"Synapse Contributor",
+					"Synapse Credential User",
+					"Synapse Linked Data Manager",
+					"Synapse Monitoring Operator",
+					"Synapse SQL Administrator",
+					"Synapse User",
+				}, false),
+			},
+		},
+	}
+}

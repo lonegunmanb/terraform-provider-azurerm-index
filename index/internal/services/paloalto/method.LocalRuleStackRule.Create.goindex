@@ -1,0 +1,131 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	certificates "github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2022-08-29/certificateobjectlocalrulestack"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2022-08-29/localrules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2022-08-29/localrulestacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r LocalRuleStackRule) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.PaloAlto.Client.LocalRules
+			rulestackClient := metadata.Client.PaloAlto.Client.LocalRulestacks
+
+			model := LocalRuleModel{}
+
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			rulestackId, err := localrulestacks.ParseLocalRulestackID(model.RuleStackID)
+			if err != nil {
+				return err
+			}
+			locks.ByID(rulestackId.ID())
+			defer locks.UnlockByID(rulestackId.ID())
+
+			// API uses Priority not Name for ID, despite swagger defining `ruleName` as required, not Priority - https://github.com/Azure/azure-rest-api-specs/issues/24697
+			id := localrules.NewLocalRuleID(metadata.Client.Account.SubscriptionId, rulestackId.ResourceGroupName, rulestackId.LocalRulestackName, strconv.FormatInt(model.Priority, 10))
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			destination, err := schema.ExpandDestination(model.Destination)
+			if err != nil {
+				return fmt.Errorf("expanding destination for %s, %+v", id, err)
+			}
+
+			source, err := schema.ExpandSource(model.Source)
+			if err != nil {
+				return fmt.Errorf("expanding source for %s: %+v", id, err)
+			}
+
+			props := localrules.RuleEntry{
+				Category:          schema.ExpandCategory(model.Category),
+				Destination:       destination,
+				EnableLogging:     boolAsStateEnum(model.LoggingEnabled),
+				NegateDestination: boolAsBooleanEnumRule(model.NegateDestination),
+				NegateSource:      boolAsBooleanEnumRule(model.NegateSource),
+				RuleName:          model.Name,
+				RuleState:         boolAsStateEnum(model.RuleEnabled),
+				Source:            source,
+				Tags:              expandTagsForRule(model.Tags),
+			}
+
+			if model.Action != "" {
+				props.ActionType = pointer.To(localrules.ActionEnum(model.Action))
+			}
+
+			if len(model.Applications) != 0 {
+				props.Applications = pointer.To(model.Applications)
+			}
+
+			if model.AuditComment != "" {
+				props.AuditComment = pointer.To(model.AuditComment)
+			}
+
+			if model.DecryptionRuleType != "" {
+				props.DecryptionRuleType = pointer.To(localrules.DecryptionRuleTypeEnum(model.DecryptionRuleType))
+			}
+
+			if model.Description != "" {
+				props.Description = pointer.To(model.Description)
+			}
+
+			if model.InspectionCertificateID != "" {
+				certID, err := certificates.ParseLocalRulestackCertificateID(model.InspectionCertificateID)
+				if err != nil {
+					return err
+				}
+				props.InboundInspectionCertificate = pointer.To(certID.CertificateName)
+			}
+
+			if model.Priority != 0 {
+				props.Priority = pointer.To(model.Priority)
+			}
+
+			if len(model.ProtocolPorts) != 0 {
+				props.ProtocolPortList = pointer.To(model.ProtocolPorts)
+			}
+
+			if model.Protocol != "" && !strings.EqualFold(model.Protocol, protocolApplicationDefault) && len(model.ProtocolPorts) == 0 {
+				props.Protocol = pointer.To(model.Protocol)
+			}
+
+			if _, err = client.CreateOrUpdate(ctx, id, localrules.LocalRulesResource{Properties: props}); err != nil {
+				return err
+			}
+
+			metadata.SetID(id)
+
+			if err = rulestackClient.CommitThenPoll(ctx, *rulestackId); err != nil {
+				return fmt.Errorf("committing Local Rulestack config for %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

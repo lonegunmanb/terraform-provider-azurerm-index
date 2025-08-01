@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func validateCustomDomainRoutes(input *[]parse.FrontDoorRouteId, customDomainID *parse.FrontDoorCustomDomainId) error {
+	if input == nil || len(*input) == 0 {
+		return nil
+	}
+
+	// check for duplicates...
+	if err := routeSliceHasDuplicates(input, "CDN FrontDoor Route"); err != nil {
+		return err
+	}
+
+	for i, route := range *input {
+		// the route and custom domain profiles must match...
+		if customDomainID.ProfileName != route.ProfileName {
+			return fmt.Errorf("the CDN FrontDoor Custom Domain(Name: %q, Profile: %q) and the CDN FrontDoor Route(Name: %q, Profile: %q) must belong to the same CDN FrontDoor Profile", customDomainID.CustomDomainName, customDomainID.ProfileName, route.RouteName, route.ProfileName)
+		}
+
+		// validate all routes are using the same endpoint because a custom domain can not
+		// be associated with routes that target two different endpoints...
+		for t, v := range *input {
+			if i == t {
+				continue
+			}
+
+			if route.AfdEndpointName != v.AfdEndpointName {
+				return fmt.Errorf("the CDN FrontDoor Route(Name: %q) and CDN FrontDoor Route(Name: %q) do not reference the same CDN FrontDoor Endpoint(Name: %q). All CDN FrontDoor Routes must reference the same CDN FrontDoor Endpoint %q to associate the CDN FrontDoor Custom Domain(Name: %q) with more than one CDN FrontDoor Route", route.RouteName, v.RouteName, route.AfdEndpointName, route.AfdEndpointName, customDomainID.CustomDomainName)
+			}
+		}
+	}
+
+	return nil
+}

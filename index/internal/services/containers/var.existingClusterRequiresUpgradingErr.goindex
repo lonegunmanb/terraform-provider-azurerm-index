@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+var existingClusterRequiresUpgradingErr = func(resourceGroup, name string) error {
+	return fmt.Errorf(`
+%s
+
+This Kubernetes Cluster requires upgrading to use a Managed Identity rather than Mixed-Mode
+authentication. Whilst Terraform could attempt to do this automatically, unfortunately this wouldn't
+work for all users - and as such this needs to be performed out-of-band.
+
+You can do this by making any change to the Cluster (not the Node Pool/Resource Group) - for example
+adding a Tag, which can be done via the Azure CLI:
+
+$ az resource update \
+	--resource-type "Microsoft.ContainerService/managedClusters"
+	--resource-group "%s"\
+	--name "%s"\
+	--set "tags.Foo='Bar'"
+
+Which will set a tag of 'Foo' with the value 'Bar' on this Kubernetes Cluster.
+
+Once the Cluster has finished updating, you can confirm Managed Identity is being used by running the
+following Azure CLI command:
+
+$ az resource show\
+  --resource-type "Microsoft.ContainerService/managedClusters"\
+  --q "properties.servicePrincipalProfile"\
+  --resource-group "%s"\
+  --name "%s"
+
+.. which if successful should show:
+
+{
+  "clientId": "msi"
+}
+
+meaning that the cluster is using only a Managed Identity for Cluster Authentication.
+
+---
+
+Now that the Cluster has been updated - to continue using this Cluster in Terraform, remove the
+'service_principal' block from your Terraform Configuration (since this is no longer required), at
+which point this Cluster can be managed in Terraform as before.
+`, existingClusterCommonErr, resourceGroup, name, resourceGroup, name)
+}

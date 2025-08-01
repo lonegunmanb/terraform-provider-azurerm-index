@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandAzureRmLoadBalancerOutboundRule(d *pluginsdk.ResourceData, lb *loadbalancers.LoadBalancer) (*loadbalancers.OutboundRule, error) {
+	properties := loadbalancers.OutboundRulePropertiesFormat{
+		Protocol:               loadbalancers.LoadBalancerOutboundRuleProtocol(d.Get("protocol").(string)),
+		AllocatedOutboundPorts: pointer.To(int64(d.Get("allocated_outbound_ports").(int))),
+	}
+
+	feConfigs := d.Get("frontend_ip_configuration").([]interface{})
+	feConfigSubResources := make([]loadbalancers.SubResource, 0)
+
+	for _, raw := range feConfigs {
+		v := raw.(map[string]interface{})
+		rule, exists := FindLoadBalancerFrontEndIpConfigurationByName(lb, v["name"].(string))
+		if !exists {
+			return nil, fmt.Errorf("[ERROR] Cannot find FrontEnd IP Configuration with the name %s", v["name"])
+		}
+
+		feConfigSubResource := loadbalancers.SubResource{
+			Id: rule.Id,
+		}
+
+		feConfigSubResources = append(feConfigSubResources, feConfigSubResource)
+	}
+
+	properties.FrontendIPConfigurations = feConfigSubResources
+
+	if v := d.Get("backend_address_pool_id").(string); v != "" {
+		properties.BackendAddressPool = loadbalancers.SubResource{
+			Id: &v,
+		}
+	}
+
+	if v, ok := d.GetOk("idle_timeout_in_minutes"); ok {
+		properties.IdleTimeoutInMinutes = pointer.To(int64(v.(int)))
+	}
+
+	if v, ok := d.GetOk("enable_tcp_reset"); ok {
+		properties.EnableTcpReset = pointer.To(v.(bool))
+	}
+
+	return &loadbalancers.OutboundRule{
+		Name:       pointer.To(d.Get("name").(string)),
+		Properties: &properties,
+	}, nil
+}

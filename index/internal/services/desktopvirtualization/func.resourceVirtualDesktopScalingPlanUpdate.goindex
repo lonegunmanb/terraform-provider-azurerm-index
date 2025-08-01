@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/desktopvirtualization
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/desktopvirtualization/2022-02-10-preview/hostpool"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/desktopvirtualization/2022-02-10-preview/scalingplan"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceVirtualDesktopScalingPlanUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).DesktopVirtualization.ScalingPlansClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	log.Printf("[INFO] preparing arguments for Virtual Desktop Scaling Plan update")
+
+	id, err := scalingplan.ParseScalingPlanID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	t := d.Get("tags").(map[string]interface{})
+
+	payload := scalingplan.ScalingPlanPatch{
+		Tags: tags.Expand(t),
+		Properties: &scalingplan.ScalingPlanPatchProperties{
+			Description:        utils.String(d.Get("description").(string)),
+			FriendlyName:       utils.String(d.Get("friendly_name").(string)),
+			TimeZone:           utils.String(d.Get("time_zone").(string)),
+			ExclusionTag:       utils.String(d.Get("exclusion_tag").(string)),
+			Schedules:          expandScalingPlanSchedule(d.Get("schedule").([]interface{})),
+			HostPoolReferences: expandScalingPlanHostpoolReference(d.Get("host_pool").([]interface{})),
+		},
+	}
+
+	if _, err := client.Update(ctx, *id, payload); err != nil {
+		return fmt.Errorf("updating %s: %+v", *id, err)
+	}
+
+	return resourceVirtualDesktopScalingPlanRead(d, meta)
+}

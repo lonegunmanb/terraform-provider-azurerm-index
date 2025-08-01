@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2023-12-30/servers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceMysqlFlexibleServerRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).MySQL.FlexibleServers.Servers
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := servers.NewFlexibleServerID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	resp, err := client.Get(ctx, id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return fmt.Errorf("%s was not found", id)
+		}
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	d.Set("name", id.FlexibleServerName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.NormalizeNilable(&model.Location))
+
+		if props := model.Properties; props != nil {
+			d.Set("administrator_login", props.AdministratorLogin)
+			d.Set("zone", props.AvailabilityZone)
+			d.Set("version", string(pointer.From(props.Version)))
+			d.Set("fqdn", props.FullyQualifiedDomainName)
+
+			if network := props.Network; network != nil {
+				d.Set("public_network_access_enabled", *network.PublicNetworkAccess == servers.EnableStatusEnumEnabled)
+				d.Set("delegated_subnet_id", network.DelegatedSubnetResourceId)
+				d.Set("private_dns_zone_id", network.PrivateDnsZoneResourceId)
+			}
+
+			if err := d.Set("maintenance_window", flattenDataSourceArmServerMaintenanceWindow(props.MaintenanceWindow)); err != nil {
+				return fmt.Errorf("setting `maintenance_window`: %+v", err)
+			}
+
+			if err := d.Set("storage", flattenDataSourceArmServerStorage(props.Storage)); err != nil {
+				return fmt.Errorf("setting `storage`: %+v", err)
+			}
+
+			if backup := props.Backup; backup != nil {
+				d.Set("backup_retention_days", backup.BackupRetentionDays)
+				d.Set("geo_redundant_backup_enabled", *backup.GeoRedundantBackup == servers.EnableStatusEnumEnabled)
+			}
+
+			if err := d.Set("high_availability", flattenDataSourceFlexibleServerHighAvailability(props.HighAvailability)); err != nil {
+				return fmt.Errorf("setting `high_availability`: %+v", err)
+			}
+			d.Set("replication_role", string(pointer.From(props.ReplicationRole)))
+			d.Set("replica_capacity", props.ReplicaCapacity)
+		}
+
+		sku, err := flattenDataSourceFlexibleServerSku(model.Sku)
+		if err != nil {
+			return fmt.Errorf("flattening `sku_name` for %q: %v", id, err)
+		}
+
+		d.Set("sku_name", sku)
+
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+	return nil
+}

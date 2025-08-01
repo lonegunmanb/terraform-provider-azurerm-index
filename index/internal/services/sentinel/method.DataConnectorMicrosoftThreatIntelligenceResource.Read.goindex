@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/workspaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
+)
+func (s DataConnectorMicrosoftThreatIntelligenceResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Sentinel.DataConnectorsClient
+			id, err := parse.DataConnectorID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			workspaceId := workspaces.NewWorkspaceID(id.SubscriptionId, id.ResourceGroup, id.WorkspaceName)
+
+			existing, err := client.Get(ctx, id.ResourceGroup, id.WorkspaceName, id.Name)
+			if err != nil {
+				if utils.ResponseWasNotFound(existing.Response) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			dc, ok := existing.Value.(securityinsight.MSTIDataConnector)
+			if !ok {
+				return fmt.Errorf("%s was not an Microsoft Threat Protection Data Connector", id)
+			}
+
+			state := DataConnectorMicrosoftThreatIntelligenceModel{
+				Name:        id.Name,
+				WorkspaceId: workspaceId.ID(),
+				TenantId:    *dc.TenantID,
+			}
+
+			if dc.TenantID != nil {
+				state.TenantId = *dc.TenantID
+			}
+
+			if dt := dc.DataTypes; dt != nil {
+				if dt.MicrosoftEmergingThreatFeed != nil {
+					if strings.EqualFold(string(dt.MicrosoftEmergingThreatFeed.State), string(securityinsight.DataTypeStateEnabled)) {
+						state.MicrosoftEmergingThreatFeedLookBackDate, err = flattenSentinelDataConnectorMicrosoftThreatIntelligenceTime(*dt.MicrosoftEmergingThreatFeed.LookbackPeriod)
+						if err != nil {
+							return fmt.Errorf("flattening `microsoft_emerging_threat_feed`: %+v", err)
+						}
+					}
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

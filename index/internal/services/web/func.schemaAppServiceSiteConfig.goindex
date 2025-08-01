@@ -1,0 +1,258 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"fmt"
+	"log"
+	"math"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func schemaAppServiceSiteConfig() *pluginsdk.Schema {
+	s := &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Optional: true,
+		Computed: true,
+		MaxItems: 1,
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"always_on": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				"app_command_line": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+				},
+
+				"default_documents": {
+					Type:     pluginsdk.TypeList,
+					Optional: true,
+					Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+				},
+
+				"dotnet_framework_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Default:  "v4.0",
+					ValidateFunc: validation.StringInSlice([]string{
+						"v2.0",
+						"v4.0",
+						"v5.0",
+						"v6.0",
+					}, false),
+				},
+
+				"http2_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				"ip_restriction": schemaAppServiceIpRestriction(),
+
+				"scm_use_main_ip_restriction": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				"scm_ip_restriction": schemaAppServiceIpRestriction(),
+
+				"java_version": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.StringInSlice([]string{"1.7", "1.8", "11"}, false),
+				},
+
+				"java_container": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"JAVA",
+						"JETTY",
+						"TOMCAT",
+					}, false),
+				},
+
+				"java_container_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+				},
+
+				"local_mysql_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Computed: true,
+				},
+
+				"managed_pipeline_mode": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.ManagedPipelineModeClassic),
+						string(web.ManagedPipelineModeIntegrated),
+					}, false),
+				},
+
+				"php_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"5.5",
+						"5.6",
+						"7.0",
+						"7.1",
+						"7.2",
+						"7.3",
+						"7.4",
+					}, false),
+				},
+
+				"python_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"2.7",
+						"3.4",
+					}, false),
+				},
+
+				"remote_debugging_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				"remote_debugging_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"VS2022",
+					}, false),
+				},
+
+				"scm_type": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.ScmTypeBitbucketGit),
+						string(web.ScmTypeBitbucketHg),
+						string(web.ScmTypeCodePlexGit),
+						string(web.ScmTypeCodePlexHg),
+						string(web.ScmTypeDropbox),
+						string(web.ScmTypeExternalGit),
+						string(web.ScmTypeExternalHg),
+						string(web.ScmTypeGitHub),
+						string(web.ScmTypeLocalGit),
+						string(web.ScmTypeNone),
+						string(web.ScmTypeOneDrive),
+						string(web.ScmTypeTfs),
+						string(web.ScmTypeVSO),
+						string(web.ScmTypeVSTSRM),
+					}, false),
+				},
+
+				"use_32_bit_worker_process": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+				},
+
+				"vnet_route_all_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Computed: true,
+				},
+
+				"websockets_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Computed: true,
+				},
+
+				"ftps_state": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.FtpsStateAllAllowed),
+						string(web.FtpsStateDisabled),
+						string(web.FtpsStateFtpsOnly),
+					}, false),
+				},
+
+				"health_check_path": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+				},
+
+				"number_of_workers": {
+					Type:         pluginsdk.TypeInt,
+					Optional:     true,
+					ValidateFunc: validation.IntBetween(1, 100),
+					Computed:     true,
+				},
+
+				"linux_fx_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+				},
+
+				"windows_fx_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+				},
+
+				"min_tls_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						string(web.SupportedTLSVersionsOneFullStopZero),
+						string(web.SupportedTLSVersionsOneFullStopOne),
+						string(web.SupportedTLSVersionsOneFullStopTwo),
+					}, false),
+				},
+
+				"cors": SchemaWebCorsSettings(),
+
+				"auto_swap_slot_name": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+				},
+
+				"acr_use_managed_identity_credentials": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Default:  false,
+				},
+
+				"acr_user_managed_identity_client_id": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+				},
+			},
+		},
+	}
+
+	if !features.FivePointOh() {
+		s.Elem.(*pluginsdk.Resource).Schema["remote_debugging_version"].ValidateFunc = validation.StringInSlice([]string{
+			"VS2017",
+			"VS2019",
+			"VS2022",
+		}, false)
+	}
+
+	return s
+}

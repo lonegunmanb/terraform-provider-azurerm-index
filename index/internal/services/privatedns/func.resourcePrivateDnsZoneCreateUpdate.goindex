@@ -1,0 +1,87 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/privatedns
+import (
+	"fmt"
+	"math"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/recordsets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/privatedns/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePrivateDnsZoneCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).PrivateDns.PrivateZonesClient
+	recordSetsClient := meta.(*clients.Client).PrivateDns.RecordSetsClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := privatezones.NewPrivateDnsZoneID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_private_dns_zone", id.ID())
+		}
+	}
+
+	parameters := privatezones.PrivateZone{
+		Location: utils.String("global"),
+		Tags:     tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	options := privatezones.CreateOrUpdateOperationOptions{
+		IfMatch:     utils.String(""),
+		IfNoneMatch: utils.String(""),
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, parameters, options); err != nil {
+		return fmt.Errorf("creating/updating %s: %s", id, err)
+	}
+
+	if v, ok := d.GetOk("soa_record"); ok {
+		soaRecordRaw := v.([]interface{})[0].(map[string]interface{})
+		soaRecord := expandPrivateDNSZoneSOARecord(soaRecordRaw)
+		rsParameters := recordsets.RecordSet{
+			Properties: &recordsets.RecordSetProperties{
+				Ttl:       utils.Int64(int64(soaRecordRaw["ttl"].(int))),
+				Metadata:  tags.Expand(soaRecordRaw["tags"].(map[string]interface{})),
+				SoaRecord: soaRecord,
+			},
+		}
+
+		recordId := recordsets.NewRecordTypeID(id.SubscriptionId, id.ResourceGroupName, id.PrivateDnsZoneName, recordsets.RecordTypeSOA, "@")
+
+		val := fmt.Sprintf("%s%s", id.PrivateDnsZoneName, strings.TrimSuffix(*soaRecord.Email, "."))
+		if len(val) > 253 {
+			return fmt.Errorf("the value %q for `email` which is concatenated with Private DNS Zone `name` cannot exceed 253 characters excluding a trailing period", val)
+		}
+
+		createOptions := recordsets.CreateOrUpdateOperationOptions{
+			IfMatch:     utils.String(""),
+			IfNoneMatch: utils.String(""),
+		}
+
+		if _, err := recordSetsClient.CreateOrUpdate(ctx, recordId, rsParameters, createOptions); err != nil {
+			return fmt.Errorf("creating/updating %s: %s", recordId, err)
+		}
+	}
+
+	d.SetId(id.ID())
+	return resourcePrivateDnsZoneRead(d, meta)
+}

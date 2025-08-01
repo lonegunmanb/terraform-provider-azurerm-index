@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/consumption/2019-10-01/budgets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandConsumptionBudgetTimePeriod(i []interface{}) (*budgets.BudgetTimePeriod, error) {
+	if len(i) == 0 || i[0] == nil {
+		return nil, nil
+	}
+
+	input := i[0].(map[string]interface{})
+	timePeriod := budgets.BudgetTimePeriod{}
+
+	if startDateInput, ok := input["start_date"].(string); ok {
+		_, err := date.ParseTime(time.RFC3339, startDateInput)
+		if err != nil {
+			return nil, fmt.Errorf("start_date '%s' was not in the correct format: %+v", startDateInput, err)
+		}
+		timePeriod.StartDate = input["start_date"].(string)
+	}
+
+	if endDateInput, ok := input["end_date"].(string); ok {
+		if endDateInput != "" {
+			_, err := date.ParseTime(time.RFC3339, endDateInput)
+			if err != nil {
+				return nil, fmt.Errorf("end_date '%s' was not in the correct format: %+v", endDateInput, err)
+			}
+
+			timePeriod.EndDate = utils.String(input["end_date"].(string))
+		}
+	}
+
+	return &timePeriod, nil
+}

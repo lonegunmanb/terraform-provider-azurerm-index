@@ -1,0 +1,28 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appconfiguration/client
+import (
+	"fmt"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appconfiguration/2024-05-01/configurationstores"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appconfiguration/2024-05-01/deletedconfigurationstores"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appconfiguration/2024-05-01/operations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/appconfiguration/2024-05-01/replicas"
+	authWrapper "github.com/hashicorp/go-azure-sdk/sdk/auth/autorest"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/common"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appconfiguration/azuresdkhacks"
+	"github.com/jackofallops/kermit/sdk/appconfiguration/1.0/appconfiguration"
+)
+func (c *Client) LinkWorkaroundDataPlaneClientWithEndpoint(configurationStoreEndpoint string) (*azuresdkhacks.DataPlaneClient, error) {
+	api := environments.NewApiEndpoint("AppConfiguration", configurationStoreEndpoint, nil)
+	appConfigAuth, err := c.authorizerFunc(api)
+	if err != nil {
+		return nil, fmt.Errorf("obtaining auth token for %q: %+v", configurationStoreEndpoint, err)
+	}
+
+	client := appconfiguration.NewWithoutDefaults("", configurationStoreEndpoint)
+	c.configureClientFunc(&client.Client, authWrapper.AutorestAuthorizer(appConfigAuth))
+	workaroundClient := azuresdkhacks.NewDataPlaneClient(client)
+
+	return &workaroundClient, nil
+}

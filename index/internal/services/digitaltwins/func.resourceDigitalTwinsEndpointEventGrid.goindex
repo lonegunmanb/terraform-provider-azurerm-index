@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/digitaltwins
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/digitaltwins/2023-01-31/digitaltwinsinstance"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/digitaltwins/2023-01-31/endpoints"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/digitaltwins/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceDigitalTwinsEndpointEventGrid() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceDigitalTwinsEndpointEventGridCreateUpdate,
+		Read:   resourceDigitalTwinsEndpointEventGridRead,
+		Update: resourceDigitalTwinsEndpointEventGridCreateUpdate,
+		Delete: resourceDigitalTwinsEndpointEventGridDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceIdThen(func(id string) error {
+			_, err := endpoints.ParseEndpointID(id)
+			return err
+		}, validateEndpointType(func(input endpoints.DigitalTwinsEndpointResourceProperties) error {
+			if _, ok := input.(endpoints.EventGrid); !ok {
+				return fmt.Errorf("expected an EventGrid type but got: %+v", input)
+			}
+			return nil
+		})),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.DigitalTwinsInstanceName,
+			},
+
+			"digital_twins_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: digitaltwinsinstance.ValidateDigitalTwinsInstanceID,
+			},
+
+			"eventgrid_topic_endpoint": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.IsURLWithHTTPS,
+			},
+
+			"eventgrid_topic_primary_access_key": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"eventgrid_topic_secondary_access_key": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"dead_letter_storage_secret": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+		},
+	}
+}

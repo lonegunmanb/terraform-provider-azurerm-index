@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/check
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/md"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/model"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-lint/util"
+)
+func (r *ResourceDiff) DiffAll() {
+	if r.md == nil {
+		if r.MDFile == "" {
+			r.Diff = append(r.Diff, newDiffWithMessage(fmt.Sprintf("%s has no document", r.tf.ResourceType), r.tf.IsDeprecated()))
+			return
+		}
+		mark := md.MustNewMarkFromFile(r.MDFile)
+		r.md = mark.BuildResourceDoc()
+	}
+
+	if name := r.md.HasCircularRef(); name != "" {
+		r.Diff = append(r.Diff, newCircularRef(name, r.md))
+		return
+	}
+
+	r.Diff = checkPossibleValues(r.tf, r.md)
+
+	missDiff := crossCheckProperty(r.tf, r.md)
+	r.Diff = append(r.Diff, missDiff...)
+
+	timeouts := diffTimeout(r.tf, r.md)
+	r.Diff = append(r.Diff, timeouts...)
+}

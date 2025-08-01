@@ -1,0 +1,25 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (BlobV0ToV1) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		environment := meta.(*clients.Client).Account.Environment
+		storageDomainSuffix, ok := environment.Storage.DomainSuffix()
+		if !ok {
+			return nil, fmt.Errorf("could not determine storage endpoint suffix for environment %q", environment.Name)
+		}
+
+		blobName := rawState["name"]
+		containerName := rawState["storage_container_name"]
+		storageAccountName := rawState["storage_account_name"]
+		newID := fmt.Sprintf("https://%s.blob.%s/%s/%s", storageAccountName, *storageDomainSuffix, containerName, blobName)
+		rawState["id"] = newID
+
+		return rawState, nil
+	}
+}

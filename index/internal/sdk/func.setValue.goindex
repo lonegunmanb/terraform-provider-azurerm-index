@@ -1,0 +1,154 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/sdk
+import (
+	"fmt"
+	"reflect"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+)
+func setValue(input, tfschemaValue interface{}, index int, fieldName string, debugLogger Logger) (errOut error) {
+	debugLogger.Infof("setting value for %q..", fieldName)
+	defer func() {
+		if r := recover(); r != nil {
+			debugLogger.Warnf("error setting value for %q: %+v", fieldName, r)
+			out, ok := r.(error)
+			if !ok {
+				return
+			}
+
+			errOut = out
+		}
+	}()
+
+	if v, ok := tfschemaValue.(string); ok {
+		n := reflect.ValueOf(input).Elem().Field(index)
+		if n.Kind() == reflect.Pointer {
+			debugLogger.Infof("*[String] Decode %+v", v)
+			tmp := reflect.New(n.Type().Elem())
+			tmp.Elem().SetString(v)
+			n.Set(tmp)
+		} else {
+			debugLogger.Infof("[String] Decode %+v", v)
+			debugLogger.Infof("Input %+v", reflect.ValueOf(input))
+			debugLogger.Infof("Input Elem %+v", reflect.ValueOf(input).Elem())
+			n.SetString(v)
+		}
+		return nil
+	}
+
+	if v, ok := tfschemaValue.(int); ok {
+		n := reflect.ValueOf(input).Elem().Field(index)
+		if n.Kind() == reflect.Pointer {
+			debugLogger.Infof("*[INT] Decode %+v", v)
+			tmp := reflect.New(n.Type().Elem())
+			tmp.Elem().Set(reflect.ValueOf(int64(v)))
+			n.Set(tmp)
+		} else {
+			debugLogger.Infof("[INT] Decode %+v", v)
+			n.SetInt(int64(v))
+		}
+		return nil
+	}
+
+	if v, ok := tfschemaValue.(float64); ok {
+		n := reflect.ValueOf(input).Elem().Field(index)
+		if n.Kind() == reflect.Pointer {
+			debugLogger.Infof("*[Float] Decode %+v", v)
+			tmp := reflect.New(n.Type().Elem())
+			tmp.Elem().SetFloat(v)
+			n.Set(tmp)
+		} else {
+			debugLogger.Infof("[Float] Decode %+v", v)
+			n.SetFloat(v)
+		}
+		return nil
+	}
+
+	if v, ok := tfschemaValue.(bool); ok {
+		n := reflect.ValueOf(input).Elem().Field(index)
+		if n.Kind() == reflect.Pointer {
+			debugLogger.Infof("*[Bool] Decode %+v", v)
+			tmp := reflect.New(n.Type().Elem())
+			tmp.Elem().Set(reflect.ValueOf(v))
+			n.Set(tmp)
+		} else {
+			debugLogger.Infof("[BOOL] Decode %+v", v)
+			n.Set(reflect.ValueOf(v))
+		}
+		return nil
+	}
+
+	if v, ok := tfschemaValue.(*schema.Set); ok {
+		return setListValue(input, index, fieldName, v.List(), debugLogger)
+	}
+
+	if mapConfig, ok := tfschemaValue.(map[string]interface{}); ok {
+		n := reflect.ValueOf(input).Elem().Field(index)
+		if n.Kind() == reflect.Pointer {
+			tmp := reflect.New(n.Type().Elem())
+			ty := reflect.Indirect(tmp)
+
+			mapOutput := reflect.MakeMap(ty.Type())
+			for key, val := range mapConfig {
+				switch t := val.(type) {
+				case int:
+					mapOutput.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(int64(t)))
+
+				default:
+					mapOutput.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(val))
+				}
+			}
+
+			tmp.Elem().Set(mapOutput)
+
+			n.Set(tmp)
+		} else {
+			mapOutput := reflect.MakeMap(n.Type())
+			for key, val := range mapConfig {
+				switch t := val.(type) {
+				case int:
+					mapOutput.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(int64(t)))
+				default:
+					mapOutput.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(val))
+				}
+			}
+
+			reflect.ValueOf(input).Elem().Field(index).Set(mapOutput)
+		}
+		return nil
+	}
+
+	if mapConfig, ok := tfschemaValue.(*map[string]interface{}); ok {
+		n := reflect.ValueOf(input).Elem().Field(index).Type()
+
+		tmp := reflect.New(n.Elem())
+		ty := reflect.Indirect(tmp)
+
+		mapOutput := reflect.MakeMap(ty.Type())
+		for key, val := range *mapConfig {
+			// GetOkExists always returns map[string]int rather than map[string]int64 - so we need to ensure we don't try to set the wrong type into the map
+			switch mapOutput.Type().Elem().Kind() {
+			case reflect.Int64:
+				// Guard against GetOkExists being updated to return int64
+				if v, ok := val.(int); ok {
+					mapOutput.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(int64(v)))
+				} else {
+					mapOutput.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(val))
+				}
+			default:
+				mapOutput.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(val))
+			}
+		}
+
+		tmp.Elem().Set(mapOutput)
+		loc := reflect.ValueOf(input).Elem().Field(index)
+
+		loc.Set(tmp)
+		return nil
+	}
+
+	if v, ok := tfschemaValue.([]interface{}); ok {
+		return setListValue(input, index, fieldName, v, debugLogger)
+	}
+
+	return nil
+}

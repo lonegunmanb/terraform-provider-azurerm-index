@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2023-04-01/devcenters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r DevCenterResource) mapDevCenterResourceSchemaToDevCenter(input DevCenterResourceSchema, output *devcenters.DevCenter) error {
+	identity, err := identity.ExpandSystemAndUserAssignedMapFromModel(input.Identity)
+	if err != nil {
+		return fmt.Errorf("expanding SystemAndUserAssigned Identity: %+v", err)
+	}
+	output.Identity = identity
+
+	output.Location = location.Normalize(input.Location)
+	output.Tags = tags.Expand(input.Tags)
+
+	if output.Properties == nil {
+		output.Properties = &devcenters.DevCenterProperties{}
+	}
+	if err := r.mapDevCenterResourceSchemaToDevCenterProperties(input, output.Properties); err != nil {
+		return fmt.Errorf("mapping Schema to SDK Field %q / Model %q: %+v", "DevCenterProperties", "Properties", err)
+	}
+
+	return nil
+}

@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	azSchema "github.com/hashicorp/terraform-provider-azurerm/internal/tf/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandBackupPolicyBlobStorageAzureBackupRuleArray(input []interface{}, timeZone string, taggingCriteria *[]backuppolicies.TaggingCriteria) []backuppolicies.BasePolicyRule {
+	results := make([]backuppolicies.BasePolicyRule, 0)
+	results = append(results, backuppolicies.AzureBackupRule{
+		Name: "BackupIntervals",
+		DataStore: backuppolicies.DataStoreInfoBase{
+			DataStoreType: backuppolicies.DataStoreTypesVaultStore,
+			ObjectType:    "DataStoreInfoBase",
+		},
+		BackupParameters: &backuppolicies.AzureBackupParams{
+			BackupType: "Discrete",
+		},
+		Trigger: backuppolicies.ScheduleBasedTriggerContext{
+			Schedule: backuppolicies.BackupSchedule{
+				RepeatingTimeIntervals: *utils.ExpandStringSlice(input),
+				TimeZone:               pointer.To(timeZone),
+			},
+			TaggingCriteria: *taggingCriteria,
+		},
+	})
+
+	return results
+}

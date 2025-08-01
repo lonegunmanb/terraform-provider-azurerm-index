@@ -1,0 +1,193 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualwans"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceVPNGateway() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceVPNGatewayCreate,
+		Read:   resourceVPNGatewayRead,
+		Update: resourceVPNGatewayUpdate,
+		Delete: resourceVPNGatewayDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := virtualwans.ParseVpnGatewayID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(90 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(90 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(90 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"location": commonschema.Location(),
+
+			"virtual_hub_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: virtualwans.ValidateVirtualHubID,
+			},
+
+			"routing_preference": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  "Microsoft Network",
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"Microsoft Network",
+					"Internet",
+				}, false),
+			},
+
+			"bgp_route_translation_for_nat_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"bgp_settings": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				Computed: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"asn": {
+							Type:     pluginsdk.TypeInt,
+							Required: true,
+							ForceNew: true,
+						},
+
+						"peer_weight": {
+							Type:     pluginsdk.TypeInt,
+							Required: true,
+							ForceNew: true,
+						},
+
+						"bgp_peering_address": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+
+						"instance_0_bgp_peering_address": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Computed: true,
+							MaxItems: 1,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"custom_ips": {
+										Type:     pluginsdk.TypeSet,
+										Required: true,
+										Elem: &pluginsdk.Schema{
+											Type:         pluginsdk.TypeString,
+											ValidateFunc: commonValidate.IPv4Address,
+										},
+									},
+
+									"ip_configuration_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"default_ips": {
+										Type:     pluginsdk.TypeSet,
+										Computed: true,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+										},
+									},
+
+									"tunnel_ips": {
+										Type:     pluginsdk.TypeSet,
+										Computed: true,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+										},
+									},
+								},
+							},
+						},
+
+						"instance_1_bgp_peering_address": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							Computed: true,
+							MaxItems: 1,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"custom_ips": {
+										Type:     pluginsdk.TypeSet,
+										Required: true,
+										Elem: &pluginsdk.Schema{
+											Type:         pluginsdk.TypeString,
+											ValidateFunc: commonValidate.IPv4Address,
+										},
+									},
+
+									"ip_configuration_id": {
+										Type:     pluginsdk.TypeString,
+										Computed: true,
+									},
+
+									"default_ips": {
+										Type:     pluginsdk.TypeSet,
+										Computed: true,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+										},
+									},
+
+									"tunnel_ips": {
+										Type:     pluginsdk.TypeSet,
+										Computed: true,
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"scale_unit": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Default:      1,
+				ValidateFunc: validation.IntAtLeast(0),
+			},
+
+			"tags": commonschema.Tags(),
+		},
+	}
+}

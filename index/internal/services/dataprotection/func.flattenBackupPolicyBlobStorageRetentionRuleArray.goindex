@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	azSchema "github.com/hashicorp/terraform-provider-azurerm/internal/tf/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenBackupPolicyBlobStorageRetentionRuleArray(input *[]backuppolicies.BasePolicyRule) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	var taggingCriterias []backuppolicies.TaggingCriteria
+	for _, item := range *input {
+		if backupRule, ok := item.(backuppolicies.AzureBackupRule); ok {
+			if trigger, ok := backupRule.Trigger.(backuppolicies.ScheduleBasedTriggerContext); ok {
+				if trigger.TaggingCriteria != nil {
+					taggingCriterias = trigger.TaggingCriteria
+				}
+			}
+		}
+	}
+
+	for _, item := range *input {
+		if retentionRule, ok := item.(backuppolicies.AzureRetentionRule); ok && (retentionRule.IsDefault == nil || !*retentionRule.IsDefault) {
+			name := retentionRule.Name
+			var taggingPriority int64
+			var taggingCriteria []interface{}
+			for _, criteria := range taggingCriterias {
+				if strings.EqualFold(criteria.TagInfo.TagName, name) {
+					taggingPriority = criteria.TaggingPriority
+					taggingCriteria = flattenBackupPolicyBlobStorageBackupCriteriaArray(criteria.Criteria)
+					break
+				}
+			}
+
+			var lifeCycle []interface{}
+			if v := retentionRule.Lifecycles; len(v) > 0 {
+				lifeCycle = flattenBackupPolicyBlobStorageBackupLifeCycleArray(v, backuppolicies.DataStoreTypesVaultStore)
+			}
+			results = append(results, map[string]interface{}{
+				"name":       name,
+				"priority":   taggingPriority,
+				"criteria":   taggingCriteria,
+				"life_cycle": lifeCycle,
+			})
+		}
+	}
+	return results
+}

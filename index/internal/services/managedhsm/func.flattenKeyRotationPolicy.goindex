@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	validate2 "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+)
+func flattenKeyRotationPolicy(p keyvault.KeyRotationPolicy) MHSMKeyRotationPolicyResourceSchema {
+	var res MHSMKeyRotationPolicyResourceSchema
+	if p.Attributes != nil {
+		res.ExpireAfter = pointer.From(p.Attributes.ExpiryTime)
+	}
+
+	if p.LifetimeActions != nil {
+		for _, ltAction := range *p.LifetimeActions {
+			action := ltAction.Action
+			trigger := ltAction.Trigger
+
+			if action != nil && trigger != nil {
+				if strings.EqualFold(string(action.Type), string(keyvault.ActionTypeRotate)) {
+					res.TimeAfterCreation = pointer.From(trigger.TimeAfterCreate)
+					res.TimeBeforeExpiry = pointer.From(trigger.TimeBeforeExpiry)
+				}
+			}
+		}
+	}
+
+	return res
+}

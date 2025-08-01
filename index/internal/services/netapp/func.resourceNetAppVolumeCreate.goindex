@@ -1,0 +1,274 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumesreplication"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceNetAppVolumeCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).NetApp.VolumeClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := volumes.NewVolumeID(subscriptionId, d.Get("resource_group_name").(string), d.Get("account_name").(string), d.Get("pool_name").(string), d.Get("name").(string))
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+		}
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_netapp_volume", id.ID())
+		}
+	}
+
+	location := azure.NormalizeLocation(d.Get("location").(string))
+
+	zones := &[]string{}
+	if v, ok := d.GetOk("zone"); ok {
+		zones = &[]string{
+			v.(string),
+		}
+	}
+
+	volumePath := d.Get("volume_path").(string)
+	serviceLevel := volumes.ServiceLevel(d.Get("service_level").(string))
+	subnetID := d.Get("subnet_id").(string)
+	kerberosEnabled := d.Get("kerberos_enabled").(bool)
+	smbContiuouslyAvailable := d.Get("smb_continuous_availability_enabled").(bool)
+	smbEncryption := d.Get("smb3_protocol_encryption_enabled").(bool)
+	networkFeatures := volumes.NetworkFeatures(d.Get("network_features").(string))
+
+	smbNonBrowsable := volumes.SmbNonBrowsableDisabled
+	if d.Get("smb_non_browsable_enabled").(bool) {
+		smbNonBrowsable = volumes.SmbNonBrowsableEnabled
+	}
+
+	smbAccessBasedEnumeration := volumes.SmbAccessBasedEnumerationDisabled
+	if d.Get("smb_access_based_enumeration_enabled").(bool) {
+		smbAccessBasedEnumeration = volumes.SmbAccessBasedEnumerationEnabled
+	}
+
+	protocols := d.Get("protocols").(*pluginsdk.Set).List()
+	if len(protocols) == 0 {
+		protocols = append(protocols, "NFSv3")
+	}
+
+	// Handling security style property
+	securityStyle := volumes.SecurityStyle(d.Get("security_style").(string))
+	if strings.EqualFold(string(securityStyle), "unix") && len(protocols) == 1 && strings.EqualFold(protocols[0].(string), "cifs") {
+		return fmt.Errorf("unix security style cannot be used in a CIFS enabled volume for %s", id)
+	}
+	if strings.EqualFold(string(securityStyle), "ntfs") && len(protocols) == 1 && (strings.EqualFold(protocols[0].(string), "nfsv3") || strings.EqualFold(protocols[0].(string), "nfsv4.1")) {
+		return fmt.Errorf("ntfs security style cannot be used in a NFSv3/NFSv4.1 enabled volume for %s", id)
+	}
+
+	storageQuotaInGB := int64(d.Get("storage_quota_in_gb").(int) * 1073741824)
+
+	exportPolicyRuleRaw := d.Get("export_policy_rule").([]interface{})
+	exportPolicyRule := expandNetAppVolumeExportPolicyRule(exportPolicyRuleRaw)
+
+	dataProtectionReplicationRaw := d.Get("data_protection_replication").([]interface{})
+	dataProtectionReplication := expandNetAppVolumeDataProtectionReplication(dataProtectionReplicationRaw)
+
+	dataProtectionSnapshotPolicyRaw := d.Get("data_protection_snapshot_policy").([]interface{})
+	dataProtectionSnapshotPolicy := expandNetAppVolumeDataProtectionSnapshotPolicy(dataProtectionSnapshotPolicyRaw)
+
+	dataProtectionBackupPolicyRaw := d.Get("data_protection_backup_policy").([]interface{})
+	dataProtectionBackupPolicy := expandNetAppVolumeDataProtectionBackupPolicy(dataProtectionBackupPolicyRaw)
+
+	authorizeReplication := false
+	volumeType := ""
+	endpointType := ""
+	if dataProtectionReplication != nil && dataProtectionReplication.Replication != nil {
+		if dataProtectionReplication.Replication.EndpointType != nil {
+			endpointType = string(*dataProtectionReplication.Replication.EndpointType)
+		}
+		if strings.EqualFold(endpointType, "dst") {
+			authorizeReplication = true
+			volumeType = "DataProtection"
+		}
+	}
+
+	// Validate applicability of backup policies
+	if dataProtectionReplication != nil && dataProtectionReplication.Backup != nil {
+		// Validate that backup policies are not being enforced in a data protection replication destination volume
+		if strings.EqualFold(volumeType, "dst") && dataProtectionReplication.Backup.PolicyEnforced == utils.Bool(true) {
+			return fmt.Errorf("backup policy cannot be enforced on a data protection destination volume, NetApp Volume %q (Resource Group %q)", id.VolumeName, id.ResourceGroupName)
+		}
+	}
+
+	// Validating that snapshot policies are not being created in a data protection replication volume
+	if dataProtectionSnapshotPolicy.Snapshot != nil && volumeType != "" {
+		return fmt.Errorf("snapshot policy cannot be enabled on a data protection volume, NetApp Volume %q (Resource Group %q)", id.VolumeName, id.ResourceGroupName)
+	}
+
+	snapshotDirectoryVisible := d.Get("snapshot_directory_visible").(bool)
+
+	// Handling volume creation from snapshot case
+	snapshotResourceID := d.Get("create_from_snapshot_resource_id").(string)
+	snapshotID := ""
+	if snapshotResourceID != "" {
+		// Get snapshot ID GUID value
+		parsedSnapshotResourceID, err := snapshots.ParseSnapshotID(snapshotResourceID)
+		if err != nil {
+			return fmt.Errorf("parsing snapshotResourceID %q: %+v", snapshotResourceID, err)
+		}
+
+		snapshotClient := meta.(*clients.Client).NetApp.SnapshotClient
+		snapshotResponse, err := snapshotClient.Get(ctx, *parsedSnapshotResourceID)
+		if err != nil {
+			return fmt.Errorf("getting snapshot from %s: %+v", id, err)
+		}
+		if model := snapshotResponse.Model; model != nil && model.Id != nil {
+			snapshotID = *model.Id
+		}
+
+		sourceVolumeId := volumes.NewVolumeID(parsedSnapshotResourceID.SubscriptionId, parsedSnapshotResourceID.ResourceGroupName, parsedSnapshotResourceID.NetAppAccountName, parsedSnapshotResourceID.CapacityPoolName, parsedSnapshotResourceID.VolumeName)
+		// Validate if properties that cannot be changed matches (protocols, subnet_id, location, resource group, account_name, pool_name, service_level)
+		sourceVolume, err := client.Get(ctx, sourceVolumeId)
+		if err != nil {
+			return fmt.Errorf("getting source NetApp Volume (snapshot's parent resource) %q (Resource Group %q): %+v", parsedSnapshotResourceID.VolumeName, parsedSnapshotResourceID.ResourceGroupName, err)
+		}
+
+		propertyMismatch := []string{}
+		if model := sourceVolume.Model; model != nil {
+			props := model.Properties
+			if !ValidateSlicesEquality(*props.ProtocolTypes, *utils.ExpandStringSlice(protocols), false) {
+				propertyMismatch = append(propertyMismatch, "protocols")
+			}
+			if !strings.EqualFold(props.SubnetId, subnetID) {
+				propertyMismatch = append(propertyMismatch, "subnet_id")
+			}
+			if !strings.EqualFold(model.Location, location) {
+				propertyMismatch = append(propertyMismatch, "location")
+			}
+			if volumeServiceLevel := props.ServiceLevel; volumeServiceLevel != nil {
+				if !strings.EqualFold(string(*props.ServiceLevel), string(serviceLevel)) {
+					propertyMismatch = append(propertyMismatch, "service_level")
+				}
+			}
+			if !strings.EqualFold(sourceVolumeId.ResourceGroupName, id.ResourceGroupName) {
+				propertyMismatch = append(propertyMismatch, "resource_group_name")
+			}
+			if !strings.EqualFold(sourceVolumeId.NetAppAccountName, id.NetAppAccountName) {
+				propertyMismatch = append(propertyMismatch, "account_name")
+			}
+			if !strings.EqualFold(sourceVolumeId.CapacityPoolName, id.CapacityPoolName) {
+				propertyMismatch = append(propertyMismatch, "pool_name")
+			}
+			if len(propertyMismatch) > 0 {
+				return fmt.Errorf("following NetApp Volume properties on new Volume from Snapshot does not match Snapshot's source %s: %s", id, strings.Join(propertyMismatch, ", "))
+			}
+		}
+	}
+
+	avsDataStoreEnabled := volumes.AvsDataStoreDisabled
+	if d.Get("azure_vmware_data_store_enabled").(bool) {
+		avsDataStoreEnabled = volumes.AvsDataStoreEnabled
+	}
+
+	parameters := volumes.Volume{
+		Location: location,
+		Properties: volumes.VolumeProperties{
+			CreationToken:             volumePath,
+			ServiceLevel:              &serviceLevel,
+			SubnetId:                  subnetID,
+			KerberosEnabled:           &kerberosEnabled,
+			SmbContinuouslyAvailable:  &smbContiuouslyAvailable,
+			SmbEncryption:             &smbEncryption,
+			NetworkFeatures:           &networkFeatures,
+			SmbNonBrowsable:           &smbNonBrowsable,
+			SmbAccessBasedEnumeration: &smbAccessBasedEnumeration,
+			ProtocolTypes:             utils.ExpandStringSlice(protocols),
+			SecurityStyle:             &securityStyle,
+			UsageThreshold:            storageQuotaInGB,
+			ExportPolicy:              exportPolicyRule,
+			VolumeType:                utils.String(volumeType),
+			SnapshotId:                utils.String(snapshotID),
+			DataProtection: &volumes.VolumePropertiesDataProtection{
+				Replication: dataProtectionReplication.Replication,
+				Snapshot:    dataProtectionSnapshotPolicy.Snapshot,
+				Backup:      dataProtectionBackupPolicy.Backup,
+			},
+			AvsDataStore:             &avsDataStoreEnabled,
+			SnapshotDirectoryVisible: utils.Bool(snapshotDirectoryVisible),
+		},
+		Tags:  tags.Expand(d.Get("tags").(map[string]interface{})),
+		Zones: zones,
+	}
+
+	if throughputMibps, ok := d.GetOk("throughput_in_mibps"); ok {
+		parameters.Properties.ThroughputMibps = utils.Float(throughputMibps.(float64))
+	}
+
+	if encryptionKeySource, ok := d.GetOk("encryption_key_source"); ok {
+		// Validating Microsoft.KeyVault encryption key provider is enabled only on Standard network features
+		if volumes.EncryptionKeySource(encryptionKeySource.(string)) == volumes.EncryptionKeySourceMicrosoftPointKeyVault && networkFeatures == volumes.NetworkFeaturesBasic {
+			return fmt.Errorf("volume encryption cannot be enabled when network features is set to basic: %s", id.ID())
+		}
+
+		parameters.Properties.EncryptionKeySource = pointer.To(volumes.EncryptionKeySource(encryptionKeySource.(string)))
+	}
+
+	if keyVaultPrivateEndpointID, ok := d.GetOk("key_vault_private_endpoint_id"); ok {
+		parameters.Properties.KeyVaultPrivateEndpointResourceId = pointer.To(keyVaultPrivateEndpointID.(string))
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, parameters); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	// Waiting for volume be completely provisioned
+	if err := waitForVolumeCreateOrUpdate(ctx, client, id); err != nil {
+		return err
+	}
+
+	// If this is a data replication secondary volume, authorize replication on primary volume
+	if authorizeReplication {
+		replicationClient := meta.(*clients.Client).NetApp.VolumeReplicationClient
+		replVolID, err := volumesreplication.ParseVolumeID(dataProtectionReplication.Replication.RemoteVolumeResourceId)
+		if err != nil {
+			return err
+		}
+
+		if err = replicationClient.VolumesAuthorizeReplicationThenPoll(ctx, *replVolID, volumesreplication.AuthorizeRequest{
+			RemoteVolumeResourceId: utils.String(id.ID()),
+		},
+		); err != nil {
+			return fmt.Errorf("cannot authorize volume replication: %v", err)
+		}
+
+		// Wait for volume replication authorization to complete
+		log.Printf("[DEBUG] Waiting for replication authorization on %s to complete", id)
+		if err := waitForReplAuthorization(ctx, replicationClient, *replVolID); err != nil {
+			return err
+		}
+	}
+
+	d.SetId(id.ID())
+
+	return resourceNetAppVolumeRead(d, meta)
+}

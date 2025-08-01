@@ -1,0 +1,96 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func (d TriggerScheduleDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model TriggerScheduleDataSourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			subscriptionId := metadata.Client.Account.SubscriptionId
+			client := metadata.Client.DataFactory.TriggersClient
+
+			dataFactoryId, err := factories.ParseFactoryID(model.DataFactoryID)
+			if err != nil {
+				return err
+			}
+
+			id := parse.NewTriggerID(subscriptionId, dataFactoryId.ResourceGroupName, dataFactoryId.FactoryName, model.Name)
+			if err != nil {
+				return err
+			}
+
+			existing, err := client.Get(ctx, id.ResourceGroup, id.FactoryName, id.Name, "")
+			if err != nil {
+				if utils.ResponseWasNotFound(existing.Response) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retreiving %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			model.Name = *existing.Name
+			model.DataFactoryID = dataFactoryId.ID()
+
+			scheduleTriggerProps, ok := existing.Properties.AsScheduleTrigger()
+			if !ok {
+				return fmt.Errorf("classifying %s: Expected: %q Received: %q", id.ID(), datafactory.TypeBasicTriggerTypeScheduleTrigger, *existing.Type)
+			}
+
+			if scheduleTriggerProps != nil {
+				model.Activated = scheduleTriggerProps.RuntimeState == datafactory.TriggerRuntimeStateStarted
+
+				if recurrence := scheduleTriggerProps.Recurrence; recurrence != nil {
+					if v := recurrence.StartTime; v != nil {
+						model.StartTime = v.Format(time.RFC3339)
+					}
+					if v := recurrence.EndTime; v != nil {
+						model.EndTime = v.Format(time.RFC3339)
+					}
+					model.Frequency = string(recurrence.Frequency)
+					model.Interval = int64(*recurrence.Interval)
+					model.TimeZone = *recurrence.TimeZone
+
+					if schedule := recurrence.Schedule; schedule != nil {
+						model.Schedule = flattenDataFactoryScheduleModel(schedule)
+					}
+				}
+
+				if pipelines := scheduleTriggerProps.Pipelines; pipelines != nil {
+					if len(*pipelines) > 0 {
+						pipeline := *pipelines
+						if reference := pipeline[0].PipelineReference; reference != nil {
+							model.PipelineName = *reference.ReferenceName
+						}
+					}
+				}
+
+				model.Annotations = flattenDataFactoryAnnotations(scheduleTriggerProps.Annotations)
+
+				if scheduleTriggerProps.Description != nil {
+					model.Description = *scheduleTriggerProps.Description
+				}
+			}
+			if err := metadata.Encode(&model); err != nil {
+				return fmt.Errorf("encoding: %+v", err)
+			}
+
+			return metadata.Encode(&model)
+		},
+	}
+}

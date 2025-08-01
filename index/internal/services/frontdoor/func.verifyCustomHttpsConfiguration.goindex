@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func verifyCustomHttpsConfiguration(frontendEndpointCustomHttpsConfig []interface{}) error {
+	if len(frontendEndpointCustomHttpsConfig) > 0 {
+		customHttpsConfiguration := frontendEndpointCustomHttpsConfig[0].(map[string]interface{})
+		certificateSource := customHttpsConfiguration["certificate_source"].(string)
+		certificateVersion := customHttpsConfiguration["azure_key_vault_certificate_secret_version"].(string)
+
+		if certificateSource == string(frontdoors.FrontDoorCertificateSourceFrontDoor) {
+			if azureKeyVaultCertificateHasValues(customHttpsConfiguration, true) {
+				return errors.New(`a Front Door managed "custom_https_configuration" block does not support the following keys. Please remove the following keys from your configuration file: "azure_key_vault_certificate_secret_name", "azure_key_vault_certificate_secret_version", and "azure_key_vault_certificate_vault_id"`)
+			}
+		} else {
+			// The latest secret version is no longer valid for key vaults
+			if strings.EqualFold(certificateVersion, "latest") {
+				return errors.New(`"azure_key_vault_certificate_secret_version" can not be set to "latest" please remove this attribute from the configuration file. Removing the value has the same functionality as setting it to "latest"`)
+			}
+
+			if !azureKeyVaultCertificateHasValues(customHttpsConfiguration, false) {
+				if certificateVersion == "" {
+					// If using latest, empty string is now equivalent to using the keyword latest
+					return errors.New(`a "AzureKeyVault" managed "custom_https_configuration" block must have values in the following fileds: "azure_key_vault_certificate_secret_name" and "azure_key_vault_certificate_vault_id"`)
+				} else {
+					// If using a specific version of the secret
+					return errors.New(`a "AzureKeyVault" managed "custom_https_configuration" block must have values in the following fileds: "azure_key_vault_certificate_secret_name", "azure_key_vault_certificate_secret_version", and "azure_key_vault_certificate_vault_id"`)
+				}
+			}
+		}
+	}
+
+	return nil
+}

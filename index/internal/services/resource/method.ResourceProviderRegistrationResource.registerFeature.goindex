@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/resource
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2021-07-01/features"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-09-01/providers"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ResourceProviderRegistrationResource) registerFeature(ctx context.Context, metadata sdk.ResourceMetaData, id features.FeatureId) error {
+	client := metadata.Client.Resource.FeaturesClient
+	existing, err := client.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("error checking for existing feature %q: %+v", id, err)
+	}
+
+	if existing.Model != nil && existing.Model.Properties != nil && existing.Model.Properties.State != nil {
+		if strings.EqualFold(*existing.Model.Properties.State, Pending) {
+			return fmt.Errorf("%s which requires manual approval should not be managed by terraform", id)
+		}
+		if strings.EqualFold(*existing.Model.Properties.State, Registered) {
+			return nil
+		}
+	}
+
+	log.Printf("[INFO] registering feature %q.", id)
+	resp, err := client.Register(ctx, id)
+	if err != nil {
+		return fmt.Errorf("error registering feature %q: %+v", id, err)
+	}
+
+	if resp.Model != nil && resp.Model.Properties != nil && resp.Model.Properties.State != nil {
+		if strings.EqualFold(*resp.Model.Properties.State, Pending) {
+			return fmt.Errorf("%s which requires manual approval can not be managed by terraform", id)
+		}
+	}
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return fmt.Errorf("internal-error: context had no deadline")
+	}
+	stateConf := &pluginsdk.StateChangeConf{
+		Pending:    []string{Registering},
+		Target:     []string{Registered},
+		Refresh:    r.featureRegisteringStateRefreshFunc(ctx, client, id),
+		MinTimeout: 3 * time.Minute,
+		Timeout:    time.Until(deadline),
+	}
+
+	if _, err = stateConf.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for %s registering to be completed: %+v", id, err)
+	}
+	return nil
+}

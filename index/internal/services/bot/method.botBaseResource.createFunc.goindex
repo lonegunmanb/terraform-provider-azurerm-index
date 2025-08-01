@@ -1,0 +1,99 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/bot
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/parse"
+	kvValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/botservice/2021-05-01-preview/botservice"
+)
+func (br botBaseResource) createFunc(resourceName, botKind string) sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Bot.BotClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			id := parse.NewBotServiceID(subscriptionId, metadata.ResourceData.Get("resource_group_name").(string), metadata.ResourceData.Get("name").(string))
+
+			existing, err := client.Get(ctx, id.ResourceGroup, id.Name)
+			if err != nil {
+				if !utils.ResponseWasNotFound(existing.Response) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+			if !utils.ResponseWasNotFound(existing.Response) {
+				return tf.ImportAsExistsError(resourceName, id.ID())
+			}
+
+			displayName := metadata.ResourceData.Get("display_name").(string)
+			if displayName == "" {
+				displayName = id.Name
+			}
+
+			publicNetworkEnabled := botservice.PublicNetworkAccessEnabled
+			if !metadata.ResourceData.Get("public_network_access_enabled").(bool) {
+				publicNetworkEnabled = botservice.PublicNetworkAccessDisabled
+			}
+
+			props := botservice.Bot{
+				Location: utils.String(metadata.ResourceData.Get("location").(string)),
+				Sku: &botservice.Sku{
+					Name: botservice.SkuName(metadata.ResourceData.Get("sku").(string)),
+				},
+				Kind: botservice.Kind(botKind),
+				Properties: &botservice.BotProperties{
+					DisplayName:                       pointer.To(displayName),
+					Endpoint:                          pointer.To(metadata.ResourceData.Get("endpoint").(string)),
+					MsaAppID:                          pointer.To(metadata.ResourceData.Get("microsoft_app_id").(string)),
+					DeveloperAppInsightKey:            pointer.To(metadata.ResourceData.Get("developer_app_insights_key").(string)),
+					DeveloperAppInsightsAPIKey:        pointer.To(metadata.ResourceData.Get("developer_app_insights_api_key").(string)),
+					DeveloperAppInsightsApplicationID: pointer.To(metadata.ResourceData.Get("developer_app_insights_application_id").(string)),
+					DisableLocalAuth:                  pointer.To(!metadata.ResourceData.Get("local_authentication_enabled").(bool)),
+					IsCmekEnabled:                     utils.Bool(false),
+					CmekKeyVaultURL:                   pointer.To(metadata.ResourceData.Get("cmk_key_vault_key_url").(string)),
+					LuisAppIds:                        utils.ExpandStringSlice(metadata.ResourceData.Get("luis_app_ids").([]interface{})),
+					LuisKey:                           pointer.To(metadata.ResourceData.Get("luis_key").(string)),
+					PublicNetworkAccess:               publicNetworkEnabled,
+					IsStreamingSupported:              pointer.To(metadata.ResourceData.Get("streaming_endpoint_enabled").(bool)),
+					IconURL:                           pointer.To(metadata.ResourceData.Get("icon_url").(string)),
+				},
+				Tags: tags.Expand(metadata.ResourceData.Get("tags").(map[string]interface{})),
+			}
+
+			if _, ok := metadata.ResourceData.GetOk("cmk_key_vault_key_url"); ok {
+				props.Properties.IsCmekEnabled = utils.Bool(true)
+			}
+
+			if v, ok := metadata.ResourceData.GetOk("microsoft_app_type"); ok {
+				props.Properties.MsaAppType = botservice.MsaAppType(v.(string))
+			}
+
+			if v, ok := metadata.ResourceData.GetOk("microsoft_app_tenant_id"); ok {
+				props.Properties.MsaAppTenantID = pointer.To(v.(string))
+			}
+
+			if v, ok := metadata.ResourceData.GetOk("microsoft_app_msi_id"); ok {
+				props.Properties.MsaAppMSIResourceID = pointer.To(v.(string))
+			}
+
+			if _, err := client.Create(ctx, id.ResourceGroup, id.Name, props); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

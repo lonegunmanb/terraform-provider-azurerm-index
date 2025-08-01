@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2022-05-01-preview/roledefinitions"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func roleDefinitionEventualConsistencyUpdate(ctx context.Context, client *roledefinitions.RoleDefinitionsClient, id roledefinitions.ScopedRoleDefinitionId, updateRequestDate string) pluginsdk.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+		resp, err := client.Get(ctx, id)
+		if err != nil {
+			return resp, "Failed", err
+		}
+		if resp.Model == nil {
+			return resp, "Failed", fmt.Errorf("`model` was nil")
+		}
+		if resp.Model.Properties == nil {
+			return resp, "Failed", fmt.Errorf("`properties` was nil")
+		}
+		if resp.Model.Properties.CreatedOn == nil {
+			return resp, "Failed", fmt.Errorf("`properties.CreatedOn` was nil")
+		}
+
+		if resp.Model.Properties.UpdatedOn == nil {
+			return resp, "Failed", fmt.Errorf("`properties.UpdatedOn` was nil")
+		}
+
+		updateRequestTime, err := time.Parse(time.RFC3339, updateRequestDate)
+		if err != nil {
+			return nil, "", fmt.Errorf("parsing time from update request: %+v", err)
+		}
+
+		respCreatedOn, err := time.Parse(time.RFC3339, *resp.Model.Properties.CreatedOn)
+		if err != nil {
+			return nil, "", fmt.Errorf("parsing time for createdOn from update request: %+v", err)
+		}
+
+		respUpdatedOn, err := time.Parse(time.RFC3339, *resp.Model.Properties.UpdatedOn)
+		if err != nil {
+			return nil, "", fmt.Errorf("parsing time for updatedOn from update request: %+v", err)
+		}
+
+		if respCreatedOn.Equal(updateRequestTime) {
+			// a new role definition is created and eventually (~5s) reconciled
+			return resp, "Pending", nil
+		}
+
+		if updateRequestTime.After(respUpdatedOn) {
+			// The real updated on will be equal or after the time we requested it due to the swap out.
+			return resp, "Pending", nil
+		}
+
+		return resp, "Updated", nil
+	}
+}

@@ -1,0 +1,85 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachinegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandSqlVirtualMachineAutoBackupSettings(input []interface{}) (*sqlvirtualmachines.AutoBackupSettings, error) {
+	ret := sqlvirtualmachines.AutoBackupSettings{
+		Enable: utils.Bool(false),
+	}
+
+	if len(input) > 0 {
+		config := input[0].(map[string]interface{})
+		ret.Enable = utils.Bool(true)
+
+		if v, ok := config["retention_period_in_days"]; ok {
+			ret.RetentionPeriod = utils.Int64(int64(v.(int)))
+		}
+		if v, ok := config["storage_blob_endpoint"]; ok {
+			ret.StorageAccountURL = utils.String(v.(string))
+		}
+		if v, ok := config["storage_account_access_key"]; ok {
+			ret.StorageAccessKey = utils.String(v.(string))
+		}
+
+		if v, ok := config["encryption_password"]; ok && v.(string) != "" {
+			ret.EnableEncryption = pointer.To(true)
+			ret.Password = utils.String(v.(string))
+		} else {
+			ret.EnableEncryption = pointer.To(false)
+		}
+
+		if v, ok := config["system_databases_backup_enabled"]; ok {
+			ret.BackupSystemDbs = utils.Bool(v.(bool))
+		}
+
+		backupScheduleTypeAutomated := sqlvirtualmachines.BackupScheduleTypeAutomated
+		ret.BackupScheduleType = &backupScheduleTypeAutomated
+		if v, ok := config["manual_schedule"]; ok && len(v.([]interface{})) > 0 {
+			manualSchedule := v.([]interface{})[0].(map[string]interface{})
+			backupScheduleTypeManual := sqlvirtualmachines.BackupScheduleTypeManual
+			ret.BackupScheduleType = &backupScheduleTypeManual
+
+			fullBackupFrequency := sqlvirtualmachines.FullBackupFrequencyType(manualSchedule["full_backup_frequency"].(string))
+
+			daysOfWeek := manualSchedule["days_of_week"].(*pluginsdk.Set).List()
+			if len(daysOfWeek) > 0 {
+				if !strings.EqualFold(string(fullBackupFrequency), string(sqlvirtualmachines.FullBackupFrequencyTypeWeekly)) {
+					return nil, fmt.Errorf("`manual_schedule.0.days_of_week` can only be specified when `manual_schedule.0.full_backup_frequency` is set to `Weekly`")
+				}
+				ret.DaysOfWeek = expandSqlVirtualMachineAutoBackupSettingsDaysOfWeek(daysOfWeek)
+			}
+
+			ret.FullBackupFrequency = &fullBackupFrequency
+			ret.FullBackupStartTime = utils.Int64(int64(manualSchedule["full_backup_start_hour"].(int)))
+			ret.FullBackupWindowHours = utils.Int64(int64(manualSchedule["full_backup_window_in_hours"].(int)))
+			ret.LogBackupFrequency = utils.Int64(int64(manualSchedule["log_backup_frequency_in_minutes"].(int)))
+		}
+	}
+
+	return &ret, nil
+}

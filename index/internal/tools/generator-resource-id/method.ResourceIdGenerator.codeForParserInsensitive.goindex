@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+)
+func (id ResourceIdGenerator) codeForParserInsensitive() string {
+	if !id.ShouldRewrite {
+		// this only exists to workaround broken API's to patch those ID's, so shouldn't be used in most circumstances
+		return ""
+	}
+
+	directAssignments := make([]string, 0)
+	if id.HasSubscriptionId {
+		directAssignments = append(directAssignments, "\t\tSubscriptionId: id.SubscriptionID,")
+	}
+	if id.HasResourceGroup {
+		directAssignments = append(directAssignments, "\t\tResourceGroup: id.ResourceGroup,")
+	}
+	directAssignmentsStr := strings.Join(directAssignments, "\n")
+
+	parserStatements := make([]string, 0)
+	for _, segment := range id.Segments {
+		isSubscription := strings.EqualFold(segment.FieldName, "SubscriptionId") && id.HasSubscriptionId
+		isResourceGroup := strings.EqualFold(segment.FieldName, "ResourceGroup") && id.HasResourceGroup
+		if isSubscription || isResourceGroup {
+			parserStatements = append(parserStatements, fmt.Sprintf(`
+	if resourceId.%[1]s == "" {
+		return nil, errors.New("ID was missing the '%[2]s' element")
+	}
+`, segment.FieldName, segment.SegmentKey))
+			continue
+		}
+
+		// NOTE: This becomes dramatically simpler long-term - but for now has to be long-winded
+		// to avoid subtle changes to resources until this is threaded through everywhere
+		fmtString := `
+  // find the correct casing for the '%[2]s' segment
+  %[2]sKey := "%[2]s"
+  for key := range id.Path {
+  	if strings.EqualFold(key, %[2]sKey) {
+  		%[2]sKey = key
+  		break
+  	}
+  }
+  if resourceId.%[1]s, err = id.PopSegment(%[2]sKey); err != nil {
+    return nil, err
+  }
+`
+		parserStatements = append(parserStatements, fmt.Sprintf(fmtString, segment.FieldName, segment.SegmentKey))
+	}
+	parserStatementsStr := strings.Join(parserStatements, "\n")
+	return fmt.Sprintf(`
+// %[1]sIDInsensitively parses an %[1]s ID into an %[1]sId struct, insensitively
+// This should only be used to parse an ID for rewriting, the %[1]sID
+// method should be used instead for validation etc.
+//
+// Whilst this may seem strange, this enables Terraform have consistent casing
+// which works around issues in Core, whilst handling broken API responses.
+func %[1]sIDInsensitively(input string) (*%[1]sId, error) {
+	id, err := resourceids.ParseAzureResourceID(input)
+	if err != nil {
+		return nil, err
+	}
+
+	resourceId := %[1]sId{
+%[2]s
+	}
+
+%[3]s
+
+	if err := id.ValidateNoEmptySegments(input); err != nil {
+		return nil, err
+	}
+
+	return &resourceId, nil
+}
+`, id.TypeName, directAssignmentsStr, parserStatementsStr)
+}

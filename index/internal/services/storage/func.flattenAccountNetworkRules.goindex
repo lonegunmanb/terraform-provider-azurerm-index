@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenAccountNetworkRules(input *storageaccounts.NetworkRuleSet) []interface{} {
+	output := make([]interface{}, 0)
+
+	if input != nil {
+		ipRules := flattenAccountNetworkRuleIPRules(input.IPRules)
+		privateLinkAccess := flattenAccountNetworkRulePrivateLinkAccess(input.ResourceAccessRules)
+		virtualNetworkRules := flattenAccountNetworkRuleVirtualNetworkRules(input.VirtualNetworkRules)
+
+		// ignore the default values
+		usesDefaultValues := input.DefaultAction == storageaccounts.DefaultActionAllow && pointer.From(input.Bypass) == storageaccounts.BypassAzureServices
+		hasOtherValues := len(ipRules) > 0 || len(privateLinkAccess) > 0 || len(virtualNetworkRules) > 0
+		if usesDefaultValues && !hasOtherValues {
+			return output
+		}
+
+		output = append(output, map[string]interface{}{
+			"bypass":                     pluginsdk.NewSet(pluginsdk.HashString, flattenAccountNetworkRuleBypass(input.Bypass)),
+			"default_action":             string(input.DefaultAction),
+			"ip_rules":                   pluginsdk.NewSet(pluginsdk.HashString, ipRules),
+			"private_link_access":        privateLinkAccess,
+			"virtual_network_subnet_ids": pluginsdk.NewSet(pluginsdk.HashString, virtualNetworkRules),
+		})
+	}
+
+	return output
+}

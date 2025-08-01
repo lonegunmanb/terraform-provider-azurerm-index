@@ -1,0 +1,149 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicefabricmanaged
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicefabricmanagedcluster/2021-05-01/managedcluster"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicefabricmanagedcluster/2021-05-01/nodetype"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func nodeTypeSchema() *pluginsdk.Schema {
+	return &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Optional: true,
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"id": {
+					Type:     pluginsdk.TypeString,
+					Computed: true,
+				},
+				"data_disk_size_gb": {
+					Type:     pluginsdk.TypeInt,
+					Required: true,
+				},
+				"multiple_placement_groups_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+				},
+				"name": {
+					Type:     pluginsdk.TypeString,
+					Required: true,
+				},
+				"primary": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+				},
+				"stateless": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+				},
+				"vm_image_offer": {
+					Type:     pluginsdk.TypeString,
+					Required: true,
+				},
+				"vm_image_publisher": {
+					Type:     pluginsdk.TypeString,
+					Required: true,
+				},
+				"vm_image_sku": {
+					Type:     pluginsdk.TypeString,
+					Required: true,
+				},
+				"vm_image_version": {
+					Type:     pluginsdk.TypeString,
+					Required: true,
+				},
+				"vm_instance_count": {
+					Type:         pluginsdk.TypeInt,
+					Required:     true,
+					ValidateFunc: validation.IntBetween(3, 100),
+				},
+				"vm_size": {
+					Type:     pluginsdk.TypeString,
+					Required: true,
+				},
+				"application_port_range": {
+					Type:     pluginsdk.TypeString,
+					Required: true,
+					ValidateFunc: func(i interface{}, s string) ([]string, []error) {
+						input := i.(string)
+						errors := make([]error, 0)
+						_, _, err := parsePortRange(input)
+						if err != nil {
+							errors = append(errors, err)
+						}
+						return nil, errors
+					},
+				},
+				"capacities": {
+					Type:     pluginsdk.TypeMap,
+					Optional: true,
+					Elem: &pluginsdk.Schema{
+						Type: pluginsdk.TypeString,
+					},
+				},
+				"data_disk_type": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Default:  string(nodetype.DiskTypeStandardLRS),
+					ValidateFunc: validation.StringInSlice([]string{
+						string(nodetype.DiskTypeStandardLRS),
+						string(nodetype.DiskTypeStandardSSDLRS),
+						string(nodetype.DiskTypePremiumLRS),
+					}, false),
+				},
+				"ephemeral_port_range": {
+					Type:     pluginsdk.TypeString,
+					Required: true,
+				},
+				"placement_properties": {
+					Type:     pluginsdk.TypeMap,
+					Optional: true,
+					Elem: &pluginsdk.Schema{
+						Type: pluginsdk.TypeString,
+					},
+				},
+				"vm_secrets": {
+					Type:     pluginsdk.TypeList,
+					Optional: true,
+					Elem: &pluginsdk.Resource{
+						Schema: map[string]*pluginsdk.Schema{
+							"vault_id": {
+								Type:     pluginsdk.TypeString,
+								Required: true,
+							},
+							"certificates": {
+								Type:     pluginsdk.TypeList,
+								Required: true,
+								Elem: &pluginsdk.Resource{
+									Schema: map[string]*pluginsdk.Schema{
+										"store": {
+											Type:     pluginsdk.TypeString,
+											Required: true,
+										},
+										"url": {
+											Type:     pluginsdk.TypeString,
+											Required: true,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

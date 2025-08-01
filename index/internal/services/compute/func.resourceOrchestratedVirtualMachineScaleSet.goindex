@@ -1,0 +1,332 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/images"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceOrchestratedVirtualMachineScaleSetCreate,
+		Read:   resourceOrchestratedVirtualMachineScaleSetRead,
+		Update: resourceOrchestratedVirtualMachineScaleSetUpdate,
+		Delete: resourceOrchestratedVirtualMachineScaleSetDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceIdThen(func(id string) error {
+			_, err := commonids.ParseVirtualMachineScaleSetID(id)
+			return err
+		}, importOrchestratedVirtualMachineScaleSet),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(60 * time.Minute),
+		},
+
+		// The plan was to remove support the legacy Orchestrated Virtual Machine Scale Set in 3.0.
+		// Turns out it's still in use
+		// TODO: Revisit in 4.0
+		// TODO: exposing requireGuestProvisionSignal once it's available
+		// https://github.com/Azure/azure-rest-api-specs/pull/7246
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: computeValidate.VirtualMachineName,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"location": commonschema.Location(),
+
+			"network_interface": OrchestratedVirtualMachineScaleSetNetworkInterfaceSchema(),
+
+			"os_disk": OrchestratedVirtualMachineScaleSetOSDiskSchema(),
+
+			"instances": {
+				Type:         pluginsdk.TypeInt,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.IntBetween(0, 1000),
+			},
+
+			// For sku I will create a format like: tier_sku name.
+			// NOTE: all of the exposed vm sku tier's are Standard so this will continue to be hardcoded
+			// Examples: Standard_HC44rs_4, Standard_D48_v3_6, Standard_M64s_20, Standard_HB120-96rs_v3_8
+			"sku_name": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: computeValidate.OrchestratedVirtualMachineScaleSetSku,
+			},
+
+			"sku_profile": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				ForceNew: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"allocation_strategy": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice(
+								virtualmachinescalesets.PossibleValuesForAllocationStrategy(),
+								false,
+							),
+						},
+
+						"vm_sizes": {
+							Type:     pluginsdk.TypeSet,
+							Required: true,
+							MinItems: 1,
+							Elem: &pluginsdk.Schema{
+								Type:         pluginsdk.TypeString,
+								ValidateFunc: validation.StringIsNotEmpty,
+							},
+						},
+					},
+				},
+			},
+
+			"os_profile": OrchestratedVirtualMachineScaleSetOSProfileSchema(),
+
+			// Optional
+			// NOTE: The schema for the automatic instance repair has merged so they are
+			// identical for both uniform and flex mode VMSS's
+			"automatic_instance_repair": VirtualMachineScaleSetAutomaticRepairsPolicySchema(),
+
+			"boot_diagnostics": bootDiagnosticsSchema(),
+
+			"capacity_reservation_group_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: capacityreservationgroups.ValidateCapacityReservationGroupID,
+				ConflictsWith: []string{
+					"proximity_placement_group_id",
+				},
+			},
+
+			"data_disk": OrchestratedVirtualMachineScaleSetDataDiskSchema(),
+
+			// Optional
+			"additional_capabilities": OrchestratedVirtualMachineScaleSetAdditionalCapabilitiesSchema(),
+
+			"encryption_at_host_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+			},
+
+			"eviction_policy": {
+				// only applicable when `priority` is set to `Spot`
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(virtualmachinescalesets.VirtualMachineEvictionPolicyTypesDeallocate),
+					string(virtualmachinescalesets.VirtualMachineEvictionPolicyTypesDelete),
+				}, false),
+			},
+
+			"extension_operations_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+				ForceNew: true,
+			},
+
+			// Due to bug in RP extensions cannot currently be supported in Terraform ETA for full support is mid Jan 2022
+			"extension": OrchestratedVirtualMachineScaleSetExtensionsSchema(),
+
+			"extensions_time_budget": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Default:      "PT1H30M",
+				ValidateFunc: validate.ISO8601DurationBetween("PT15M", "PT2H"),
+			},
+
+			// whilst the Swagger defines multiple at this time only UAI is supported
+			"identity": commonschema.UserAssignedIdentityOptional(),
+
+			"license_type": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"None",
+					"Windows_Client",
+					"Windows_Server",
+				}, false),
+				DiffSuppressFunc: func(_, old, new string, _ *pluginsdk.ResourceData) bool {
+					if old == "None" && new == "" || old == "" && new == "None" {
+						return true
+					}
+
+					return false
+				},
+			},
+
+			"max_bid_price": {
+				Type:         pluginsdk.TypeFloat,
+				Optional:     true,
+				Default:      -1,
+				ValidateFunc: computeValidate.SpotMaxPrice,
+			},
+
+			"plan": planSchema(),
+
+			"platform_fault_domain_count": {
+				Type:     pluginsdk.TypeInt,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"priority": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ForceNew: true,
+				Default:  string(virtualmachinescalesets.VirtualMachinePriorityTypesRegular),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(virtualmachinescalesets.VirtualMachinePriorityTypesRegular),
+					string(virtualmachinescalesets.VirtualMachinePriorityTypesSpot),
+				}, false),
+			},
+
+			"proximity_placement_group_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: proximityplacementgroups.ValidateProximityPlacementGroupID,
+				// the Compute API is broken and returns the Resource Group name in UPPERCASE :shrug:, github issue: https://github.com/Azure/azure-rest-api-specs/issues/10016
+				DiffSuppressFunc: suppress.CaseDifference,
+				ConflictsWith: []string{
+					"capacity_reservation_group_id",
+				},
+			},
+
+			// NOTE: single_placement_group is now supported in orchestrated VMSS
+			// Since null is now a valid value for this field there is no default
+			// for this bool
+			"single_placement_group": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+				Optional: true,
+			},
+
+			"source_image_id": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.Any(
+					images.ValidateImageID,
+					computeValidate.SharedImageID,
+					computeValidate.SharedImageVersionID,
+					computeValidate.CommunityGalleryImageID,
+					computeValidate.CommunityGalleryImageVersionID,
+					computeValidate.SharedGalleryImageID,
+					computeValidate.SharedGalleryImageVersionID,
+				),
+				ConflictsWith: []string{
+					"source_image_reference",
+				},
+			},
+
+			"source_image_reference": sourceImageReferenceSchemaOrchestratedVMSS(),
+
+			"zone_balance": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				ForceNew: true,
+				Default:  false,
+			},
+
+			"termination_notification": OrchestratedVirtualMachineScaleSetTerminationNotificationSchema(),
+
+			"zones": commonschema.ZonesMultipleOptional(),
+
+			"tags": commonschema.Tags(),
+
+			// Computed
+			"unique_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"user_data_base64": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Sensitive:    true,
+				ValidateFunc: validation.StringIsBase64,
+			},
+
+			"priority_mix": OrchestratedVirtualMachineScaleSetPriorityMixPolicySchema(),
+		},
+
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			// Removing existing zones is currently not supported for Virtual Machine Scale Sets
+			pluginsdk.ForceNewIfChange("zones", func(ctx context.Context, old, new, meta interface{}) bool {
+				oldZones := zones.ExpandUntyped(old.(*schema.Set).List())
+				newZones := zones.ExpandUntyped(new.(*schema.Set).List())
+
+				for _, ov := range oldZones {
+					found := false
+					for _, nv := range newZones {
+						if ov == nv {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						return true
+					}
+				}
+
+				return false
+			}),
+
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+				skuName, hasSkuName := diff.GetOk("sku_name")
+				_, hasSkuProfile := diff.GetOk("sku_profile")
+
+				if hasSkuProfile {
+					if !hasSkuName || skuName != SkuNameMix {
+						return fmt.Errorf("`sku_profile` can only be set when `sku_name` is set to `Mix`")
+					}
+				} else {
+					if hasSkuName && skuName == SkuNameMix {
+						return fmt.Errorf("`sku_profile` must be set when `sku_name` is set to `Mix`")
+					}
+				}
+
+				return nil
+			}),
+		),
+	}
+}

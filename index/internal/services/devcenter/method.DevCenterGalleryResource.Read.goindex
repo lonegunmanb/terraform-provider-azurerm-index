@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2023-04-01/galleries"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r DevCenterGalleryResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DevCenter.V20230401.Galleries
+			schema := DevCenterGalleryResourceSchema{}
+
+			id, err := galleries.ParseGalleryID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			devCenterId := galleries.NewDevCenterID(id.SubscriptionId, id.ResourceGroupName, id.DevCenterName)
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(*id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				schema.DevCenterId = devCenterId.ID()
+				schema.Name = id.GalleryName
+
+				if props := model.Properties; props != nil {
+					schema.GalleryResourceId = props.GalleryResourceId
+				}
+			}
+
+			return metadata.Encode(&schema)
+		},
+	}
+}

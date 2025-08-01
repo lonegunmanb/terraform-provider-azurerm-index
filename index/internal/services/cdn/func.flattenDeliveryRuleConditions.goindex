@@ -1,0 +1,149 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/deliveryruleactions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/deliveryruleconditions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenDeliveryRuleConditions(conditions *[]cdn.BasicDeliveryRuleCondition) (*map[string][]interface{}, error) {
+	type flattenFunc = func(input cdn.BasicDeliveryRuleCondition) (*map[string]interface{}, error)
+	type validateFunc = func(input cdn.BasicDeliveryRuleCondition) bool
+
+	conditionTypes := map[string]struct {
+		flattenFunc  flattenFunc
+		validateFunc validateFunc
+	}{
+		"cookies_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionCookies,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleCookiesCondition()
+				return ok
+			},
+		},
+		"device_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionDevice,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleIsDeviceCondition()
+				return ok
+			},
+		},
+		"http_version_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionHTTPVersion,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleHTTPVersionCondition()
+				return ok
+			},
+		},
+		"query_string_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionQueryString,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleQueryStringCondition()
+				return ok
+			},
+		},
+		"post_arg_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionPostArg,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRulePostArgsCondition()
+				return ok
+			},
+		},
+		"remote_address_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionRemoteAddress,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleRemoteAddressCondition()
+				return ok
+			},
+		},
+		"request_body_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionRequestBody,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleRequestBodyCondition()
+				return ok
+			},
+		},
+		"request_header_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionRequestHeader,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleRequestHeaderCondition()
+				return ok
+			},
+		},
+		"request_method_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionRequestMethod,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleRequestMethodCondition()
+				return ok
+			},
+		},
+		"request_scheme_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionRequestScheme,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleRequestSchemeCondition()
+				return ok
+			},
+		},
+		"request_uri_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionRequestURI,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleRequestURICondition()
+				return ok
+			},
+		},
+		"url_file_extension_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionURLFileExtension,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleURLFileExtensionCondition()
+				return ok
+			},
+		},
+		"url_file_name_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionURLFileName,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleURLFileNameCondition()
+				return ok
+			},
+		},
+		"url_path_condition": {
+			flattenFunc: deliveryruleconditions.FlattenArmCdnEndpointConditionURLPath,
+			validateFunc: func(condition cdn.BasicDeliveryRuleCondition) bool {
+				_, ok := condition.AsDeliveryRuleURLPathCondition()
+				return ok
+			},
+		},
+	}
+
+	// first ensure there's a map for all of the keys
+	output := make(map[string][]interface{})
+	for schemaKey := range conditionTypes {
+		output[schemaKey] = make([]interface{}, 0)
+	}
+
+	// intentionally bail here now we have defaults populated
+	if conditions == nil {
+		return &output, nil
+	}
+
+	// then iterate over all the conditions and map them as necessary
+	for _, condition := range *conditions {
+		for schemaKey, conditionType := range conditionTypes {
+			suitable := conditionType.validateFunc(condition)
+			if !suitable {
+				continue
+			}
+
+			mapped, err := conditionType.flattenFunc(condition)
+			if err != nil {
+				return nil, err
+			}
+
+			output[schemaKey] = append(output[schemaKey], mapped)
+			break
+		}
+	}
+
+	return &output, nil
+}

@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/parse
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+)
+func LoadBalancerBackendAddressPoolIDInsensitively(input string) (*LoadBalancerBackendAddressPoolId, error) {
+	id, err := resourceids.ParseAzureResourceID(input)
+	if err != nil {
+		return nil, err
+	}
+
+	resourceId := LoadBalancerBackendAddressPoolId{
+		SubscriptionId: id.SubscriptionID,
+		ResourceGroup:  id.ResourceGroup,
+	}
+
+	if resourceId.SubscriptionId == "" {
+		return nil, errors.New("ID was missing the 'subscriptions' element")
+	}
+
+	if resourceId.ResourceGroup == "" {
+		return nil, errors.New("ID was missing the 'resourceGroups' element")
+	}
+
+	// find the correct casing for the 'loadBalancers' segment
+	loadBalancersKey := "loadBalancers"
+	for key := range id.Path {
+		if strings.EqualFold(key, loadBalancersKey) {
+			loadBalancersKey = key
+			break
+		}
+	}
+	if resourceId.LoadBalancerName, err = id.PopSegment(loadBalancersKey); err != nil {
+		return nil, err
+	}
+
+	// find the correct casing for the 'backendAddressPools' segment
+	backendAddressPoolsKey := "backendAddressPools"
+	for key := range id.Path {
+		if strings.EqualFold(key, backendAddressPoolsKey) {
+			backendAddressPoolsKey = key
+			break
+		}
+	}
+	if resourceId.BackendAddressPoolName, err = id.PopSegment(backendAddressPoolsKey); err != nil {
+		return nil, err
+	}
+
+	if err := id.ValidateNoEmptySegments(input); err != nil {
+		return nil, err
+	}
+
+	return &resourceId, nil
+}

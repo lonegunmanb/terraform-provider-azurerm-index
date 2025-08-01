@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	analyticsitems "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2015-05-01/analyticsitemsapis"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceApplicationInsightsAnalyticsItem() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceApplicationInsightsAnalyticsItemCreate,
+		Read:   resourceApplicationInsightsAnalyticsItemRead,
+		Update: resourceApplicationInsightsAnalyticsItemUpdate,
+		Delete: resourceApplicationInsightsAnalyticsItemDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			if strings.Contains(id, userScopePath) || strings.Contains(id, sharedScopePath) {
+				if _, err := analyticsitems.ParseProviderComponentID(id); err != nil {
+					return err
+				}
+			}
+			return nil
+		}),
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.AnalyticsItemUpgradeV0ToV1{},
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringIsNotEmpty,
+			},
+
+			"application_insights_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: components.ValidateComponentID,
+			},
+
+			"version": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"content": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+			},
+
+			"scope": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(analyticsitems.ItemScopeShared),
+					string(analyticsitems.ItemScopeUser),
+				}, false),
+			},
+
+			"type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(analyticsitems.ItemTypeQuery),
+					string(analyticsitems.ItemTypeFunction),
+					string(analyticsitems.ItemTypeParameterFolder),
+					string(analyticsitems.ItemTypeRecent),
+				}, false),
+			},
+
+			"function_alias": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"time_created": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"time_modified": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+		},
+	}
+}

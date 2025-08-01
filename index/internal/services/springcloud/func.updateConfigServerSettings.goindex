@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
+)
+func updateConfigServerSettings(ctx context.Context, client *appplatform.ConfigServersClient, id parse.SpringCloudServiceId, gitProperty *appplatform.ConfigServerGitProperty) error {
+	log.Printf("[DEBUG] Updating Config Server Settings for %s..", id)
+	configServer := appplatform.ConfigServerResource{
+		Properties: &appplatform.ConfigServerProperties{
+			ConfigServer: &appplatform.ConfigServerSettings{
+				GitProperty: gitProperty,
+			},
+		},
+	}
+	updateFuture, err := client.UpdatePut(ctx, id.ResourceGroup, id.SpringName, configServer)
+	if err != nil {
+		return fmt.Errorf("updating config server for %s: %+v", id, err)
+	}
+	if err = updateFuture.WaitForCompletionRef(ctx, client.Client); err != nil {
+		return fmt.Errorf("waiting for update of config server for %s: %+v", id, err)
+	}
+
+	log.Printf("[DEBUG] Retrieving Config Server Settings for %s..", id)
+	resp, err := client.Get(ctx, id.ResourceGroup, id.SpringName)
+	if err != nil {
+		return fmt.Errorf("retrieving config server for %s: %+v", id, err)
+	}
+	if resp.Properties != nil && resp.Properties.Error != nil {
+		if err := resp.Properties.Error; err != nil {
+			return fmt.Errorf("setting config server for %s: %+v", id, err)
+		}
+	}
+	log.Printf("[DEBUG] Updated Config Server Settings for %s.", id)
+	return nil
+}

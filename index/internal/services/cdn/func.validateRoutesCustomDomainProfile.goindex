@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func validateRoutesCustomDomainProfile(customDomains []interface{}, routeProfile string) error {
+	wrongProfile := make([]string, 0)
+
+	if len(customDomains) != 0 {
+		// Verify all of the custom domains belong to the same profile as the route...
+		for _, v := range customDomains {
+			customDomain, err := parse.FrontDoorCustomDomainID(v.(string))
+			if err != nil {
+				return err
+			}
+
+			if customDomain.ProfileName != routeProfile {
+				wrongProfile = append(wrongProfile, fmt.Sprintf("%q", customDomain.ID()))
+			}
+		}
+
+		if len(wrongProfile) > 0 {
+			return fmt.Errorf("the following CDN FrontDoor Custom Domain(s) do not belong to the expected CDN FrontDoor Profile(Name: %q). Please remove the following CDN FrontDoor Custom Domain(s) from your CDN FrontDoor Route configuration block: %s", routeProfile, strings.Join(wrongProfile, ", "))
+		}
+	}
+
+	return nil
+}

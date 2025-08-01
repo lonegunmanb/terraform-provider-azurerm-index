@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	validate2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAzureRmVirtualMachineScaleSetExtensionProfile(profile *virtualmachinescalesets.VirtualMachineScaleSetExtensionProfile) ([]map[string]interface{}, error) {
+	if profile.Extensions == nil {
+		return nil, nil
+	}
+
+	result := make([]map[string]interface{}, 0, len(*profile.Extensions))
+	for _, extension := range *profile.Extensions {
+		e := make(map[string]interface{})
+		e["name"] = *extension.Name
+		properties := extension.Properties
+		if properties != nil {
+			e["publisher"] = *properties.Publisher
+			e["type"] = *properties.Type
+			e["type_handler_version"] = *properties.TypeHandlerVersion
+			if properties.AutoUpgradeMinorVersion != nil {
+				e["auto_upgrade_minor_version"] = *properties.AutoUpgradeMinorVersion
+			}
+
+			provisionAfterExtensions := make([]interface{}, 0)
+			if properties.ProvisionAfterExtensions != nil {
+				for _, provisionAfterExtension := range *properties.ProvisionAfterExtensions {
+					provisionAfterExtensions = append(provisionAfterExtensions, provisionAfterExtension)
+				}
+			}
+			e["provision_after_extensions"] = pluginsdk.NewSet(pluginsdk.HashString, provisionAfterExtensions)
+
+			if settings := properties.Settings; settings != nil {
+				result, err := json.Marshal(settings)
+				if err != nil {
+					return nil, fmt.Errorf("unmarshaling `settings`: %+v", err)
+				}
+				e["settings"] = string(result)
+			}
+		}
+
+		result = append(result, e)
+	}
+
+	return result, nil
+}

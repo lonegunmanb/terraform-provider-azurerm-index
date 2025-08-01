@@ -1,0 +1,327 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/provider
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/sdk/auth"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func azureProvider(supportLegacyTestSuite bool) *schema.Provider {
+	dataSources := make(map[string]*schema.Resource)
+	resources := make(map[string]*schema.Resource)
+
+	// first handle the typed services
+	for _, service := range SupportedTypedServices() {
+		logEntry("[DEBUG] Registering Data Sources for %q..", service.Name())
+		for _, ds := range service.DataSources() {
+			key := ds.ResourceType()
+			if existing := dataSources[key]; existing != nil {
+				panic(fmt.Sprintf("An existing Data Source exists for %q", key))
+			}
+
+			wrapper := sdk.NewDataSourceWrapper(ds)
+			dataSource, err := wrapper.DataSource()
+			if err != nil {
+				panic(fmt.Errorf("creating Wrapper for Data Source %q: %+v", key, err))
+			}
+
+			dataSources[key] = dataSource
+		}
+
+		logEntry("[DEBUG] Registering Resources for %q..", service.Name())
+		for _, r := range service.Resources() {
+			key := r.ResourceType()
+			if existing := resources[key]; existing != nil {
+				panic(fmt.Sprintf("An existing Resource exists for %q", key))
+			}
+
+			wrapper := sdk.NewResourceWrapper(r)
+			resource, err := wrapper.Resource()
+			if err != nil {
+				panic(fmt.Errorf("creating Wrapper for Resource %q: %+v", key, err))
+			}
+			resources[key] = resource
+		}
+	}
+
+	// then handle the untyped services
+	for _, service := range SupportedUntypedServices() {
+		logEntry("[DEBUG] Registering Data Sources for %q..", service.Name())
+		for k, v := range service.SupportedDataSources() {
+			if existing := dataSources[k]; existing != nil {
+				panic(fmt.Sprintf("An existing Data Source exists for %q", k))
+			}
+
+			dataSources[k] = v
+		}
+
+		logEntry("[DEBUG] Registering Resources for %q..", service.Name())
+		for k, v := range service.SupportedResources() {
+			if existing := resources[k]; existing != nil {
+				panic(fmt.Sprintf("An existing Resource exists for %q", k))
+			}
+
+			resources[k] = v
+		}
+	}
+
+	p := &schema.Provider{
+		Schema: map[string]*schema.Schema{
+			"subscription_id": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_SUBSCRIPTION_ID", nil),
+				Description: "The Subscription ID which should be used.",
+			},
+
+			"tenant_id": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_TENANT_ID", nil),
+				Description: "The Tenant ID which should be used.",
+			},
+
+			"auxiliary_tenant_ids": {
+				Type:     schema.TypeList,
+				Optional: true,
+				MaxItems: 3,
+				Elem: &schema.Schema{
+					Type: schema.TypeString,
+				},
+			},
+
+			"environment": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_ENVIRONMENT", "public"),
+				Description: "The Cloud Environment which should be used. Possible values are public, usgovernment, and china. Defaults to public. Not used and should not be specified when `metadata_host` is specified.",
+			},
+
+			"metadata_host": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_METADATA_HOSTNAME", nil),
+				Description: "The Hostname which should be used for the Azure Metadata Service.",
+			},
+
+			"client_id": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_CLIENT_ID", nil),
+				Description: "The Client ID which should be used.",
+			},
+
+			"client_id_file_path": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_CLIENT_ID_FILE_PATH", nil),
+				Description: "The path to a file containing the Client ID which should be used.",
+			},
+
+			// Client Certificate specific fields
+			"client_certificate": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_CLIENT_CERTIFICATE", nil),
+				Description: "Base64 encoded PKCS#12 certificate bundle to use when authenticating as a Service Principal using a Client Certificate",
+			},
+
+			"client_certificate_path": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_CLIENT_CERTIFICATE_PATH", nil),
+				Description: "The path to the Client Certificate associated with the Service Principal for use when authenticating as a Service Principal using a Client Certificate.",
+			},
+
+			"client_certificate_password": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_CLIENT_CERTIFICATE_PASSWORD", nil),
+				Description: "The password associated with the Client Certificate. For use when authenticating as a Service Principal using a Client Certificate",
+			},
+
+			// Client Secret specific fields
+			"client_secret": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_CLIENT_SECRET", nil),
+				Description: "The Client Secret which should be used. For use When authenticating as a Service Principal using a Client Secret.",
+			},
+
+			"client_secret_file_path": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_CLIENT_SECRET_FILE_PATH", nil),
+				Description: "The path to a file containing the Client Secret which should be used. For use When authenticating as a Service Principal using a Client Secret.",
+			},
+
+			// OIDC specific fields
+			"use_oidc": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_USE_OIDC", false),
+				Description: "Allow OpenID Connect to be used for authentication",
+			},
+
+			"ado_pipeline_service_connection_id": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.MultiEnvDefaultFunc([]string{"ARM_ADO_PIPELINE_SERVICE_CONNECTION_ID", "ARM_OIDC_AZURE_SERVICE_CONNECTION_ID"}, nil),
+				Description: "The Azure DevOps Pipeline Service Connection ID.",
+			},
+
+			"oidc_request_token": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.MultiEnvDefaultFunc([]string{"ARM_OIDC_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "SYSTEM_ACCESSTOKEN"}, nil),
+				Description: "The bearer token for the request to the OIDC provider. For use when authenticating as a Service Principal using OpenID Connect.",
+			},
+
+			"oidc_request_url": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.MultiEnvDefaultFunc([]string{"ARM_OIDC_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_URL", "SYSTEM_OIDCREQUESTURI"}, nil),
+				Description: "The URL for the OIDC provider from which to request an ID token. For use when authenticating as a Service Principal using OpenID Connect.",
+			},
+
+			"oidc_token": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_OIDC_TOKEN", nil),
+				Description: "The OIDC ID token for use when authenticating as a Service Principal using OpenID Connect.",
+			},
+
+			"oidc_token_file_path": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_OIDC_TOKEN_FILE_PATH", nil),
+				Description: "The path to a file containing an OIDC ID token for use when authenticating as a Service Principal using OpenID Connect.",
+			},
+
+			// Managed Service Identity specific fields
+			"use_msi": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_USE_MSI", false),
+				Description: "Allow Managed Service Identity to be used for Authentication.",
+			},
+
+			"msi_endpoint": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_MSI_ENDPOINT", nil),
+				Description: "The path to a custom endpoint for Managed Service Identity - in most circumstances this should be detected automatically. ",
+			},
+
+			// Azure CLI specific fields
+			"use_cli": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_USE_CLI", true),
+				Description: "Allow Azure CLI to be used for Authentication.",
+			},
+
+			// Azure AKS Workload Identity fields
+			"use_aks_workload_identity": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_USE_AKS_WORKLOAD_IDENTITY", false),
+				Description: "Allow Azure AKS Workload Identity to be used for Authentication.",
+			},
+
+			// Managed Tracking GUID for User-agent
+			"partner_id": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.Any(ValidatePartnerID, validation.StringIsEmpty),
+				DefaultFunc:  schema.EnvDefaultFunc("ARM_PARTNER_ID", nil),
+				Description:  "A GUID/UUID that is registered with Microsoft to facilitate partner resource usage attribution.",
+			},
+
+			"disable_correlation_request_id": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_DISABLE_CORRELATION_REQUEST_ID", false),
+				Description: "This will disable the x-ms-correlation-request-id header.",
+			},
+
+			"disable_terraform_partner_id": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_DISABLE_TERRAFORM_PARTNER_ID", false),
+				Description: "This will disable the Terraform Partner ID which is used if a custom `partner_id` isn't specified.",
+			},
+
+			"features": schemaFeatures(supportLegacyTestSuite),
+
+			// Advanced feature flags
+			"resource_provider_registrations": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_RESOURCE_PROVIDER_REGISTRATIONS", resourceproviders.ProviderRegistrationsLegacy),
+				Description: "The set of Resource Providers which should be automatically registered for the subscription.",
+				ValidateFunc: validation.StringInSlice([]string{
+					resourceproviders.ProviderRegistrationsCore,
+					resourceproviders.ProviderRegistrationsExtended,
+					resourceproviders.ProviderRegistrationsAll,
+					resourceproviders.ProviderRegistrationsNone,
+					resourceproviders.ProviderRegistrationsLegacy,
+				}, false),
+			},
+
+			"resource_providers_to_register": {
+				Type:        schema.TypeList,
+				Optional:    true,
+				Description: "A list of Resource Providers to explicitly register for the subscription, in addition to those specified by the `resource_provider_registrations` property.",
+				Elem: &schema.Schema{
+					Type:         schema.TypeString,
+					ValidateFunc: resourceproviders.EnhancedValidate,
+				},
+			},
+
+			// TODO: Remove `skip_provider_registration` in v5.0
+			"skip_provider_registration": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_SKIP_PROVIDER_REGISTRATION", nil),
+				Description: "Should the AzureRM Provider skip registering all of the Resource Providers that it supports, if they're not already registered?",
+				Deprecated:  features.DeprecatedInFourPointOh("This property is deprecated and will be removed in v5.0 of the AzureRM provider. Please use the `resource_provider_registrations` property instead."),
+			},
+
+			"storage_use_azuread": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				DefaultFunc: schema.EnvDefaultFunc("ARM_STORAGE_USE_AZUREAD", false),
+				Description: "Should the AzureRM Provider use Azure AD Authentication when accessing the Storage Data Plane APIs?",
+			},
+		},
+
+		DataSourcesMap: dataSources,
+		ResourcesMap:   resources,
+	}
+
+	if !features.FourPointOhBeta() {
+		p.Schema["subscription_id"].Required = false
+		p.Schema["subscription_id"].Optional = true
+
+		delete(p.Schema, "resource_provider_registrations")
+		delete(p.Schema, "resource_providers_to_register")
+	}
+
+	p.ConfigureContextFunc = providerConfigure(p)
+
+	return p
+}

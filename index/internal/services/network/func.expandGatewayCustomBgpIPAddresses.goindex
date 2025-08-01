@@ -1,0 +1,79 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/expressroutecircuits"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/localnetworkgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgatewayconnections"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandGatewayCustomBgpIPAddresses(d *pluginsdk.ResourceData, bgpPeeringAddresses *[]virtualnetworkgateways.IPConfigurationBgpPeeringAddress) (*[]virtualnetworkgatewayconnections.GatewayCustomBgpIPAddressIPConfiguration, error) {
+	customBgpIpAddresses := make([]virtualnetworkgatewayconnections.GatewayCustomBgpIPAddressIPConfiguration, 0)
+
+	bgpAddresses := d.Get("custom_bgp_addresses").([]interface{})
+	if len(bgpAddresses) == 0 {
+		return &customBgpIpAddresses, nil
+	}
+
+	bgAs := bgpAddresses[0].(map[string]interface{})
+	primaryAddress := bgAs["primary"].(string)
+	secondaryAddress := bgAs["secondary"].(string)
+
+	var primaryIpConfiguration string
+	var secondaryIpConfiguration string
+
+	if bgpPeeringAddresses == nil {
+		return &customBgpIpAddresses, fmt.Errorf("retrieving BGP peering address from `virtual_network_gateway`, addresses returned nil")
+	}
+
+	for _, address := range *bgpPeeringAddresses {
+		if address.CustomBgpIPAddresses == nil {
+			continue
+		}
+
+		for _, ip := range *address.CustomBgpIPAddresses {
+			if address.IPconfigurationId == nil {
+				continue
+			}
+
+			if ip == primaryAddress {
+				primaryIpConfiguration = *address.IPconfigurationId
+			} else if ip == secondaryAddress {
+				secondaryIpConfiguration = *address.IPconfigurationId
+			}
+		}
+	}
+
+	if len(primaryIpConfiguration) == 0 || (secondaryAddress != "" && len(secondaryIpConfiguration) == 0) {
+		return &customBgpIpAddresses, fmt.Errorf("primary or secondary address not found at `virtual_network_gateway` configuration `bgp_settings` `peering_addresses`")
+	}
+
+	customBgpIpAddresses = append(customBgpIpAddresses, virtualnetworkgatewayconnections.GatewayCustomBgpIPAddressIPConfiguration{
+		IPConfigurationId:  primaryIpConfiguration,
+		CustomBgpIPAddress: primaryAddress,
+	})
+
+	if secondaryAddress != "" {
+		customBgpIpAddresses = append(customBgpIpAddresses, virtualnetworkgatewayconnections.GatewayCustomBgpIPAddressIPConfiguration{
+			IPConfigurationId:  secondaryIpConfiguration,
+			CustomBgpIPAddress: secondaryAddress,
+		})
+	}
+
+	return &customBgpIpAddresses, nil
+}

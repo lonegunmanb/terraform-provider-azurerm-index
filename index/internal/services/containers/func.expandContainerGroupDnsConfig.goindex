@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerinstance/2023-05-01/containerinstance"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandContainerGroupDnsConfig(input interface{}) *containerinstance.DnsConfiguration {
+	dnsConfigRaw := input.([]interface{})
+	if len(dnsConfigRaw) > 0 && dnsConfigRaw[0] != nil {
+		config := dnsConfigRaw[0].(map[string]interface{})
+
+		nameservers := []string{}
+		for _, v := range config["nameservers"].([]interface{}) {
+			nameservers = append(nameservers, v.(string))
+		}
+		options := []string{}
+		for _, v := range config["options"].(*pluginsdk.Set).List() {
+			options = append(options, v.(string))
+		}
+		searchDomains := []string{}
+		for _, v := range config["search_domains"].(*pluginsdk.Set).List() {
+			searchDomains = append(searchDomains, v.(string))
+		}
+
+		return &containerinstance.DnsConfiguration{
+			Options:       pointer.To(strings.Join(options, " ")),
+			SearchDomains: pointer.To(strings.Join(searchDomains, " ")),
+			NameServers:   nameservers,
+		}
+	}
+
+	return nil
+}

@@ -1,0 +1,32 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/workspaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
+)
+func AlertRuleAnomalyReadWithPredicate(ctx context.Context, baseClient securityinsight.BaseClient, workspaceId workspaces.WorkspaceId, predicateFunc func(v *azuresdkhacks.AnomalySecurityMLAnalyticsSettings) bool) (*azuresdkhacks.AnomalySecurityMLAnalyticsSettings, error) {
+	client := azuresdkhacks.SecurityMLAnalyticsSettingsClient{BaseClient: baseClient}
+	resp, err := client.ListComplete(ctx, workspaceId.ResourceGroupName, workspaceId.WorkspaceName)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving: %+v", err)
+	}
+
+	for resp.NotDone() {
+		item := resp.Value()
+		if v, ok := item.AsAnomalySecurityMLAnalyticsSettings(); ok {
+			if predicateFunc(v) {
+				return v, nil
+			}
+		}
+		if err := resp.NextWithContext(ctx); err != nil {
+			return nil, fmt.Errorf("listing next: %+v", err)
+		}
+	}
+	return nil, nil
+}

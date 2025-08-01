@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/signalr/2023-02-01/signalr"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/migration"
+	signalrValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenUpstreamSettings(upstreamSettings *signalr.ServerlessUpstreamSettings) []interface{} {
+	result := make([]interface{}, 0)
+	if upstreamSettings == nil || upstreamSettings.Templates == nil {
+		return result
+	}
+
+	for _, settings := range *upstreamSettings.Templates {
+		categoryPattern := make([]interface{}, 0)
+		if settings.CategoryPattern != nil {
+			categoryPatterns := strings.Split(*settings.CategoryPattern, ",")
+			categoryPattern = utils.FlattenStringSlice(&categoryPatterns)
+		}
+
+		eventPattern := make([]interface{}, 0)
+		if settings.EventPattern != nil {
+			eventPatterns := strings.Split(*settings.EventPattern, ",")
+			eventPattern = utils.FlattenStringSlice(&eventPatterns)
+		}
+
+		hubPattern := make([]interface{}, 0)
+		if settings.HubPattern != nil {
+			hubPatterns := strings.Split(*settings.HubPattern, ",")
+			hubPattern = utils.FlattenStringSlice(&hubPatterns)
+		}
+
+		var managedIdentityId string
+		if upstreamAuth := settings.Auth; upstreamAuth != nil && upstreamAuth.Type != nil && *upstreamAuth.Type != signalr.UpstreamAuthTypeNone {
+			if upstreamAuth.ManagedIdentity != nil && upstreamAuth.ManagedIdentity.Resource != nil {
+				managedIdentityId = *upstreamAuth.ManagedIdentity.Resource
+			}
+		}
+
+		result = append(result, map[string]interface{}{
+			"url_template":              settings.UrlTemplate,
+			"hub_pattern":               hubPattern,
+			"event_pattern":             eventPattern,
+			"category_pattern":          categoryPattern,
+			"user_assigned_identity_id": managedIdentityId,
+		})
+	}
+	return result
+}

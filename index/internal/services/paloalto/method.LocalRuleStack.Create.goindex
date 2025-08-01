@@ -1,0 +1,91 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2022-08-29/localrulestacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r LocalRuleStack) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.PaloAlto.Client.LocalRulestacks
+
+			model := LocalRuleStackModel{}
+
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			id := localrulestacks.NewLocalRulestackID(metadata.Client.Account.SubscriptionId, model.ResourceGroupName, model.Name)
+			locks.ByID(id.ID())
+			defer locks.UnlockByID(id.ID())
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			secServices := localrulestacks.SecurityServices{
+				AntiSpywareProfile:   pointer.To(RuleStackSecurityServicesNone),
+				AntiVirusProfile:     pointer.To(RuleStackSecurityServicesNone),
+				DnsSubscription:      pointer.To(RuleStackSecurityServicesNone),
+				FileBlockingProfile:  pointer.To(RuleStackSecurityServicesNone),
+				UrlFilteringProfile:  pointer.To(RuleStackSecurityServicesNone),
+				VulnerabilityProfile: pointer.To(RuleStackSecurityServicesNone),
+			}
+
+			if model.AntiSpywareProfile != "" {
+				secServices.AntiSpywareProfile = pointer.To(model.AntiSpywareProfile)
+			}
+			if model.AntiVirusProfile != "" {
+				secServices.AntiVirusProfile = pointer.To(model.AntiVirusProfile)
+			}
+			if model.DNSSubscription != "" {
+				secServices.DnsSubscription = pointer.To(model.DNSSubscription)
+			}
+			if model.FileBlockingProfile != "" {
+				secServices.FileBlockingProfile = pointer.To(model.FileBlockingProfile)
+			}
+			if model.URLFilteringProfile != "" {
+				secServices.UrlFilteringProfile = pointer.To(model.URLFilteringProfile)
+			}
+			if model.VulnerabilityProfile != "" {
+				secServices.VulnerabilityProfile = pointer.To(model.VulnerabilityProfile)
+			}
+
+			localRuleStack := localrulestacks.LocalRulestackResource{
+				Location: location.Normalize(model.Location),
+				Properties: localrulestacks.RulestackProperties{
+					DefaultMode:      pointer.To(localrulestacks.DefaultModeNONE),
+					Description:      pointer.To(model.Description),
+					Scope:            pointer.To(localrulestacks.ScopeTypeLOCAL),
+					SecurityServices: pointer.To(secServices),
+				},
+			}
+
+			if err = client.CreateOrUpdateThenPoll(ctx, id, localRuleStack); err != nil {
+				return err
+			}
+
+			metadata.SetID(id)
+
+			return nil
+		},
+	}
+}

@@ -1,0 +1,80 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/natgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceNATGatewayPublicIpAssociationCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Network.Client.NatGateways
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	publicIpAddressId, err := commonids.ParsePublicIPAddressID(d.Get("public_ip_address_id").(string))
+	if err != nil {
+		return err
+	}
+
+	natGatewayId, err := natgateways.ParseNatGatewayID(d.Get("nat_gateway_id").(string))
+	if err != nil {
+		return err
+	}
+
+	locks.ByName(natGatewayId.NatGatewayName, natGatewayResourceName)
+	defer locks.UnlockByName(natGatewayId.NatGatewayName, natGatewayResourceName)
+
+	natGateway, err := client.Get(ctx, *natGatewayId, natgateways.DefaultGetOperationOptions())
+	if err != nil {
+		if response.WasNotFound(natGateway.HttpResponse) {
+			return fmt.Errorf("%s was not found", natGatewayId)
+		}
+		return fmt.Errorf("retrieving %s: %+v", natGatewayId, err)
+	}
+
+	if natGateway.Model == nil {
+		return fmt.Errorf("retrieving %s: `model` was nil", natGatewayId)
+	}
+	if natGateway.Model.Properties == nil {
+		return fmt.Errorf("retrieving %s: `properties` was nil", natGatewayId)
+	}
+
+	id := commonids.NewCompositeResourceID(natGatewayId, publicIpAddressId)
+
+	publicIpAddresses := make([]natgateways.SubResource, 0)
+	if natGateway.Model.Properties.PublicIPAddresses != nil {
+		for _, existingPublicIPAddress := range *natGateway.Model.Properties.PublicIPAddresses {
+			if existingPublicIPAddress.Id == nil {
+				continue
+			}
+
+			if strings.EqualFold(*existingPublicIPAddress.Id, publicIpAddressId.ID()) {
+				return tf.ImportAsExistsError("azurerm_nat_gateway_public_ip_association", id.ID())
+			}
+
+			publicIpAddresses = append(publicIpAddresses, existingPublicIPAddress)
+		}
+	}
+
+	publicIpAddresses = append(publicIpAddresses, natgateways.SubResource{
+		Id: pointer.To(publicIpAddressId.ID()),
+	})
+	natGateway.Model.Properties.PublicIPAddresses = &publicIpAddresses
+
+	if err := client.CreateOrUpdateThenPoll(ctx, *natGatewayId, *natGateway.Model); err != nil {
+		return fmt.Errorf("updating %s: %+v", natGatewayId, err)
+	}
+
+	d.SetId(id.ID())
+
+	return resourceNATGatewayPublicIpAssociationRead(d, meta)
+}

@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenLoadBalancerDataSourceFrontendIpConfiguration(ipConfigs *[]loadbalancers.FrontendIPConfiguration) []interface{} {
+	result := make([]interface{}, 0)
+	if ipConfigs == nil {
+		return result
+	}
+
+	for _, config := range *ipConfigs {
+		name := ""
+		if config.Name != nil {
+			name = *config.Name
+		}
+
+		id := ""
+		if config.Id != nil {
+			id = *config.Id
+		}
+
+		privateIpAddress := ""
+		privateIpAddressAllocation := ""
+		privateIpAddressVersion := ""
+		publicIpAddressId := ""
+		subnetId := ""
+		if props := config.Properties; props != nil {
+			privateIpAddressAllocation = string(pointer.From(props.PrivateIPAllocationMethod))
+
+			if subnet := props.Subnet; subnet != nil {
+				subnetId = pointer.From(subnet.Id)
+			}
+
+			privateIpAddress = pointer.From(props.PrivateIPAddress)
+			privateIpAddressVersion = string(pointer.From(props.PrivateIPAddressVersion))
+
+			if pip := props.PublicIPAddress; pip != nil {
+				publicIpAddressId = pointer.From(pip.Id)
+			}
+		}
+
+		result = append(result, map[string]interface{}{
+			"id":                            id,
+			"name":                          name,
+			"private_ip_address":            privateIpAddress,
+			"private_ip_address_allocation": privateIpAddressAllocation,
+			"private_ip_address_version":    privateIpAddressVersion,
+			"public_ip_address_id":          publicIpAddressId,
+			"subnet_id":                     subnetId,
+			"zones":                         zones.FlattenUntyped(config.Zones),
+		})
+	}
+	return result
+}

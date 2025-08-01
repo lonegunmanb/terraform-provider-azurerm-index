@@ -1,0 +1,107 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mongocluster
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mongocluster/2024-07-01/mongoclusters"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r MongoClusterResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MongoCluster.MongoClustersClient
+
+			id, err := mongoclusters.ParseMongoClusterID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			metadata.Logger.Info("Decoding state...")
+			var state MongoClusterResourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if existing.Model == nil {
+				return fmt.Errorf("retrieving %s: `model` was nil", *id)
+			}
+			if existing.Model.Properties == nil {
+				return fmt.Errorf("retrieving %s: `properties` was nil", *id)
+			}
+			payload := existing.Model
+
+			metadata.Logger.Infof("updating %s", *id)
+
+			// Set SystemData to nil as the API returns `The property '#/systemData' of type null did not match the following type: object in schema 25debcc2-6915-5536-9566-a2ecd765b755"}}` error.
+			// https://github.com/Azure/azure-rest-api-specs/issues/31377 has been filed to track it.
+			payload.SystemData = nil
+
+			// upgrades involving Free or M25(Burstable) compute tier require first upgrading the compute tier, after which other configurations can be updated.
+			if metadata.ResourceData.HasChange("compute_tier") {
+				payload.Properties.Compute = &mongoclusters.ComputeProperties{
+					Tier: pointer.To(state.ComputeTier),
+				}
+				oldComputeTier, newComputeTier := metadata.ResourceData.GetChange("compute_tier")
+				if (oldComputeTier == "Free" || oldComputeTier == "M25") && newComputeTier != "Free" && newComputeTier != "M25" {
+					metadata.Logger.Infof("updating compute tier for %s", *id)
+					if err := client.CreateOrUpdateThenPoll(ctx, *id, *payload); err != nil {
+						return fmt.Errorf("updating %s: %+v", *id, err)
+					}
+				}
+			}
+
+			metadata.Logger.Infof("updating other configurations for %s", *id)
+			if metadata.ResourceData.HasChange("administrator_password") {
+				payload.Properties.Administrator = &mongoclusters.AdministratorProperties{
+					UserName: pointer.To(state.AdministratorUserName),
+					Password: pointer.To(state.AdministratorPassword),
+				}
+			}
+
+			if metadata.ResourceData.HasChange("high_availability_mode") {
+				payload.Properties.HighAvailability = &mongoclusters.HighAvailabilityProperties{
+					TargetMode: pointer.To(mongoclusters.HighAvailabilityMode(state.HighAvailabilityMode)),
+				}
+			}
+
+			if metadata.ResourceData.HasChange("public_network_access") {
+				payload.Properties.PublicNetworkAccess = pointer.To(mongoclusters.PublicNetworkAccess(state.PublicNetworkAccess))
+			}
+
+			if metadata.ResourceData.HasChange("storage_size_in_gb") {
+				payload.Properties.Storage = &mongoclusters.StorageProperties{
+					SizeGb: pointer.To(state.StorageSizeInGb),
+				}
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				payload.Tags = pointer.To(state.Tags)
+			}
+
+			if metadata.ResourceData.HasChange("version") {
+				payload.Properties.ServerVersion = pointer.To(state.Version)
+			}
+
+			if err := client.CreateOrUpdateThenPoll(ctx, *id, *payload); err != nil {
+				return fmt.Errorf("updating %s: %+v", *id, err)
+			}
+
+			return nil
+		},
+	}
+}

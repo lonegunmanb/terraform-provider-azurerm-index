@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflows"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflowtriggers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func resourceLogicAppTriggerHttpRequestCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	schemaRaw := d.Get("schema").(string)
+	var schema map[string]interface{}
+	if err := json.Unmarshal([]byte(schemaRaw), &schema); err != nil {
+		return fmt.Errorf("unmarshalling JSON from Schema: %+v", err)
+	}
+
+	inputs := map[string]interface{}{
+		"schema": schema,
+	}
+
+	if v, ok := d.GetOk("method"); ok {
+		inputs["method"] = v.(string)
+	}
+
+	if v, ok := d.GetOk("relative_path"); ok {
+		inputs["relativePath"] = v.(string)
+	}
+
+	trigger := map[string]interface{}{
+		"inputs": inputs,
+		"kind":   "Http",
+		"type":   "Request",
+	}
+
+	workflowId, err := workflows.ParseWorkflowID(d.Get("logic_app_id").(string))
+	if err != nil {
+		return err
+	}
+
+	id := workflowtriggers.NewTriggerID(workflowId.SubscriptionId, workflowId.ResourceGroupName, workflowId.WorkflowName, d.Get("name").(string))
+
+	if err := resourceLogicAppTriggerUpdate(d, meta, *workflowId, id, trigger, "azurerm_logic_app_trigger_http_request"); err != nil {
+		return err
+	}
+
+	return resourceLogicAppTriggerHttpRequestRead(d, meta)
+}

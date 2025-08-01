@@ -1,0 +1,101 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/extensions"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVault "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func FlattenHDInsightNodeDefinition(input *clusters.Role, existing []interface{}, definition HDInsightNodeDefinition) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	output := map[string]interface{}{
+		"vm_size":            "",
+		"username":           "",
+		"password":           "",
+		"ssh_keys":           pluginsdk.NewSet(pluginsdk.HashString, []interface{}{}),
+		"subnet_id":          "",
+		"virtual_network_id": "",
+		"script_actions":     make([]interface{}, 0),
+	}
+
+	if profile := input.OsProfile; profile != nil {
+		if osProfile := profile.LinuxOperatingSystemProfile; osProfile != nil {
+			if username := osProfile.Username; username != nil {
+				output["username"] = *username
+			}
+		}
+	}
+
+	// neither Password / SSH Keys are returned from the API, so we need to look them up to not force a diff
+	if len(existing) > 0 {
+		existingV := existing[0].(map[string]interface{})
+		output["password"] = existingV["password"].(string)
+
+		sshKeys := existingV["ssh_keys"].(*pluginsdk.Set).List()
+		output["ssh_keys"] = pluginsdk.NewSet(pluginsdk.HashString, sshKeys)
+
+		// whilst the VMSize can be returned from `input.HardwareProfile.VMSize` - it can be malformed
+		// for example, `small`, `medium`, `large` and `extralarge` can be returned inside of actual VM Size
+		// after extensive experimentation it appears multiple instance sizes fit `extralarge`, as such
+		// unfortunately we can't transform these; since it can't be changed
+		// we should be "safe" to try and pull it from the state instead, but clearly this isn't ideal
+		vmSize := existingV["vm_size"].(string)
+		output["vm_size"] = vmSize
+
+		scriptActions := existingV["script_actions"].([]interface{})
+		output["script_actions"] = scriptActions
+	}
+
+	if profile := input.VirtualNetworkProfile; profile != nil {
+		if profile.Id != nil {
+			output["virtual_network_id"] = *profile.Id
+		}
+		if profile.Subnet != nil {
+			output["subnet_id"] = *profile.Subnet
+		}
+	}
+
+	if definition.CanSpecifyInstanceCount {
+		output["target_instance_count"] = 0
+
+		if input.TargetInstanceCount != nil {
+			output["target_instance_count"] = int(*input.TargetInstanceCount)
+		}
+
+		if definition.CanAutoScaleByCapacity || definition.CanAutoScaleOnSchedule {
+			autoscale := FlattenHDInsightNodeAutoscaleDefinition(input.Autoscale)
+			if autoscale != nil {
+				output["autoscale"] = autoscale
+			}
+		}
+	}
+
+	if definition.CanSpecifyDisks {
+		output["number_of_disks_per_node"] = 0
+		if input.DataDisksGroups != nil && len(*input.DataDisksGroups) > 0 {
+			group := (*input.DataDisksGroups)[0]
+			if group.DisksPerNode != nil {
+				output["number_of_disks_per_node"] = int(*group.DisksPerNode)
+			}
+		}
+	}
+
+	return []interface{}{output}
+}

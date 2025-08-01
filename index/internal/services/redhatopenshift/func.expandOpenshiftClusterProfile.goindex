@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2023-09-04/openshiftclusters"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandOpenshiftClusterProfile(input []ClusterProfile, subscriptionId string) *openshiftclusters.ClusterProfile {
+	if len(input) == 0 {
+		return nil
+	}
+
+	fipsValidatedModules := openshiftclusters.FipsValidatedModulesDisabled
+	if input[0].FipsEnabled {
+		fipsValidatedModules = openshiftclusters.FipsValidatedModulesEnabled
+	}
+
+	// the api needs a ResourceGroupId value and the portal doesn't allow you to set it but the portal returns the
+	// resource id being `aro-{domain}` so we'll follow that here.
+	resourceGroupId := commonids.NewResourceGroupID(subscriptionId, fmt.Sprintf("aro-%s", input[0].Domain)).ID()
+	if rg := input[0].ManagedResourceGroupName; rg != "" {
+		resourceGroupId = commonids.NewResourceGroupID(subscriptionId, rg).ID()
+	}
+
+	return &openshiftclusters.ClusterProfile{
+		ResourceGroupId:      pointer.To(resourceGroupId),
+		Domain:               pointer.To(input[0].Domain),
+		PullSecret:           pointer.To(input[0].PullSecret),
+		FipsValidatedModules: pointer.To(fipsValidatedModules),
+		Version:              pointer.To(input[0].Version),
+	}
+}

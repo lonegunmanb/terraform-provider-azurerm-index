@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationrecoveryplans"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandRecoveryGroupNew(shutdown []GenericRecoveryGroupModel, failover []GenericRecoveryGroupModel, boot []BootRecoveryGroupModel) ([]replicationrecoveryplans.RecoveryPlanGroup, error) {
+	output := make([]replicationrecoveryplans.RecoveryPlanGroup, 0)
+
+	for _, group := range shutdown {
+		preActions, err := expandAction(group.PreAction)
+		if err != nil {
+			return output, err
+		}
+		postActions, err := expandAction(group.PostAction)
+		if err != nil {
+			return output, err
+		}
+
+		output = append(output, replicationrecoveryplans.RecoveryPlanGroup{
+			GroupType:         replicationrecoveryplans.RecoveryPlanGroupTypeShutdown,
+			StartGroupActions: &preActions,
+			EndGroupActions:   &postActions,
+		})
+	}
+
+	for _, group := range failover {
+		preActions, err := expandAction(group.PreAction)
+		if err != nil {
+			return output, err
+		}
+		postActions, err := expandAction(group.PostAction)
+		if err != nil {
+			return output, err
+		}
+
+		output = append(output, replicationrecoveryplans.RecoveryPlanGroup{
+			GroupType:         replicationrecoveryplans.RecoveryPlanGroupTypeFailover,
+			StartGroupActions: &preActions,
+			EndGroupActions:   &postActions,
+		})
+	}
+
+	for _, group := range boot {
+		protectedItems := make([]replicationrecoveryplans.RecoveryPlanProtectedItem, 0)
+		for _, protectedItem := range group.ReplicatedProtectedItems {
+			protectedItems = append(protectedItems, replicationrecoveryplans.RecoveryPlanProtectedItem{
+				Id: pointer.To(protectedItem),
+			})
+		}
+
+		preActions, err := expandAction(group.PreAction)
+		if err != nil {
+			return output, err
+		}
+		postActions, err := expandAction(group.PostAction)
+		if err != nil {
+			return output, err
+		}
+
+		output = append(output, replicationrecoveryplans.RecoveryPlanGroup{
+			GroupType:                 replicationrecoveryplans.RecoveryPlanGroupTypeBoot,
+			ReplicationProtectedItems: &protectedItems,
+			StartGroupActions:         &preActions,
+			EndGroupActions:           &postActions,
+		})
+	}
+
+	return output, nil
+}

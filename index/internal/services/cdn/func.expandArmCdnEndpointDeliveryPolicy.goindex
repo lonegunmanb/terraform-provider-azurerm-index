@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandArmCdnEndpointDeliveryPolicy(globalRulesRaw []interface{}, deliveryRulesRaw []interface{}) (*cdn.EndpointPropertiesUpdateParametersDeliveryPolicy, error) {
+	deliveryRules := make([]cdn.DeliveryRule, 0)
+	deliveryPolicy := cdn.EndpointPropertiesUpdateParametersDeliveryPolicy{
+		Description: utils.String(""),
+		Rules:       &deliveryRules,
+	}
+
+	if len(globalRulesRaw) > 0 && globalRulesRaw[0] != nil {
+		ruleRaw := globalRulesRaw[0].(map[string]interface{})
+		rule, err := expandArmCdnEndpointGlobalDeliveryRule(ruleRaw)
+		if err != nil {
+			return nil, err
+		}
+		deliveryRules = append(deliveryRules, *rule)
+	}
+
+	for _, ruleV := range deliveryRulesRaw {
+		ruleRaw := ruleV.(map[string]interface{})
+		rule, err := expandArmCdnEndpointDeliveryRule(ruleRaw)
+		if err != nil {
+			return nil, err
+		}
+		deliveryRules = append(deliveryRules, *rule)
+	}
+
+	return &deliveryPolicy, nil
+}

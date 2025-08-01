@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewayFrontendIPConfigurations(d *pluginsdk.ResourceData, gatewayID string) *[]applicationgateways.ApplicationGatewayFrontendIPConfiguration {
+	vs := d.Get("frontend_ip_configuration").([]interface{})
+	results := make([]applicationgateways.ApplicationGatewayFrontendIPConfiguration, 0)
+
+	for _, raw := range vs {
+		v := raw.(map[string]interface{})
+
+		properties := applicationgateways.ApplicationGatewayFrontendIPConfigurationPropertiesFormat{}
+
+		if val := v["subnet_id"].(string); val != "" {
+			properties.Subnet = &applicationgateways.SubResource{
+				Id: pointer.To(val),
+			}
+		}
+
+		if val := v["private_ip_address_allocation"].(string); val != "" {
+			properties.PrivateIPAllocationMethod = pointer.To(applicationgateways.IPAllocationMethod(val))
+		}
+
+		if val := v["private_ip_address"].(string); val != "" {
+			properties.PrivateIPAddress = pointer.To(val)
+		}
+
+		if val := v["public_ip_address_id"].(string); val != "" {
+			properties.PublicIPAddress = &applicationgateways.SubResource{
+				Id: pointer.To(val),
+			}
+		}
+
+		if val := v["private_link_configuration_name"].(string); val != "" {
+			privateLinkConfigurationID := fmt.Sprintf("%s/privateLinkConfigurations/%s", gatewayID, val)
+			properties.PrivateLinkConfiguration = &applicationgateways.SubResource{
+				Id: pointer.To(privateLinkConfigurationID),
+			}
+		}
+
+		name := v["name"].(string)
+		output := applicationgateways.ApplicationGatewayFrontendIPConfiguration{
+			Name:       pointer.To(name),
+			Properties: &properties,
+		}
+
+		results = append(results, output)
+	}
+
+	return &results
+}

@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel
+import (
+	"context"
+	"fmt"
+	"time"
+
+	alertruletemplates "github.com/Azure/azure-sdk-for-go/services/preview/securityinsight/mgmt/2021-09-01-preview/securityinsight" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2023-12-01-preview/alertrules"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (a AlertRuleThreatIntelligenceResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var metaModel AlertRuleThreatIntelligenceModel
+			if err := metadata.Decode(&metaModel); err != nil {
+				return fmt.Errorf("decoding %+v", err)
+			}
+
+			client := metadata.Client.Sentinel.AlertRulesClient
+
+			id, err := alertrules.ParseAlertRuleID(metadata.ResourceData.Id())
+			if err != nil {
+				return fmt.Errorf("parsing %+v", err)
+			}
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("reading %+v", err)
+			}
+			if err := assertAlertRuleKind(resp.Model, alertrules.AlertRuleKindThreatIntelligence); err != nil {
+				return fmt.Errorf("asserting alert rule of %q: %+v", id, err)
+			}
+
+			rule := resp.Model.(alertrules.ThreatIntelligenceAlertRule)
+
+			if metadata.ResourceData.HasChange("enabled") {
+				rule.Properties.Enabled = metaModel.Enabled
+			}
+			if metadata.ResourceData.HasChange("template_name") {
+				rule.Properties.AlertRuleTemplateName = metaModel.TemplateName
+			}
+
+			param := alertrules.ThreatIntelligenceAlertRule{
+				Properties: &alertrules.ThreatIntelligenceAlertRuleProperties{
+					Enabled:               rule.Properties.Enabled,
+					AlertRuleTemplateName: rule.Properties.AlertRuleTemplateName,
+					Severity:              rule.Properties.Severity,
+					DisplayName:           rule.Properties.DisplayName,
+					Description:           rule.Properties.Description,
+					Tactics:               rule.Properties.Tactics,
+				},
+			}
+
+			if _, err := client.CreateOrUpdate(ctx, *id, param); err != nil {
+				return fmt.Errorf("updating %q: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

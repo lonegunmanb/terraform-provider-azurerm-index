@@ -1,0 +1,188 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2021-11-01/eventhubs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2022-01-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceEventHub() *pluginsdk.Resource {
+	r := &pluginsdk.Resource{
+		Create: resourceEventHubCreate,
+		Read:   resourceEventHubRead,
+		Update: resourceEventHubUpdate,
+		Delete: resourceEventHubDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := eventhubs.ParseEventhubID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.ValidateEventHubName(),
+			},
+
+			"namespace_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: namespaces.ValidateNamespaceID,
+			},
+
+			"partition_count": {
+				Type:         pluginsdk.TypeInt,
+				Required:     true,
+				ValidateFunc: validate.ValidateEventHubPartitionCount,
+			},
+
+			"message_retention": {
+				Type:         pluginsdk.TypeInt,
+				Required:     true,
+				ValidateFunc: validate.ValidateEventHubMessageRetentionCount,
+			},
+
+			"capture_description": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"enabled": {
+							Type:     pluginsdk.TypeBool,
+							Required: true,
+						},
+						"skip_empty_archives": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+						"encoding": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(eventhubs.EncodingCaptureDescriptionAvro),
+								string(eventhubs.EncodingCaptureDescriptionAvroDeflate),
+							}, false),
+						},
+						"interval_in_seconds": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Default:      300,
+							ValidateFunc: validation.IntBetween(60, 900),
+						},
+						"size_limit_in_bytes": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							Default:      314572800,
+							ValidateFunc: validation.IntBetween(10485760, 524288000),
+						},
+						"destination": {
+							Type:     pluginsdk.TypeList,
+							Required: true,
+							MaxItems: 1,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											"EventHubArchive.AzureBlockBlob",
+											// TODO: support `EventHubArchive.AzureDataLake` once supported in the Swagger / SDK
+											// https://github.com/Azure/azure-rest-api-specs/issues/2255
+											// BlobContainerName & StorageAccountID can then become Optional
+										}, false),
+									},
+									"archive_name_format": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validate.ValidateEventHubArchiveNameFormat,
+									},
+									"blob_container_name": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+									},
+									"storage_account_id": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: commonids.ValidateStorageAccountID,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"status": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(eventhubs.EntityStatusActive),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(eventhubs.EntityStatusActive),
+					string(eventhubs.EntityStatusDisabled),
+					string(eventhubs.EntityStatusSendDisabled),
+				}, false),
+			},
+
+			"partition_ids": {
+				Type:     pluginsdk.TypeSet,
+				Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+				Set:      pluginsdk.HashString,
+				Computed: true,
+			},
+		},
+	}
+
+	if !features.FivePointOh() {
+		r.Schema["namespace_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ExactlyOneOf: []string{"namespace_id", "namespace_name"},
+			ValidateFunc: namespaces.ValidateNamespaceID,
+		}
+
+		r.Schema["namespace_name"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: validate.ValidateEventHubNamespaceName(),
+			ExactlyOneOf: []string{"namespace_id", "namespace_name"},
+			Deprecated:   "`namespace_name` has been deprecated in favour of `namespace_id` and will be removed in v5.0 of the AzureRM Provider",
+		}
+
+		r.Schema["resource_group_name"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ExactlyOneOf: []string{"namespace_id", "resource_group_name"},
+			ValidateFunc: resourcegroups.ValidateName,
+			Deprecated:   "`resource_group_name` has been deprecated in favour of `namespace_id` and will be removed in v5.0 of the AzureRM Provider",
+		}
+	}
+
+	return r
+}

@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2022-08-08/automationaccount"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2023-01-01/actiongroupsapis"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenMonitorActionGroupWebHookReceiver(receivers *[]actiongroupsapis.WebhookReceiver) []interface{} {
+	result := make([]interface{}, 0)
+	if receivers != nil {
+		for _, receiver := range *receivers {
+			var useCommonAlert bool
+			if receiver.UseCommonAlertSchema != nil {
+				useCommonAlert = *receiver.UseCommonAlertSchema
+			}
+
+			result = append(result, map[string]interface{}{
+				"name":                    receiver.Name,
+				"service_uri":             receiver.ServiceUri,
+				"use_common_alert_schema": useCommonAlert,
+				"aad_auth":                flattenMonitorActionGroupSecureWebHookReceiver(receiver),
+			})
+		}
+	}
+	return result
+}

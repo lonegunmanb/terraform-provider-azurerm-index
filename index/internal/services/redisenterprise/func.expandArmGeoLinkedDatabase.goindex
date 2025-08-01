@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redisenterprise
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2024-06-01-preview/databases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2024-06-01-preview/redisenterprise"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redisenterprise/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandArmGeoLinkedDatabase(inputId []interface{}, parentDBId string, inputGeoName string) (*databases.DatabasePropertiesGeoReplication, error) {
+	idList := make([]databases.LinkedDatabase, 0)
+	if len(inputId) == 0 {
+		return nil, nil
+	}
+	isParentDbIncluded := false
+
+	for _, id := range inputId {
+		if id.(string) == parentDBId {
+			isParentDbIncluded = true
+		}
+		idList = append(idList, databases.LinkedDatabase{
+			Id: utils.String(id.(string)),
+		})
+	}
+	if isParentDbIncluded {
+		return &databases.DatabasePropertiesGeoReplication{
+			LinkedDatabases: &idList,
+			GroupNickname:   utils.String(inputGeoName),
+		}, nil
+	}
+
+	return nil, fmt.Errorf("linked database list must include database ID: %s", parentDBId)
+}

@@ -1,0 +1,174 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/applications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceHDInsightHadoopCluster() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceHDInsightHadoopClusterCreate,
+		Read:   resourceHDInsightHadoopClusterRead,
+		Update: hdinsightClusterUpdate("Hadoop", resourceHDInsightHadoopClusterRead),
+		Delete: hdinsightClusterDelete("Hadoop"),
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := commonids.ParseHDInsightClusterID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(60 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": SchemaHDInsightName(),
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"location": commonschema.Location(),
+
+			"cluster_version": SchemaHDInsightClusterVersion(),
+
+			"tier": SchemaHDInsightTier(),
+
+			"tls_min_version": SchemaHDInsightTls(),
+
+			"component_version": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"hadoop": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ForceNew: true,
+						},
+					},
+				},
+			},
+
+			"disk_encryption": SchemaHDInsightsDiskEncryptionProperties(),
+
+			"compute_isolation": SchemaHDInsightsComputeIsolation(),
+
+			"gateway": SchemaHDInsightsGateway(),
+
+			"metastores": SchemaHDInsightsExternalMetastores(),
+
+			"network": SchemaHDInsightsNetwork(),
+
+			"security_profile": SchemaHDInsightsSecurityProfile(),
+
+			"storage_account": SchemaHDInsightsStorageAccounts(),
+
+			"storage_account_gen2": SchemaHDInsightsGen2StorageAccounts(),
+
+			"private_link_configuration": SchemaHDInsightPrivateLinkConfigurations(),
+
+			"roles": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"head_node": SchemaHDInsightNodeDefinition("roles.0.head_node", hdInsightHadoopClusterHeadNodeDefinition, true),
+
+						"worker_node": SchemaHDInsightNodeDefinition("roles.0.worker_node", hdInsightHadoopClusterWorkerNodeDefinition, true),
+
+						"zookeeper_node": SchemaHDInsightNodeDefinition("roles.0.zookeeper_node", hdInsightHadoopClusterZookeeperNodeDefinition, true),
+
+						"edge_node": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MaxItems: 1,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"target_instance_count": {
+										Type:         pluginsdk.TypeInt,
+										Required:     true,
+										ValidateFunc: validation.IntBetween(1, 25),
+									},
+
+									"vm_size": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringInSlice(validate.NodeDefinitionVMSize, false),
+									},
+
+									"install_script_action": {
+										Type:     pluginsdk.TypeList,
+										Required: true,
+										MinItems: 1,
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"name": {
+													Type:         pluginsdk.TypeString,
+													Required:     true,
+													ValidateFunc: validation.StringIsNotEmpty,
+												},
+												"uri": {
+													Type:         pluginsdk.TypeString,
+													Required:     true,
+													ValidateFunc: validation.StringIsNotEmpty,
+												},
+												"parameters": {
+													Type:         pluginsdk.TypeString,
+													Optional:     true,
+													ValidateFunc: validation.StringIsNotEmpty,
+												},
+											},
+										},
+									},
+
+									"https_endpoints": SchemaHDInsightsHttpsEndpoints(),
+
+									"uninstall_script_actions": SchemaHDInsightsScriptActions(),
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"tags": commonschema.Tags(),
+
+			"https_endpoint": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"ssh_endpoint": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"monitor": SchemaHDInsightsMonitor(),
+
+			"extension": SchemaHDInsightsExtension(),
+		},
+	}
+}

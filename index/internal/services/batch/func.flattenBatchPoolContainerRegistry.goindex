@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenBatchPoolContainerRegistry(d *pluginsdk.ResourceData, armContainerRegistry *pool.ContainerRegistry) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	if armContainerRegistry == nil {
+		return result
+	}
+
+	if registryServer := armContainerRegistry.RegistryServer; registryServer != nil {
+		result["registry_server"] = *registryServer
+	}
+
+	if userName := armContainerRegistry.Username; userName != nil {
+		result["user_name"] = *userName
+		// Locate the password only if user_name is defined
+		result["password"] = findBatchPoolContainerRegistryPassword(d, result["registry_server"].(string), result["user_name"].(string))
+	}
+
+	if identity := armContainerRegistry.IdentityReference; identity != nil {
+		if identity.ResourceId != nil {
+			result["user_assigned_identity_id"] = *identity.ResourceId
+		}
+	}
+
+	return result
+}

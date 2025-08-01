@@ -1,0 +1,154 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/applicationgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandKubernetesAddOns(d *pluginsdk.ResourceData, input map[string]interface{}, env environments.Environment) (*map[string]managedclusters.ManagedClusterAddonProfile, error) {
+	disabled := managedclusters.ManagedClusterAddonProfile{
+		Enabled: false,
+	}
+
+	addonProfiles := map[string]managedclusters.ManagedClusterAddonProfile{}
+
+	confidentialComputing := input["confidential_computing"].([]interface{})
+	if len(confidentialComputing) > 0 && confidentialComputing[0] != nil {
+		value := confidentialComputing[0].(map[string]interface{})
+		config := make(map[string]string)
+		quoteHelperEnabled := "false"
+		if value["sgx_quote_helper_enabled"].(bool) {
+			quoteHelperEnabled = "true"
+		}
+		config["ACCSGXQuoteHelperEnabled"] = quoteHelperEnabled
+		addonProfiles[confidentialComputingKey] = managedclusters.ManagedClusterAddonProfile{
+			Enabled: true,
+			Config:  &config,
+		}
+	} else if len(confidentialComputing) == 0 && d.HasChange("confidential_computing") {
+		addonProfiles[confidentialComputingKey] = disabled
+	}
+
+	if d.HasChange("http_application_routing_enabled") {
+		addonProfiles[httpApplicationRoutingKey] = managedclusters.ManagedClusterAddonProfile{
+			Enabled: input["http_application_routing_enabled"].(bool),
+		}
+	}
+
+	omsAgent := input["oms_agent"].([]interface{})
+	if len(omsAgent) > 0 && omsAgent[0] != nil {
+		value := omsAgent[0].(map[string]interface{})
+		config := make(map[string]string)
+
+		if workspaceID, ok := value["log_analytics_workspace_id"]; ok && workspaceID != "" {
+			lawid, err := workspaces.ParseWorkspaceIDInsensitively(workspaceID.(string))
+			if err != nil {
+				return nil, fmt.Errorf("parsing Log Analytics Workspace ID: %+v", err)
+			}
+			config["logAnalyticsWorkspaceResourceID"] = lawid.ID()
+		}
+
+		if useAADAuth, ok := value["msi_auth_for_monitoring_enabled"].(bool); ok {
+			config["useAADAuth"] = fmt.Sprintf("%t", useAADAuth)
+		}
+
+		addonProfiles[omsAgentKey] = managedclusters.ManagedClusterAddonProfile{
+			Enabled: true,
+			Config:  &config,
+		}
+	} else if len(omsAgent) == 0 && d.HasChange("oms_agent") {
+		addonProfiles[omsAgentKey] = disabled
+	}
+
+	aciConnector := input["aci_connector_linux"].([]interface{})
+	if len(aciConnector) > 0 && aciConnector[0] != nil {
+		value := aciConnector[0].(map[string]interface{})
+		config := make(map[string]string)
+
+		if subnetName, ok := value["subnet_name"]; ok && subnetName != "" {
+			config["SubnetName"] = subnetName.(string)
+		}
+
+		addonProfiles[aciConnectorKey] = managedclusters.ManagedClusterAddonProfile{
+			Enabled: true,
+			Config:  &config,
+		}
+	} else if len(aciConnector) == 0 && d.HasChange("aci_connector_linux") {
+		addonProfiles[aciConnectorKey] = disabled
+	}
+
+	if ok := d.HasChange("azure_policy_enabled"); ok {
+		v := input["azure_policy_enabled"].(bool)
+		props := managedclusters.ManagedClusterAddonProfile{
+			Enabled: v,
+			Config: pointer.To(map[string]string{
+				"version": "v2",
+			}),
+		}
+		addonProfiles[azurePolicyKey] = props
+	}
+
+	ingressApplicationGateway := input["ingress_application_gateway"].([]interface{})
+	if len(ingressApplicationGateway) > 0 && ingressApplicationGateway[0] != nil {
+		value := ingressApplicationGateway[0].(map[string]interface{})
+		config := make(map[string]string)
+
+		if gatewayId, ok := value["gateway_id"]; ok && gatewayId != "" {
+			config["applicationGatewayId"] = gatewayId.(string)
+		}
+
+		if gatewayName, ok := value["gateway_name"]; ok && gatewayName != "" {
+			config["applicationGatewayName"] = gatewayName.(string)
+		}
+
+		if subnetCIDR, ok := value["subnet_cidr"]; ok && subnetCIDR != "" {
+			config["subnetCIDR"] = subnetCIDR.(string)
+		}
+
+		if subnetId, ok := value["subnet_id"]; ok && subnetId != "" {
+			config["subnetId"] = subnetId.(string)
+		}
+
+		addonProfiles[ingressApplicationGatewayKey] = managedclusters.ManagedClusterAddonProfile{
+			Enabled: true,
+			Config:  &config,
+		}
+	} else if len(ingressApplicationGateway) == 0 && d.HasChange("ingress_application_gateway") {
+		addonProfiles[ingressApplicationGatewayKey] = disabled
+	}
+
+	if ok := d.HasChange("open_service_mesh_enabled"); ok {
+		addonProfiles[openServiceMeshKey] = managedclusters.ManagedClusterAddonProfile{
+			Enabled: input["open_service_mesh_enabled"].(bool),
+			Config:  nil,
+		}
+	}
+
+	azureKeyVaultSecretsProvider := input["key_vault_secrets_provider"].([]interface{})
+	if len(azureKeyVaultSecretsProvider) > 0 && azureKeyVaultSecretsProvider[0] != nil {
+		value := azureKeyVaultSecretsProvider[0].(map[string]interface{})
+		config := make(map[string]string)
+
+		enableSecretRotation := fmt.Sprintf("%t", value["secret_rotation_enabled"].(bool))
+		config["enableSecretRotation"] = enableSecretRotation
+		config["rotationPollInterval"] = value["secret_rotation_interval"].(string)
+
+		addonProfiles[azureKeyvaultSecretsProviderKey] = managedclusters.ManagedClusterAddonProfile{
+			Enabled: true,
+			Config:  &config,
+		}
+	} else if len(azureKeyVaultSecretsProvider) == 0 && d.HasChange("key_vault_secrets_provider") {
+		addonProfiles[azureKeyvaultSecretsProviderKey] = disabled
+	}
+
+	return filterUnsupportedKubernetesAddOns(addonProfiles, env)
+}

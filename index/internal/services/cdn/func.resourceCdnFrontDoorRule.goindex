@@ -1,0 +1,607 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/rulesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-09-01/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	cdnFrontDoorRuleActions "github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdoorruleactions"
+	cdnFrontDoorRuleConditions "github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/frontdoorruleconditions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceCdnFrontDoorRule() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceCdnFrontDoorRuleCreate,
+		Read:   resourceCdnFrontDoorRuleRead,
+		Update: resourceCdnFrontDoorRuleUpdate,
+		Delete: resourceCdnFrontDoorRuleDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := rules.ParseRuleID(id)
+			return err
+		}),
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.CdnFrontDoorRuleName,
+			},
+
+			"cdn_frontdoor_rule_set_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.FrontDoorRuleSetID,
+			},
+
+			"behavior_on_match": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Default:  string(rules.MatchProcessingBehaviorContinue),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(rules.MatchProcessingBehaviorContinue),
+					string(rules.MatchProcessingBehaviorStop),
+				}, false),
+			},
+
+			"order": {
+				Type:         pluginsdk.TypeInt,
+				Required:     true,
+				ValidateFunc: validation.IntAtLeast(0),
+			},
+
+			"actions": {
+				Type:     pluginsdk.TypeList,
+				Required: true,
+				MaxItems: 1,
+
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"url_redirect_action": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MaxItems: 1,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"redirect_type": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(rules.RedirectTypeMoved),
+											string(rules.RedirectTypeFound),
+											string(rules.RedirectTypeTemporaryRedirect),
+											string(rules.RedirectTypePermanentRedirect),
+										}, false),
+									},
+
+									"redirect_protocol": {
+										Type:     pluginsdk.TypeString,
+										Optional: true,
+										Default:  string(rules.DestinationProtocolMatchRequest),
+										ValidateFunc: validation.StringInSlice([]string{
+											string(rules.DestinationProtocolMatchRequest),
+											string(rules.DestinationProtocolHTTP),
+											string(rules.DestinationProtocolHTTPS),
+										}, false),
+									},
+
+									// NOTE: it is valid for the destination path to be an empty string,
+									// Leave blank to preserve the incoming path. Issue #18249
+									"destination_path": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										Default:      "",
+										ValidateFunc: validate.CdnFrontDoorUrlRedirectActionDestinationPath,
+									},
+
+									// NOTE: it is valid for the destination hostname to be an empty string.
+									// Leave blank to preserve the incoming host. Issue #18249
+									"destination_hostname": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringLenBetween(0, 2048),
+									},
+
+									// NOTE: it is valid for the query string to be an empty string.
+									// Leave blank to preserve the incoming query string. Issue #18249 & #19682
+									"query_string": {
+										Type:     pluginsdk.TypeString,
+										Optional: true,
+										Default:  "",
+										// Update validation logic to match RP. Issue #19097
+										ValidateFunc: validate.CdnFrontDoorUrlRedirectActionQueryString,
+									},
+
+									// NOTE: it is valid for the destination fragment to be an empty string.
+									// Leave blank to preserve the incoming fragment. Issue #18249
+									"destination_fragment": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										Default:      "",
+										ValidateFunc: validation.StringLenBetween(0, 1024),
+									},
+								},
+							},
+						},
+
+						"url_rewrite_action": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MaxItems: 1,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"source_pattern": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+
+									"destination": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+
+									"preserve_unmatched_path": {
+										Type:     pluginsdk.TypeBool,
+										Optional: true,
+										Default:  false,
+									},
+								},
+							},
+						},
+
+						"request_header_action": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"header_action": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(rules.HeaderActionAppend),
+											string(rules.HeaderActionOverwrite),
+											string(rules.HeaderActionDelete),
+										}, false),
+									},
+
+									"header_name": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+
+									"value": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+								},
+							},
+						},
+
+						"response_header_action": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"header_action": {
+										Type:     pluginsdk.TypeString,
+										Required: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(rules.HeaderActionAppend),
+											string(rules.HeaderActionOverwrite),
+											string(rules.HeaderActionDelete),
+										}, false),
+									},
+
+									"header_name": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+
+									"value": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+								},
+							},
+						},
+
+						"route_configuration_override_action": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MaxItems: 1,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"cdn_frontdoor_origin_group_id": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: validate.FrontDoorOriginGroupID,
+									},
+
+									// Removed Default value for issue #18889
+									"forwarding_protocol": {
+										Type:     pluginsdk.TypeString,
+										Optional: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(rules.ForwardingProtocolHTTPOnly),
+											string(rules.ForwardingProtocolHTTPSOnly),
+											string(rules.ForwardingProtocolMatchRequest),
+										}, false),
+									},
+
+									// Removed Default value for issue #19008
+									"query_string_caching_behavior": {
+										Type:     pluginsdk.TypeString,
+										Optional: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(rules.RuleQueryStringCachingBehaviorIgnoreQueryString),
+											string(rules.RuleQueryStringCachingBehaviorUseQueryString),
+											string(rules.RuleQueryStringCachingBehaviorIgnoreSpecifiedQueryStrings),
+											string(rules.RuleQueryStringCachingBehaviorIncludeSpecifiedQueryStrings),
+										}, false),
+									},
+
+									// NOTE: CSV implemented as a list, code already written for the expanded and flatten to CSV
+									// not valid when IncludeAll or ExcludeAll behavior is defined
+									"query_string_parameters": {
+										Type:     pluginsdk.TypeList,
+										Optional: true,
+										MaxItems: 100,
+
+										Elem: &pluginsdk.Schema{
+											Type: pluginsdk.TypeString,
+										},
+									},
+
+									"compression_enabled": {
+										Type:     pluginsdk.TypeBool,
+										Optional: true,
+									},
+
+									// Exposed Disabled for issue #19008
+									"cache_behavior": {
+										Type:     pluginsdk.TypeString,
+										Optional: true,
+										ValidateFunc: validation.StringInSlice([]string{
+											string(rules.RuleCacheBehaviorHonorOrigin),
+											string(rules.RuleCacheBehaviorOverrideAlways),
+											string(rules.RuleCacheBehaviorOverrideIfOriginMissing),
+											string(rules.RuleIsCompressionEnabledDisabled),
+										}, false),
+									},
+
+									// Made Optional for issue #19008
+									"cache_duration": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: validate.CdnFrontDoorCacheDuration,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"conditions": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"remote_address_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperatorRemoteAddress(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValues(),
+								},
+							},
+						},
+
+						"request_method_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperatorEqualOnly(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorRequestMethodMatchValues(),
+								},
+							},
+						},
+
+						"query_string_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValues(),
+									"transforms":       schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"post_args_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									// In the API this is called selector
+									"post_args_name": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValues(),
+									"transforms":       schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"request_uri_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValues(),
+									"transforms":       schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"request_header_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									// In the API this is called selector
+									// match_values are invalid if operator is 'Any'
+									"header_name": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValues(),
+									"transforms":       schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"request_body_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValuesRequired(),
+									"transforms":       schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"request_scheme_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperatorEqualOnly(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorProtocolMatchValues(),
+								},
+							},
+						},
+
+						"url_path_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorUrlPathConditionMatchValues(),
+									"transforms":       schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"url_file_extension_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValuesRequired(),
+									"transforms":       schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"url_filename_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									// making optional for issue #23504
+									"match_values": schemaCdnFrontDoorMatchValues(),
+									"transforms":   schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"http_version_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperatorEqualOnly(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorHttpVersionMatchValues(),
+								},
+							},
+						},
+
+						"cookies_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									// In the API this is called selector
+									"cookie_name": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: validation.StringIsNotEmpty,
+									},
+
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValues(),
+									"transforms":       schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"is_device_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperatorEqualOnly(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorIsDeviceMatchValues(),
+								},
+							},
+						},
+
+						"socket_address_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperatorSocketAddress(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValues(),
+								},
+							},
+						},
+
+						"client_port_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValues(),
+								},
+							},
+						},
+
+						"server_port_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorServerPortMatchValues(),
+								},
+							},
+						},
+
+						"host_name_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperator(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorMatchValues(),
+									"transforms":       schemaCdnFrontDoorRuleTransforms(),
+								},
+							},
+						},
+
+						"ssl_protocol_condition": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"operator":         schemaCdnFrontDoorOperatorEqualOnly(),
+									"negate_condition": schemaCdnFrontDoorNegateCondition(),
+									"match_values":     schemaCdnFrontDoorSslProtocolMatchValues(),
+								},
+							},
+						},
+					},
+				},
+			},
+
+			"cdn_frontdoor_rule_set_name": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+		},
+	}
+}

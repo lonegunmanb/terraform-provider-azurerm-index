@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apimanagementservice"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandApiManagementCustomDomains(input *pluginsdk.ResourceData) *[]apimanagementservice.HostnameConfiguration {
+	results := make([]apimanagementservice.HostnameConfiguration, 0)
+
+	if managementRawVal, ok := input.GetOk("management"); ok {
+		vs := managementRawVal.([]interface{})
+		for _, rawVal := range vs {
+			v := rawVal.(map[string]interface{})
+			output := expandApiManagementCommonHostnameConfiguration(v, apimanagementservice.HostnameTypeManagement)
+			results = append(results, output)
+		}
+	}
+	if portalRawVal, ok := input.GetOk("portal"); ok {
+		vs := portalRawVal.([]interface{})
+		for _, rawVal := range vs {
+			v := rawVal.(map[string]interface{})
+			output := expandApiManagementCommonHostnameConfiguration(v, apimanagementservice.HostnameTypePortal)
+			results = append(results, output)
+		}
+	}
+	if developerPortalRawVal, ok := input.GetOk("developer_portal"); ok {
+		vs := developerPortalRawVal.([]interface{})
+		for _, rawVal := range vs {
+			v := rawVal.(map[string]interface{})
+			output := expandApiManagementCommonHostnameConfiguration(v, apimanagementservice.HostnameTypeDeveloperPortal)
+			results = append(results, output)
+		}
+	}
+
+	if gatewayRawVal, ok := input.GetOk("gateway"); ok {
+		vs := gatewayRawVal.([]interface{})
+		for _, rawVal := range vs {
+			v := rawVal.(map[string]interface{})
+			output := expandApiManagementCommonHostnameConfiguration(v, apimanagementservice.HostnameTypeProxy)
+			if value, ok := v["default_ssl_binding"]; ok {
+				output.DefaultSslBinding = pointer.To(value.(bool))
+			}
+			results = append(results, output)
+		}
+	}
+
+	if scmRawVal, ok := input.GetOk("scm"); ok {
+		vs := scmRawVal.([]interface{})
+		for _, rawVal := range vs {
+			v := rawVal.(map[string]interface{})
+			output := expandApiManagementCommonHostnameConfiguration(v, apimanagementservice.HostnameTypeScm)
+			results = append(results, output)
+		}
+	}
+	return &results
+}

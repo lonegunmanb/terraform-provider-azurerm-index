@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/elasticsan
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/elasticsan/2023-01-01/volumegroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/elasticsan/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ElasticSANVolumeGroupResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ElasticSan.VolumeGroups
+			schema := ElasticSANVolumeGroupResourceModel{}
+
+			id, err := volumegroups.ParseVolumeGroupID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			elasticSanId := volumegroups.NewElasticSanID(id.SubscriptionId, id.ResourceGroupName, id.ElasticSanName)
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(*id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				schema.SanId = elasticSanId.ID()
+				schema.Name = id.VolumeGroupName
+
+				flattenedIdentity, err := identity.FlattenSystemOrUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return fmt.Errorf("flattening identity: %+v", err)
+				}
+				schema.Identity = *flattenedIdentity
+
+				if model.Properties != nil {
+					schema.EncryptionType = string(pointer.From(model.Properties.Encryption))
+					schema.NetworkRule = FlattenVolumeGroupNetworkRules(model.Properties.NetworkAcls)
+
+					if model.Properties.ProtocolType != nil {
+						schema.ProtocolType = string(pointer.From(model.Properties.ProtocolType))
+					}
+
+					schema.Encryption, err = FlattenVolumeGroupEncryption(model.Properties.EncryptionProperties)
+					if err != nil {
+						return fmt.Errorf("flattening encryption: %+v", err)
+					}
+				}
+			}
+
+			return metadata.Encode(&schema)
+		},
+	}
+}

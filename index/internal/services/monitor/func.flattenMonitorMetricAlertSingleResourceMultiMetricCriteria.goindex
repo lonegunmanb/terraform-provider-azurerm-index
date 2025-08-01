@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	webtests "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2022-06-15/webtestsapis"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2018-03-01/metricalerts"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenMonitorMetricAlertSingleResourceMultiMetricCriteria(input *[]metricalerts.MetricCriteria) []interface{} {
+	if input == nil || len(*input) == 0 {
+		return nil
+	}
+	criteria := (*input)[0]
+	metricName := criteria.MetricName
+	metricNamespace := criteria.MetricNamespace
+	timeAggregation := criteria.TimeAggregation
+
+	dimResult := make([]map[string]interface{}, 0)
+	if criteria.Dimensions != nil {
+		for _, dimension := range *criteria.Dimensions {
+			dVal := make(map[string]interface{})
+			dVal["name"] = dimension.Name
+			dVal["operator"] = dimension.Operator
+			dVal["values"] = dimension.Values
+			dimResult = append(dimResult, dVal)
+		}
+	}
+
+	operator := string(criteria.Operator)
+	threshold := criteria.Threshold
+
+	var skipMetricValidation bool
+	if criteria.SkipMetricValidation != nil {
+		skipMetricValidation = *criteria.SkipMetricValidation
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"metric_namespace":       metricNamespace,
+			"metric_name":            metricName,
+			"aggregation":            timeAggregation,
+			"dimension":              dimResult,
+			"operator":               operator,
+			"threshold":              threshold,
+			"skip_metric_validation": skipMetricValidation,
+		},
+	}
+}

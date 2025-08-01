@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2023-05-01/daprcomponents"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/containerapps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-03-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func FlattenContainerAppIngress(input *containerapps.Ingress, appName string) []Ingress {
+	if input == nil {
+		return []Ingress{}
+	}
+
+	ingress := *input
+	result := Ingress{
+		AllowInsecure:          pointer.From(ingress.AllowInsecure),
+		CustomDomains:          flattenContainerAppIngressCustomDomain(ingress.CustomDomains),
+		IsExternal:             pointer.From(ingress.External),
+		FQDN:                   pointer.From(ingress.Fqdn),
+		TargetPort:             pointer.From(ingress.TargetPort),
+		ExposedPort:            pointer.From(ingress.ExposedPort),
+		TrafficWeights:         flattenContainerAppIngressTraffic(ingress.Traffic, appName),
+		IpSecurityRestrictions: flattenContainerAppIngressIpSecurityRestrictions(ingress.IPSecurityRestrictions),
+	}
+
+	if ingress.Transport != nil {
+		result.Transport = strings.ToLower(string(*ingress.Transport))
+	}
+
+	if ingress.ClientCertificateMode != nil {
+		result.ClientCertificateMode = string(*ingress.ClientCertificateMode)
+	}
+
+	return []Ingress{result}
+}

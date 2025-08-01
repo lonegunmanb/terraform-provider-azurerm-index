@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachinescalesetrollingupgrades"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachinescalesetvms"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/client"
+)
+func (metadata virtualMachineScaleSetUpdateMetaData) performUpdate(ctx context.Context, update virtualmachinescalesets.VirtualMachineScaleSetUpdate) error {
+	if metadata.AutomaticOSUpgradeIsEnabled {
+		// Virtual Machine Scale Sets with Automatic OS Upgrade enabled must have all VM instances upgraded to same
+		// Platform Image. Upgrade all VM instances to latest Virtual Machine Scale Set model while property
+		// 'upgradePolicy.automaticOSUpgradePolicy.enableAutomaticOSUpgrade' is false and then update property
+		// 'upgradePolicy.automaticOSUpgradePolicy.enableAutomaticOSUpgrade' to true
+
+		update.Properties.UpgradePolicy.AutomaticOSUpgradePolicy.EnableAutomaticOSUpgrade = pointer.To(false)
+	}
+
+	if err := metadata.updateVmss(ctx, update); err != nil {
+		return err
+	}
+
+	// if we update the SKU, we also need to subsequently roll the instances using the `UpdateInstances` API
+	if metadata.UpdateInstances {
+		userWantsToRollInstances := metadata.CanRollInstancesWhenRequired
+		upgradeMode := metadata.Existing.Properties.UpgradePolicy.Mode
+
+		if userWantsToRollInstances {
+			// If the updated image version is not "latest" and upgrade mode is automatic then azure will roll the instances automatically.
+			// Calling upgradeInstancesForAutomaticUpgradePolicy() in this case will cause an error.
+			if *upgradeMode == virtualmachinescalesets.UpgradeModeAutomatic && isUsingLatestImage(update) {
+				if err := metadata.upgradeInstancesForAutomaticUpgradePolicy(ctx); err != nil {
+					return err
+				}
+			}
+
+			if *upgradeMode == virtualmachinescalesets.UpgradeModeManual {
+				if err := metadata.upgradeInstancesForManualUpgradePolicy(ctx); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if metadata.AutomaticOSUpgradeIsEnabled {
+		// Virtual Machine Scale Sets with Automatic OS Upgrade enabled must have all VM instances upgraded to same
+		// Platform Image. Upgrade all VM instances to latest Virtual Machine Scale Set model while property
+		// 'upgradePolicy.automaticOSUpgradePolicy.enableAutomaticOSUpgrade' is false and then update property
+		// 'upgradePolicy.automaticOSUpgradePolicy.enableAutomaticOSUpgrade' to true
+
+		// finally set this to true
+		update.Properties.UpgradePolicy.AutomaticOSUpgradePolicy.EnableAutomaticOSUpgrade = pointer.To(true)
+
+		// then update the VM
+		if err := metadata.updateVmss(ctx, update); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

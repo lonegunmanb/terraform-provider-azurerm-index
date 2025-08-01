@@ -1,0 +1,223 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceAppService() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceAppServiceCreate,
+		Read:   resourceAppServiceRead,
+		Update: resourceAppServiceUpdate,
+		Delete: resourceAppServiceDelete,
+
+		DeprecationMessage: "The `azurerm_app_service` resource has been superseded by the `azurerm_linux_web_app` and `azurerm_windows_web_app` resources. Whilst this resource will continue to be available in the 2.x and 3.x releases it is feature-frozen for compatibility purposes, will no longer receive any updates and will be removed in a future major release of the Azure Provider.",
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := parse.AppServiceID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.AppServiceName,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"location": commonschema.Location(),
+
+			"app_service_plan_id": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+			},
+
+			"app_settings": {
+				Type:     pluginsdk.TypeMap,
+				Optional: true,
+				Computed: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"auth_settings": schemaAppServiceAuthSettings(),
+
+			"backup": schemaAppServiceBackup(),
+
+			"client_affinity_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"client_cert_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"client_cert_mode": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(web.ClientCertModeOptional),
+					string(web.ClientCertModeRequired),
+					string(web.ClientCertModeOptionalInteractiveUser),
+				}, false),
+			},
+
+			"connection_string": {
+				Type:     pluginsdk.TypeSet,
+				Optional: true,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+						},
+
+						"type": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(web.ConnectionStringTypeAPIHub),
+								string(web.ConnectionStringTypeCustom),
+								string(web.ConnectionStringTypeDocDb),
+								string(web.ConnectionStringTypeEventHub),
+								string(web.ConnectionStringTypeMySQL),
+								string(web.ConnectionStringTypeNotificationHub),
+								string(web.ConnectionStringTypePostgreSQL),
+								string(web.ConnectionStringTypeRedisCache),
+								string(web.ConnectionStringTypeServiceBus),
+								string(web.ConnectionStringTypeSQLAzure),
+								string(web.ConnectionStringTypeSQLServer),
+							}, true),
+							DiffSuppressFunc: suppress.CaseDifference,
+						},
+
+						"value": {
+							Type:      pluginsdk.TypeString,
+							Required:  true,
+							Sensitive: true,
+						},
+					},
+				},
+			},
+
+			"enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"identity": commonschema.SystemAssignedUserAssignedIdentityOptional(),
+
+			"https_only": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
+			"key_vault_reference_identity_id": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: commonids.ValidateUserAssignedIdentityID,
+			},
+
+			"logs": schemaAppServiceLogsConfig(),
+
+			"site_config": schemaAppServiceSiteConfig(),
+
+			"storage_account": schemaAppServiceStorageAccounts(),
+
+			"source_control": schemaAppServiceSiteSourceControl(),
+
+			"tags": tags.Schema(),
+
+			"site_credential": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"username": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"password": {
+							Type:      pluginsdk.TypeString,
+							Computed:  true,
+							Sensitive: true,
+						},
+					},
+				},
+			},
+
+			"custom_domain_verification_id": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"default_site_hostname": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"outbound_ip_addresses": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"outbound_ip_address_list": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"possible_outbound_ip_addresses": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"possible_outbound_ip_address_list": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+		},
+	}
+}

@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumesreplication"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenNetAppVolumeExportPolicyRule(input *volumes.VolumePropertiesExportPolicy) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil || input.Rules == nil {
+		return results
+	}
+
+	for _, item := range *input.Rules {
+		ruleIndex := int64(0)
+		if v := item.RuleIndex; v != nil {
+			ruleIndex = *v
+		}
+		allowedClients := []string{}
+		if v := item.AllowedClients; v != nil {
+			allowedClients = strings.Split(*v, ",")
+		}
+
+		protocolsEnabled := []string{}
+		if pointer.From(item.Cifs) {
+			protocolsEnabled = append(protocolsEnabled, "CIFS")
+		}
+		if pointer.From(item.Nfsv3) {
+			protocolsEnabled = append(protocolsEnabled, "NFSv3")
+		}
+		if pointer.From(item.Nfsv41) {
+			protocolsEnabled = append(protocolsEnabled, "NFSv4.1")
+		}
+
+		result := map[string]interface{}{
+			"allowed_clients":                utils.FlattenStringSlice(&allowedClients),
+			"kerberos_5_read_only_enabled":   pointer.From(item.Kerberos5ReadOnly),
+			"kerberos_5_read_write_enabled":  pointer.From(item.Kerberos5ReadWrite),
+			"kerberos_5i_read_only_enabled":  pointer.From(item.Kerberos5iReadOnly),
+			"kerberos_5i_read_write_enabled": pointer.From(item.Kerberos5iReadWrite),
+			"kerberos_5p_read_only_enabled":  pointer.From(item.Kerberos5pReadOnly),
+			"kerberos_5p_read_write_enabled": pointer.From(item.Kerberos5pReadWrite),
+			"protocols_enabled":              utils.FlattenStringSlice(&protocolsEnabled),
+			"root_access_enabled":            pointer.From(item.HasRootAccess),
+			"rule_index":                     ruleIndex,
+			"unix_read_only":                 pointer.From(item.UnixReadOnly),
+			"unix_read_write":                pointer.From(item.UnixReadWrite),
+		}
+		results = append(results, result)
+	}
+
+	return results
+}

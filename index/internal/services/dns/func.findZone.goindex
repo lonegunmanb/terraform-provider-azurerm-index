@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dns
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func findZone(ctx context.Context, client *zones.ZonesClient, subscriptionId, name string) (*zones.Zone, *string, error) {
+	subscriptionResourceId := commonids.NewSubscriptionID(subscriptionId)
+	zonesIterator, err := client.ListComplete(ctx, subscriptionResourceId, zones.DefaultListOperationOptions())
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing DNS Zones: %+v", err)
+	}
+
+	var found zones.Zone
+	for _, zone := range zonesIterator.Items {
+		if zone.Name != nil && *zone.Name == name {
+			if found.Id != nil {
+				return nil, nil, fmt.Errorf("found multiple DNS zones with name %q, please specify the resource group", name)
+			}
+			found = zone
+		}
+	}
+
+	if found.Id == nil {
+		return nil, nil, fmt.Errorf("could not find DNS zone with name: %q", name)
+	}
+
+	id, err := zones.ParseDnsZoneIDInsensitively(*found.Id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing %q as a DNS Zone ID: %+v", *found.Id, err)
+	}
+	return &found, &id.ResourceGroupName, nil
+}

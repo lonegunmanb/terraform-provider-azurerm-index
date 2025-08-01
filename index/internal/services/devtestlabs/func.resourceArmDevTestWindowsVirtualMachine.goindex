@@ -1,0 +1,144 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devtestlabs
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devtestlab/2018-09-15/virtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/devtestlabs/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/devtestlabs/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceArmDevTestWindowsVirtualMachine() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceArmDevTestWindowsVirtualMachineCreateUpdate,
+		Read:   resourceArmDevTestWindowsVirtualMachineRead,
+		Update: resourceArmDevTestWindowsVirtualMachineCreateUpdate,
+		Delete: resourceArmDevTestWindowsVirtualMachineDelete,
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := virtualmachines.ParseVirtualMachineID(id)
+			return err
+		}),
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.DevTestWindowsVirtualMachineUpgradeV0ToV1{},
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.DevTestVirtualMachineName(15),
+			},
+
+			"lab_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.DevTestLabName(),
+			},
+
+			// There's a bug in the Azure API where this is returned in lower-case
+			// BUG: https://github.com/Azure/azure-rest-api-specs/issues/3964
+			"resource_group_name": azure.SchemaResourceGroupNameDiffSuppress(),
+
+			"location": commonschema.Location(),
+
+			"size": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				// since this isn't returned from the API
+				ForceNew: true,
+			},
+
+			"username": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"password": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				// since this isn't returned from the API
+				ForceNew:  true,
+				Sensitive: true,
+			},
+
+			"storage_type": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"Standard",
+					"Premium",
+				}, false),
+			},
+
+			"lab_subnet_name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				// since this isn't returned from the API
+				ForceNew: true,
+			},
+
+			"lab_virtual_network_id": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				// since this isn't returned from the API
+				ForceNew: true,
+			},
+
+			"allow_claim": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
+
+			"disallow_public_ip_address": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				ForceNew: true,
+			},
+
+			"gallery_image_reference": schemaDevTestVirtualMachineGalleryImageReference(),
+
+			"inbound_nat_rule": schemaDevTestVirtualMachineInboundNatRule(),
+
+			"notes": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"tags": tags.Schema(),
+
+			"fqdn": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+
+			"unique_identifier": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
+			},
+		},
+	}
+}

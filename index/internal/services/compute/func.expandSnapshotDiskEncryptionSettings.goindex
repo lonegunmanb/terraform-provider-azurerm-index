@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-02/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandSnapshotDiskEncryptionSettings(settingsList []interface{}) *snapshots.EncryptionSettingsCollection {
+	if len(settingsList) == 0 {
+		return &snapshots.EncryptionSettingsCollection{}
+	}
+	settings := settingsList[0].(map[string]interface{})
+
+	config := &snapshots.EncryptionSettingsCollection{
+		Enabled: true,
+	}
+
+	var diskEncryptionKey *snapshots.KeyVaultAndSecretReference
+	if v := settings["disk_encryption_key"].([]interface{}); len(v) > 0 {
+		dek := v[0].(map[string]interface{})
+
+		secretURL := dek["secret_url"].(string)
+		sourceVaultId := dek["source_vault_id"].(string)
+		diskEncryptionKey = &snapshots.KeyVaultAndSecretReference{
+			SecretURL: secretURL,
+			SourceVault: snapshots.SourceVault{
+				Id: utils.String(sourceVaultId),
+			},
+		}
+	}
+
+	var keyEncryptionKey *snapshots.KeyVaultAndKeyReference
+	if v := settings["key_encryption_key"].([]interface{}); len(v) > 0 {
+		kek := v[0].(map[string]interface{})
+
+		secretURL := kek["key_url"].(string)
+		sourceVaultId := kek["source_vault_id"].(string)
+		keyEncryptionKey = &snapshots.KeyVaultAndKeyReference{
+			KeyURL: secretURL,
+			SourceVault: snapshots.SourceVault{
+				Id: utils.String(sourceVaultId),
+			},
+		}
+	}
+
+	// at this time we only support a single element
+	config.EncryptionSettings = &[]snapshots.EncryptionSettingsElement{
+		{
+			DiskEncryptionKey: diskEncryptionKey,
+			KeyEncryptionKey:  keyEncryptionKey,
+		},
+	}
+	return config
+}

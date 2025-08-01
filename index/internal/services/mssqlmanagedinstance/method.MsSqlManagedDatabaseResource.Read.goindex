@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedbackupshorttermretentionpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/manageddatabases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstancelongtermretentionpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstances"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper"
+	miParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r MsSqlManagedDatabaseResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MSSQLManagedInstance.ManagedDatabasesClient
+			longTermRetentionClient := metadata.Client.MSSQLManagedInstance.ManagedInstancesLongTermRetentionPoliciesClient
+			shortTermRetentionClient := metadata.Client.MSSQLManagedInstance.ManagedInstancesShortTermRetentionPoliciesClient
+
+			id, err := commonids.ParseManagedInstanceDatabaseID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			metadata.Logger.Infof("Decoding state for %s", id)
+			var state MsSqlManagedDatabaseModel
+			if err := metadata.Decode(&state); err != nil {
+				return err
+			}
+
+			result, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(result.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %v", *id, err)
+			}
+
+			managedInstanceId := commonids.NewSqlManagedInstanceID(id.SubscriptionId, id.ResourceGroupName, id.ManagedInstanceName)
+
+			model := MsSqlManagedDatabaseModel{
+				Name:              id.DatabaseName,
+				ManagedInstanceId: managedInstanceId.ID(),
+			}
+
+			ltrResp, err := longTermRetentionClient.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving Long Term Retention Policy for  %s: %v", *id, err)
+			}
+
+			if ltrResp.Model != nil && ltrResp.Model.Properties != nil {
+				model.LongTermRetentionPolicy = flattenLongTermRetentionPolicy(*ltrResp.Model.Properties)
+			}
+
+			shortTermRetentionResp, err := shortTermRetentionClient.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving Short Term Retention Policy for  %s: %v", *id, err)
+			}
+
+			if shortTermRetentionResp.Model != nil && shortTermRetentionResp.Model.Properties != nil {
+				model.ShortTermRetentionDays = pointer.From(shortTermRetentionResp.Model.Properties.RetentionDays)
+			}
+
+			d := metadata.ResourceData
+			if v, ok := d.GetOk("point_in_time_restore"); ok {
+				model.PointInTimeRestore = flattenManagedDatabasePointInTimeRestore(v)
+			}
+
+			model.Tags = pointer.From(result.Model.Tags)
+
+			return metadata.Encode(&model)
+		},
+	}
+}

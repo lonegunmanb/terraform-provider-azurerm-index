@@ -1,0 +1,327 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2022-10-01-preview/accessconnector"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
+	mlworkspace "github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceDatabricksWorkspaceCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).DataBricks.WorkspacesClient
+	acClient := meta.(*clients.Client).DataBricks.AccessConnectorClient
+	lbClient := meta.(*clients.Client).LoadBalancers.LoadBalancersClient
+	subnetsClient := meta.(*clients.Client).Network.Subnets
+	keyVaultsClient := meta.(*clients.Client).KeyVault
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id := workspaces.NewWorkspaceID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	existing, err := client.Get(ctx, id)
+	if err != nil {
+		if !response.WasNotFound(existing.HttpResponse) {
+			return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+		}
+	}
+
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_databricks_workspace", id.ID())
+	}
+
+	var backendPoolName, loadBalancerId string
+	skuName := d.Get("sku").(string)
+	managedResourceGroupName := d.Get("managed_resource_group_name").(string)
+	location := location.Normalize(d.Get("location").(string))
+	backendPool := d.Get("load_balancer_backend_address_pool_id").(string)
+
+	if backendPool != "" {
+		backendPoolId, err := loadbalancers.ParseLoadBalancerBackendAddressPoolID(backendPool)
+		if err != nil {
+			return err
+		}
+
+		// Generate the load balancer ID from the Backend Address Pool Id...
+		lbId := loadbalancers.NewLoadBalancerID(backendPoolId.SubscriptionId, backendPoolId.ResourceGroupName, backendPoolId.LoadBalancerName)
+
+		backendPoolName = backendPoolId.BackendAddressPoolName
+		loadBalancerId = lbId.ID()
+
+		locks.ByID(backendPoolId.ID())
+		defer locks.UnlockByID(backendPoolId.ID())
+
+		locks.ByID(lbId.ID())
+		defer locks.UnlockByID(lbId.ID())
+
+		// check to make sure the load balancer exists as referred to by the Backend Address Pool...
+		plbId := loadbalancers.ProviderLoadBalancerId{SubscriptionId: backendPoolId.SubscriptionId, ResourceGroupName: backendPoolId.ResourceGroupName, LoadBalancerName: backendPoolId.LoadBalancerName}
+		lb, err := lbClient.Get(ctx, plbId, loadbalancers.GetOperationOptions{})
+		if err != nil {
+			if response.WasNotFound(lb.HttpResponse) {
+				return fmt.Errorf("%s was not found", lbId)
+			}
+			return fmt.Errorf("retrieving %s: %+v", lbId, err)
+		}
+	}
+
+	if managedResourceGroupName == "" {
+		// no managed resource group name was provided, we use the default pattern
+		log.Printf("[DEBUG][azurerm_databricks_workspace] no managed resource group id was provided, we use the default pattern.")
+		managedResourceGroupName = fmt.Sprintf("databricks-rg-%s", id.ResourceGroupName)
+	}
+
+	managedResourceGroupID := resourcesParse.NewResourceGroupID(subscriptionId, managedResourceGroupName).ID()
+	customerEncryptionEnabled := d.Get("customer_managed_key_enabled").(bool)
+	infrastructureEncryptionEnabled := d.Get("infrastructure_encryption_enabled").(bool)
+	defaultStorageFirewallEnabledRaw := d.Get("default_storage_firewall_enabled").(bool)
+	defaultStorageFirewallEnabled := workspaces.DefaultStorageFirewallDisabled
+	if defaultStorageFirewallEnabledRaw {
+		defaultStorageFirewallEnabled = workspaces.DefaultStorageFirewallEnabled
+	}
+	publicNetworkAccessRaw := d.Get("public_network_access_enabled").(bool)
+	publicNetworkAccess := workspaces.PublicNetworkAccessDisabled
+	if publicNetworkAccessRaw {
+		publicNetworkAccess = workspaces.PublicNetworkAccessEnabled
+	}
+	requireNsgRules := d.Get("network_security_group_rules_required").(string)
+	customParamsRaw := d.Get("custom_parameters").([]interface{})
+	customParams, pubSubAssoc, priSubAssoc := expandWorkspaceCustomParameters(customParamsRaw, customerEncryptionEnabled, infrastructureEncryptionEnabled, backendPoolName, loadBalancerId)
+
+	if len(customParamsRaw) > 0 && customParamsRaw[0] != nil {
+		config := customParamsRaw[0].(map[string]interface{})
+		pubSub := config["public_subnet_name"].(string)
+		priSub := config["private_subnet_name"].(string)
+		vnetID := config["virtual_network_id"].(string)
+
+		if config["virtual_network_id"].(string) == "" && (pubSub != "" || priSub != "") {
+			return fmt.Errorf("`public_subnet_name` and/or `private_subnet_name` cannot be defined if `virtual_network_id` is not set")
+		}
+		if config["virtual_network_id"].(string) != "" && (pubSub == "" || priSub == "") {
+			return fmt.Errorf("`public_subnet_name` and `private_subnet_name` must both have values if `virtual_network_id` is set")
+		}
+		if pubSub != "" && pubSubAssoc == nil {
+			return fmt.Errorf("you must define a value for `public_subnet_network_security_group_association_id` if `public_subnet_name` is set")
+		}
+		if priSub != "" && priSubAssoc == nil {
+			return fmt.Errorf("you must define a value for `private_subnet_network_security_group_association_id` if `private_subnet_name` is set")
+		}
+
+		if subnetDelegationErr := checkSubnetDelegations(ctx, subnetsClient, vnetID, pubSub, priSub); subnetDelegationErr != nil {
+			return subnetDelegationErr
+		}
+	}
+
+	// Set up customer-managed keys for managed services encryption (e.g. notebook)
+	setEncrypt := false
+	encrypt := &workspaces.WorkspacePropertiesEncryption{}
+	encrypt.Entities = workspaces.EncryptionEntitiesDefinition{}
+
+	var servicesKeyId string
+	var servicesKeyVaultId string
+	var diskKeyId string
+	var diskKeyVaultId string
+
+	if v, ok := d.GetOk("managed_services_cmk_key_vault_key_id"); ok {
+		servicesKeyId = v.(string)
+	}
+
+	if v, ok := d.GetOk("managed_services_cmk_key_vault_id"); ok {
+		servicesKeyVaultId = v.(string)
+	}
+
+	if v, ok := d.GetOk("managed_disk_cmk_key_vault_key_id"); ok {
+		diskKeyId = v.(string)
+	}
+
+	if v, ok := d.GetOk("managed_disk_cmk_key_vault_id"); ok {
+		diskKeyVaultId = v.(string)
+	}
+
+	// set default subscription as current subscription for key vault look-up...
+	servicesResourceSubscriptionId := commonids.NewSubscriptionID(id.SubscriptionId)
+	diskResourceSubscriptionId := commonids.NewSubscriptionID(id.SubscriptionId)
+
+	if servicesKeyVaultId != "" {
+		// If they passed the 'managed_cmk_key_vault_id' parse the Key Vault ID
+		// to extract the correct key vault subscription for the exists call...
+		v, err := commonids.ParseKeyVaultID(servicesKeyVaultId)
+		if err != nil {
+			return fmt.Errorf("parsing %q as a Key Vault ID: %+v", servicesKeyVaultId, err)
+		}
+
+		servicesResourceSubscriptionId = commonids.NewSubscriptionID(v.SubscriptionId)
+	}
+
+	if servicesKeyId != "" {
+		setEncrypt = true
+		key, err := keyVaultParse.ParseNestedItemID(servicesKeyId)
+		if err != nil {
+			return err
+		}
+
+		// make sure the key vault exists
+		_, err = keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, servicesResourceSubscriptionId, key.KeyVaultBaseUrl)
+		if err != nil {
+			return fmt.Errorf("retrieving the Resource ID for the customer-managed keys for managed services Key Vault in subscription %q at URL %q: %+v", servicesResourceSubscriptionId, key.KeyVaultBaseUrl, err)
+		}
+
+		encrypt.Entities.ManagedServices = &workspaces.EncryptionV2{
+			KeySource: workspaces.EncryptionKeySourceMicrosoftPointKeyvault,
+			KeyVaultProperties: &workspaces.EncryptionV2KeyVaultProperties{
+				KeyName:     key.Name,
+				KeyVersion:  key.Version,
+				KeyVaultUri: key.KeyVaultBaseUrl,
+			},
+		}
+	}
+
+	if diskKeyVaultId != "" {
+		// If they passed the 'managed_disk_cmk_key_vault_id' parse the Key Vault ID
+		// to extract the correct key vault subscription for the exists call...
+		v, err := commonids.ParseKeyVaultID(diskKeyVaultId)
+		if err != nil {
+			return fmt.Errorf("parsing %q as a Key Vault ID: %+v", diskKeyVaultId, err)
+		}
+
+		diskResourceSubscriptionId = commonids.NewSubscriptionID(v.SubscriptionId)
+	}
+
+	if diskKeyId != "" {
+		setEncrypt = true
+		key, err := keyVaultParse.ParseNestedItemID(diskKeyId)
+		if err != nil {
+			return err
+		}
+
+		// make sure the key vault exists
+		_, err = keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, diskResourceSubscriptionId, key.KeyVaultBaseUrl)
+		if err != nil {
+			return fmt.Errorf("retrieving the Resource ID for the customer-managed keys for managed disk Key Vault in subscription %q at URL %q: %+v", diskResourceSubscriptionId, key.KeyVaultBaseUrl, err)
+		}
+
+		encrypt.Entities.ManagedDisk = &workspaces.ManagedDiskEncryption{
+			KeySource: workspaces.EncryptionKeySourceMicrosoftPointKeyvault,
+			KeyVaultProperties: workspaces.ManagedDiskEncryptionKeyVaultProperties{
+				KeyName:     key.Name,
+				KeyVersion:  key.Version,
+				KeyVaultUri: key.KeyVaultBaseUrl,
+			},
+		}
+	}
+
+	if rotationEnabled := d.Get("managed_disk_cmk_rotation_to_latest_version_enabled").(bool); rotationEnabled {
+		encrypt.Entities.ManagedDisk.RotationToLatestKeyVersionEnabled = pointer.To(rotationEnabled)
+	}
+
+	// Including the Tags in the workspace parameters will update the tags on
+	// the workspace only
+	workspace := workspaces.Workspace{
+		Sku: &workspaces.Sku{
+			Name: skuName,
+		},
+		Location: location,
+		Properties: workspaces.WorkspaceProperties{
+			PublicNetworkAccess:    &publicNetworkAccess,
+			ManagedResourceGroupId: managedResourceGroupID,
+			Parameters:             customParams,
+		},
+		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	if defaultStorageFirewallEnabledRaw {
+		accessConnectorProperties := workspaces.WorkspacePropertiesAccessConnector{}
+		accessConnectorIdRaw := d.Get("access_connector_id").(string)
+		accessConnectorId, err := accessconnector.ParseAccessConnectorID(accessConnectorIdRaw)
+		if err != nil {
+			return fmt.Errorf("parsing Access Connector ID %s: %+v", accessConnectorIdRaw, err)
+		}
+
+		accessConnector, err := acClient.Get(ctx, *accessConnectorId)
+		if err != nil {
+			return fmt.Errorf("retrieving Access Connector %s: %+v", accessConnectorId.AccessConnectorName, err)
+		}
+
+		if accessConnector.Model.Identity != nil {
+			accIdentityId := ""
+			for raw := range accessConnector.Model.Identity.IdentityIds {
+				id, err := commonids.ParseUserAssignedIdentityIDInsensitively(raw)
+				if err != nil {
+					return fmt.Errorf("parsing %q as a User Assigned Identity ID: %+v", raw, err)
+				}
+				accIdentityId = id.ID()
+				break
+			}
+
+			accessConnectorProperties.Id = *accessConnector.Model.Id
+			accessConnectorProperties.IdentityType = workspaces.IdentityType(accessConnector.Model.Identity.Type)
+			accessConnectorProperties.UserAssignedIdentityId = &accIdentityId
+		}
+
+		workspace.Properties.AccessConnector = &accessConnectorProperties
+		workspace.Properties.DefaultStorageFirewall = &defaultStorageFirewallEnabled
+	}
+
+	if !d.IsNewResource() && d.HasChange("default_storage_firewall_enabled") {
+		workspace.Properties.DefaultStorageFirewall = &defaultStorageFirewallEnabled
+	}
+
+	if requireNsgRules != "" {
+		requiredNsgRulesConst := workspaces.RequiredNsgRules(requireNsgRules)
+		workspace.Properties.RequiredNsgRules = &requiredNsgRulesConst
+	}
+
+	if setEncrypt {
+		workspace.Properties.Encryption = encrypt
+	}
+
+	enhancedSecurityCompliance := d.Get("enhanced_security_compliance")
+	workspace.Properties.EnhancedSecurityCompliance = expandWorkspaceEnhancedSecurity(enhancedSecurityCompliance.([]interface{}))
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, workspace); err != nil {
+		return fmt.Errorf("creating %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	// I have to set the custom_parameters so I can pass the public and private
+	// subnet NSG association along with the backend Pool Id since they are not
+	// returned in the read from Azure...
+	custom, backendPoolReadId := flattenWorkspaceCustomParameters(customParams, pubSubAssoc, priSubAssoc)
+	d.Set("load_balancer_backend_address_pool_id", backendPoolReadId)
+
+	if err := d.Set("custom_parameters", custom); err != nil {
+		return fmt.Errorf("setting `custom_parameters`: %+v", err)
+	}
+
+	// Always set these even if they are empty to keep the state file
+	// consistent with the configuration file...
+	d.Set("managed_services_cmk_key_vault_key_id", servicesKeyId)
+	d.Set("managed_disk_cmk_key_vault_key_id", diskKeyId)
+	d.Set("managed_services_cmk_key_vault_id", servicesKeyVaultId)
+	d.Set("managed_disk_cmk_key_vault_id", diskKeyVaultId)
+
+	return resourceDatabricksWorkspaceRead(d, meta)
+}

@@ -1,0 +1,203 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/authorization
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/authorization/2020-10-01/rolemanagementpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	billingValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/billing/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r RoleManagementPolicyDataSource) Attributes() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Description: "The name of the policy",
+			Type:        pluginsdk.TypeString,
+			Computed:    true,
+		},
+
+		"description": {
+			Description: "The Description of the policy",
+			Type:        pluginsdk.TypeString,
+			Computed:    true,
+		},
+
+		"eligible_assignment_rules": {
+			Description: "The rules for eligible assignment of the policy",
+			Type:        pluginsdk.TypeList,
+			Computed:    true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"expiration_required": {
+						Description: "Must the assignment have an expiry date",
+						Type:        pluginsdk.TypeBool,
+						Computed:    true,
+					},
+
+					"expire_after": {
+						Description: "The duration after which assignments expire",
+						Type:        pluginsdk.TypeString,
+						Computed:    true,
+					},
+				},
+			},
+		},
+
+		"active_assignment_rules": {
+			Description: "The rules for active assignment of the policy",
+			Type:        pluginsdk.TypeList,
+			Computed:    true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"expiration_required": {
+						Description: "Must the assignment have an expiry date",
+						Type:        pluginsdk.TypeBool,
+						Computed:    true,
+					},
+
+					"expire_after": {
+						Description: "The duration after which assignments expire",
+						Type:        pluginsdk.TypeString,
+						Computed:    true,
+					},
+
+					"require_multifactor_authentication": {
+						Description: "Whether multi-factor authentication is required to make an assignment",
+						Type:        pluginsdk.TypeBool,
+						Computed:    true,
+					},
+
+					"require_justification": {
+						Description: "Whether a justification is required to make an assignment",
+						Type:        pluginsdk.TypeBool,
+						Computed:    true,
+					},
+
+					"require_ticket_info": {
+						Description: "Whether ticket information is required to make an assignment",
+						Type:        pluginsdk.TypeBool,
+						Computed:    true,
+					},
+				},
+			},
+		},
+
+		"activation_rules": {
+			Description: "The activation rules of the policy",
+			Type:        pluginsdk.TypeList,
+			Computed:    true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"maximum_duration": {
+						Description: "The time after which the an activation can be valid for",
+						Type:        pluginsdk.TypeString,
+						Computed:    true,
+					},
+
+					"require_approval": {
+						Description: "Whether an approval is required for activation",
+						Type:        pluginsdk.TypeBool,
+						Computed:    true,
+					},
+
+					"approval_stage": {
+						Description: "The approval stages for the activation",
+						Type:        pluginsdk.TypeList,
+						Computed:    true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"primary_approver": {
+									Description: "The IDs of the users or groups who can approve the activation",
+									Type:        pluginsdk.TypeSet,
+									Computed:    true,
+									Elem: &pluginsdk.Resource{
+										Schema: map[string]*pluginsdk.Schema{
+											"object_id": {
+												Description: "The ID of the object to act as an approver",
+												Type:        pluginsdk.TypeString,
+												Computed:    true,
+											},
+
+											"type": {
+												Description: "The type of object acting as an approver",
+												Type:        pluginsdk.TypeString,
+												Computed:    true,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+
+					"required_conditional_access_authentication_context": {
+						Description: "Whether a conditional access context is required during activation",
+						Type:        pluginsdk.TypeString,
+						Computed:    true,
+					},
+
+					"require_multifactor_authentication": {
+						Description: "Whether multi-factor authentication is required during activation",
+						Type:        pluginsdk.TypeBool,
+						Computed:    true,
+					},
+
+					"require_justification": {
+						Description: "Whether a justification is required during activation",
+						Type:        pluginsdk.TypeBool,
+						Computed:    true,
+					},
+
+					"require_ticket_info": {
+						Description: "Whether ticket information is required during activation",
+						Type:        pluginsdk.TypeBool,
+						Computed:    true,
+					},
+				},
+			},
+		},
+
+		"notification_rules": {
+			Description: "The notification rules of the policy",
+			Type:        pluginsdk.TypeList,
+			Computed:    true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"active_assignments": {
+						Description: "Notifications about active assignments",
+						Type:        pluginsdk.TypeList,
+						Computed:    true,
+						Elem: &pluginsdk.Resource{
+							Schema: notificationRuleDataSourceSchema(),
+						},
+					},
+
+					"eligible_activations": {
+						Description: "Notifications about activations of eligible assignments",
+						Type:        pluginsdk.TypeList,
+						Computed:    true,
+						Elem: &pluginsdk.Resource{
+							Schema: notificationRuleDataSourceSchema(),
+						},
+					},
+
+					"eligible_assignments": {
+						Description: "Notifications about eligible assignments",
+						Type:        pluginsdk.TypeList,
+						Computed:    true,
+						Elem: &pluginsdk.Resource{
+							Schema: notificationRuleDataSourceSchema(),
+						},
+					},
+				},
+			},
+		},
+	}
+}

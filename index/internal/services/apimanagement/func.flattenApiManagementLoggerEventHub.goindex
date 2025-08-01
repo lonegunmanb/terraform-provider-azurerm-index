@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/logger"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenApiManagementLoggerEventHub(d *pluginsdk.ResourceData, properties *logger.LoggerContractProperties) []interface{} {
+	result := make([]interface{}, 0)
+	if c := properties.Credentials; c != nil && (*c)["name"] != "" {
+		eventHub := make(map[string]interface{})
+		eventHub["name"] = (*c)["name"]
+		if existing := d.Get("eventhub").([]interface{}); len(existing) > 0 {
+			existingEventHub := existing[0].(map[string]interface{})
+			if conn, ok := existingEventHub["connection_string"]; ok {
+				eventHub["connection_string"] = conn.(string)
+			}
+			if endpoint, ok := existingEventHub["endpoint_uri"]; ok {
+				eventHub["endpoint_uri"] = endpoint
+			}
+			if clientId, ok := existingEventHub["user_assigned_identity_client_id"]; ok {
+				if clientId != "SystemAssigned" {
+					eventHub["user_assigned_identity_client_id"] = clientId
+				}
+			}
+		}
+		result = append(result, eventHub)
+	}
+	return result
+}

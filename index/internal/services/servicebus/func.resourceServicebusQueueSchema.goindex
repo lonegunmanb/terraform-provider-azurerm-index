@@ -1,0 +1,157 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2021-06-01-preview/queues"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicebus/2022-10-01-preview/namespaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/servicebus/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceServicebusQueueSchema() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: azValidate.QueueName(),
+		},
+
+		// lintignore: S013
+		"namespace_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: namespaces.ValidateNamespaceID,
+		},
+
+		"auto_delete_on_idle": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			// NOTE: O+C this gets a default except when using basic sku and can be updated without issues
+			Computed:     true,
+			ValidateFunc: validate.ISO8601Duration,
+		},
+
+		"dead_lettering_on_message_expiration": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+		},
+
+		"default_message_ttl": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			// NOTE: O+C this gets a default of "P10675199DT2H48M5.4775807S" (Unbounded) and "P14D" in Basic sku and can be updated without issues
+			Computed:     true,
+			ValidateFunc: validate.ISO8601Duration,
+		},
+
+		"duplicate_detection_history_time_window": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      "PT10M", // 10 minutes
+			ValidateFunc: validate.ISO8601Duration,
+		},
+
+		"batched_operations_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+
+		"express_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+		},
+
+		"partitioning_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+			ForceNew: true,
+		},
+
+		"forward_dead_lettered_messages_to": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: azValidate.QueueName(),
+		},
+
+		"forward_to": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: azValidate.QueueName(),
+		},
+
+		"lock_duration": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  "PT1M", // 1 minute
+		},
+
+		"max_delivery_count": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Default:      10,
+			ValidateFunc: validation.IntAtLeast(1),
+		},
+
+		"max_message_size_in_kilobytes": {
+			Type:     pluginsdk.TypeInt,
+			Optional: true,
+			// NOTE: O+C this gets a variable default based on the sku and can be updated without issues
+			Computed:     true,
+			ValidateFunc: azValidate.ServiceBusMaxMessageSizeInKilobytes(),
+		},
+
+		"max_size_in_megabytes": {
+			Type:     pluginsdk.TypeInt,
+			Optional: true,
+			// NOTE: O+C this gets a variable default based on the sku and can be updated without issues
+			Computed:     true,
+			ValidateFunc: azValidate.ServiceBusMaxSizeInMegabytes(),
+		},
+
+		"requires_duplicate_detection": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+			ForceNew: true,
+		},
+
+		"requires_session": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+			ForceNew: true,
+		},
+
+		"status": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  string(queues.EntityStatusActive),
+			ValidateFunc: validation.StringInSlice([]string{
+				string(queues.EntityStatusActive),
+				string(queues.EntityStatusCreating),
+				string(queues.EntityStatusDeleting),
+				string(queues.EntityStatusDisabled),
+				string(queues.EntityStatusReceiveDisabled),
+				string(queues.EntityStatusRenaming),
+				string(queues.EntityStatusSendDisabled),
+				string(queues.EntityStatusUnknown),
+			}, false),
+		},
+	}
+}

@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2023-04-01/networkconnections"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r DevCenterNetworkConnectionResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DevCenter.V20230401.NetworkConnections
+
+			id, err := networkconnections.ParseNetworkConnectionID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var model DevCenterNetworkConnectionResourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			parameters := networkconnections.NetworkConnectionUpdate{
+				Properties: &networkconnections.NetworkConnectionUpdateProperties{},
+			}
+
+			if metadata.ResourceData.HasChange("subnet_id") {
+				parameters.Properties.SubnetId = pointer.To(model.SubnetId)
+			}
+
+			if metadata.ResourceData.HasChange("domain_name") {
+				parameters.Properties.DomainName = pointer.To(model.DomainName)
+			}
+
+			if metadata.ResourceData.HasChange("domain_password") {
+				parameters.Properties.DomainPassword = pointer.To(model.DomainPassword)
+			}
+
+			if metadata.ResourceData.HasChange("domain_username") {
+				parameters.Properties.DomainUsername = pointer.To(model.DomainUsername)
+			}
+
+			if metadata.ResourceData.HasChange("organization_unit") {
+				parameters.Properties.OrganizationUnit = pointer.To(model.OrganizationUnit)
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				parameters.Tags = pointer.To(model.Tags)
+			}
+
+			if err := client.UpdateThenPoll(ctx, *id, parameters); err != nil {
+				return fmt.Errorf("updating %s: %+v", *id, err)
+			}
+
+			return nil
+		},
+	}
+}

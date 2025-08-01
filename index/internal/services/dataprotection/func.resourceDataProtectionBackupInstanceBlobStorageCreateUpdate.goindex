@@ -1,0 +1,105 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backupinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	azSchema "github.com/hashicorp/terraform-provider-azurerm/internal/tf/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceDataProtectionBackupInstanceBlobStorageCreateUpdate(d *schema.ResourceData, meta interface{}) error {
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	client := meta.(*clients.Client).DataProtection.BackupInstanceClient
+	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	name := d.Get("name").(string)
+	vaultId, _ := backupinstances.ParseBackupVaultID(d.Get("vault_id").(string))
+	id := backupinstances.NewBackupInstanceID(subscriptionId, vaultId.ResourceGroupName, vaultId.BackupVaultName, name)
+
+	if d.IsNewResource() {
+		existing, err := client.Get(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for existing DataProtection BackupInstance (%q): %+v", id, err)
+			}
+		}
+		if !response.WasNotFound(existing.HttpResponse) {
+			return tf.ImportAsExistsError("azurerm_data_protection_backup_instance_blob_storage", id.ID())
+		}
+	}
+
+	storageAccountId, err := commonids.ParseStorageAccountID(d.Get("storage_account_id").(string))
+	if err != nil {
+		return err
+	}
+	location := location.Normalize(d.Get("location").(string))
+	policyId, err := backuppolicies.ParseBackupPolicyID(d.Get("backup_policy_id").(string))
+	if err != nil {
+		return err
+	}
+
+	parameters := backupinstances.BackupInstanceResource{
+		Properties: &backupinstances.BackupInstance{
+			DataSourceInfo: backupinstances.Datasource{
+				DatasourceType:   utils.String("Microsoft.Storage/storageAccounts/blobServices"),
+				ObjectType:       utils.String("Datasource"),
+				ResourceID:       storageAccountId.ID(),
+				ResourceLocation: utils.String(location),
+				ResourceName:     utils.String(storageAccountId.StorageAccountName),
+				ResourceType:     utils.String("Microsoft.Storage/storageAccounts"),
+				ResourceUri:      utils.String(storageAccountId.ID()),
+			},
+			FriendlyName: utils.String(id.BackupInstanceName),
+			PolicyInfo: backupinstances.PolicyInfo{
+				PolicyId: policyId.ID(),
+			},
+		},
+	}
+
+	if v, ok := d.GetOk("storage_account_container_names"); ok {
+		parameters.Properties.PolicyInfo.PolicyParameters = &backupinstances.PolicyParameters{
+			BackupDatasourceParametersList: &[]backupinstances.BackupDatasourceParameters{
+				backupinstances.BlobBackupDatasourceParameters{
+					ContainersList: pointer.From(utils.ExpandStringSlice(v.([]interface{}))),
+				},
+			},
+		}
+	}
+
+	if err := client.CreateOrUpdateThenPoll(ctx, id, parameters, backupinstances.DefaultCreateOrUpdateOperationOptions()); err != nil {
+		return fmt.Errorf("creating/updating DataProtection BackupInstance (%q): %+v", id, err)
+	}
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return fmt.Errorf("internal-error: context had no deadline")
+	}
+	stateConf := &pluginsdk.StateChangeConf{
+		Pending:    []string{string(backupinstances.StatusConfiguringProtection), "UpdatingProtection"},
+		Target:     []string{string(backupinstances.StatusProtectionConfigured)},
+		Refresh:    policyProtectionStateRefreshFunc(ctx, client, id),
+		MinTimeout: 1 * time.Minute,
+		Timeout:    time.Until(deadline),
+	}
+
+	if _, err = stateConf.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for BackupInstance(%q) policy protection to be completed: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+	return resourceDataProtectionBackupInstanceBlobStorageRead(d, meta)
+}

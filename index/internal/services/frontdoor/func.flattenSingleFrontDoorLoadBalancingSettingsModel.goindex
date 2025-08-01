@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSingleFrontDoorLoadBalancingSettingsModel(input *frontdoors.LoadBalancingSettingsModel, frontDoorId frontdoors.FrontDoorId) map[string]interface{} {
+	if input == nil {
+		return make(map[string]interface{})
+	}
+
+	id := ""
+	name := ""
+	if input.Name != nil {
+		name = *input.Name
+		// rewrite the ID to ensure it's consistent
+		id = parse.NewLoadBalancingID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, name).ID()
+	}
+
+	additionalLatencyMilliseconds := 0
+	sampleSize := 0
+	successfulSamplesRequired := 0
+	if properties := input.Properties; properties != nil {
+		if properties.AdditionalLatencyMilliseconds != nil {
+			additionalLatencyMilliseconds = int(*properties.AdditionalLatencyMilliseconds)
+		}
+		if properties.SampleSize != nil {
+			sampleSize = int(*properties.SampleSize)
+		}
+		if properties.SuccessfulSamplesRequired != nil {
+			successfulSamplesRequired = int(*properties.SuccessfulSamplesRequired)
+		}
+	}
+
+	output := map[string]interface{}{
+		"additional_latency_milliseconds": additionalLatencyMilliseconds,
+		"id":                              id,
+		"name":                            name,
+		"sample_size":                     sampleSize,
+		"successful_samples_required":     successfulSamplesRequired,
+	}
+
+	return output
+}

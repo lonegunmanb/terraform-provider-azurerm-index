@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func (sbu BlobUpload) uploadPageBlob(ctx context.Context) error {
+	if sbu.Size != 0 {
+		return errors.New("`size` cannot be set for an uploaded page blob")
+	}
+
+	// determine the details about the file
+	file, err := os.Open(sbu.Source)
+	if err != nil {
+		return fmt.Errorf("opening source file for upload %q: %s", sbu.Source, err)
+	}
+	defer file.Close()
+
+	// TODO: all of this ultimately can be moved into Giovanni
+
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("Could not stat file %q: %s", file.Name(), err)
+	}
+
+	fileSize := info.Size()
+
+	// first let's create a file of the specified file size
+	input := blobs.PutPageBlobInput{
+		BlobContentLengthBytes: fileSize,
+		ContentType:            pointer.To(sbu.ContentType),
+		MetaData:               sbu.MetaData,
+	}
+	if sbu.EncryptionScope != "" {
+		input.EncryptionScope = pointer.To(sbu.EncryptionScope)
+	}
+	if _, err := sbu.Client.PutPageBlob(ctx, sbu.ContainerName, sbu.BlobName, input); err != nil {
+		return fmt.Errorf("PutPageBlob: %s", err)
+	}
+
+	if err := sbu.pageUploadFromSource(ctx, file, fileSize); err != nil {
+		return fmt.Errorf("creating storage blob on Azure: %s", err)
+	}
+
+	return nil
+}

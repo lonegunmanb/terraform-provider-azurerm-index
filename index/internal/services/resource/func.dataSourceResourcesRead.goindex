@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/resource
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2020-06-01/resources" // nolint: staticcheck
+	"github.com/google/uuid"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceResourcesRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Resource.ResourcesClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	resourceGroupName := d.Get("resource_group_name").(string)
+	resourceName := d.Get("name").(string)
+	resourceType := d.Get("type").(string)
+	requiredTags := d.Get("required_tags").(map[string]interface{})
+
+	if resourceGroupName == "" && resourceName == "" && resourceType == "" {
+		return fmt.Errorf("At least one of `name`, `resource_group_name` or `type` must be specified")
+	}
+
+	var filter string
+
+	if resourceName != "" {
+		if strings.Contains(filter, "eq") {
+			filter += " and "
+		}
+		v := fmt.Sprintf("name eq '%s'", resourceName)
+		filter += v
+	}
+
+	if resourceType != "" {
+		if strings.Contains(filter, "eq") {
+			filter += " and "
+		}
+		v := fmt.Sprintf("resourceType eq '%s'", resourceType)
+		filter += v
+	}
+
+	// Use List instead of listComplete because of bug in SDK: https://github.com/Azure/azure-sdk-for-go/issues/9510
+	var resourcesResp resources.ListResultPage
+	resources := make([]map[string]interface{}, 0)
+	if resourceGroupName != "" {
+		resp, err := client.ListByResourceGroup(ctx, resourceGroupName, filter, "", nil)
+		if err != nil {
+			return fmt.Errorf("getting resources by resource group: %+v", err)
+		}
+		resourcesResp = resp
+	} else {
+		resp, err := client.List(ctx, filter, "", nil)
+		if err != nil {
+			return fmt.Errorf("getting resources: %+v", err)
+		}
+		resourcesResp = resp
+	}
+
+	resources = append(resources, filterResource(resourcesResp.Values(), requiredTags)...)
+	for resourcesResp.Response().NextLink != nil && *resourcesResp.Response().NextLink != "" {
+		if err := resourcesResp.NextWithContext(ctx); err != nil {
+			return fmt.Errorf("loading Resource List: %+v", err)
+		}
+		resources = append(resources, filterResource(resourcesResp.Values(), requiredTags)...)
+	}
+
+	d.SetId("resource-" + uuid.New().String())
+	if err := d.Set("resources", resources); err != nil {
+		return fmt.Errorf("setting `resources`: %+v", err)
+	}
+
+	return nil
+}

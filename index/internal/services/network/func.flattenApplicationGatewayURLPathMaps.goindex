@@ -1,0 +1,163 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenApplicationGatewayURLPathMaps(input *[]applicationgateways.ApplicationGatewayURLPathMap) ([]interface{}, error) {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results, nil
+	}
+
+	for _, v := range *input {
+		output := map[string]interface{}{}
+
+		if v.Id != nil {
+			output["id"] = *v.Id
+		}
+
+		if v.Name != nil {
+			output["name"] = *v.Name
+		}
+
+		if props := v.Properties; props != nil {
+			if backendPool := props.DefaultBackendAddressPool; backendPool != nil && backendPool.Id != nil {
+				poolId, err := parse.BackendAddressPoolIDInsensitively(*backendPool.Id)
+				if err != nil {
+					return nil, err
+				}
+				output["default_backend_address_pool_name"] = poolId.Name
+				output["default_backend_address_pool_id"] = poolId.ID()
+			}
+
+			if settings := props.DefaultBackendHTTPSettings; settings != nil && settings.Id != nil {
+				settingsId, err := parse.BackendHttpSettingsCollectionIDInsensitively(*settings.Id)
+				if err != nil {
+					return nil, err
+				}
+				output["default_backend_http_settings_name"] = settingsId.BackendHttpSettingsCollectionName
+				output["default_backend_http_settings_id"] = settingsId.ID()
+			}
+
+			if redirect := props.DefaultRedirectConfiguration; redirect != nil && redirect.Id != nil {
+				redirectId, err := parse.RedirectConfigurationsIDInsensitively(*redirect.Id)
+				if err != nil {
+					return nil, err
+				}
+				output["default_redirect_configuration_name"] = redirectId.RedirectConfigurationName
+				output["default_redirect_configuration_id"] = redirectId.ID()
+			}
+
+			if rewrite := props.DefaultRewriteRuleSet; rewrite != nil && rewrite.Id != nil {
+				rewriteId, err := parse.RewriteRuleSetIDInsensitively(*rewrite.Id)
+				if err != nil {
+					return nil, err
+				}
+				output["default_rewrite_rule_set_name"] = rewriteId.Name
+				output["default_rewrite_rule_set_id"] = rewriteId.ID()
+			}
+
+			pathRules := make([]interface{}, 0)
+			if rules := props.PathRules; rules != nil {
+				for _, rule := range *rules {
+					ruleOutput := map[string]interface{}{}
+
+					if rule.Id != nil {
+						ruleOutput["id"] = *rule.Id
+					}
+
+					if rule.Name != nil {
+						ruleOutput["name"] = *rule.Name
+					}
+
+					if ruleProps := rule.Properties; ruleProps != nil {
+						if pool := ruleProps.BackendAddressPool; pool != nil && pool.Id != nil {
+							poolId, err := parse.BackendAddressPoolIDInsensitively(*pool.Id)
+							if err != nil {
+								return nil, err
+							}
+							ruleOutput["backend_address_pool_name"] = poolId.Name
+							ruleOutput["backend_address_pool_id"] = poolId.ID()
+						}
+
+						if backend := ruleProps.BackendHTTPSettings; backend != nil && backend.Id != nil {
+							backendId, err := parse.BackendHttpSettingsCollectionIDInsensitively(*backend.Id)
+							if err != nil {
+								return nil, err
+							}
+							ruleOutput["backend_http_settings_name"] = backendId.BackendHttpSettingsCollectionName
+							ruleOutput["backend_http_settings_id"] = backendId.ID()
+						}
+
+						if redirect := ruleProps.RedirectConfiguration; redirect != nil && redirect.Id != nil {
+							redirectId, err := parse.RedirectConfigurationsIDInsensitively(*redirect.Id)
+							if err != nil {
+								return nil, err
+							}
+							ruleOutput["redirect_configuration_name"] = redirectId.RedirectConfigurationName
+							ruleOutput["redirect_configuration_id"] = redirectId.ID()
+						}
+
+						if rewrite := ruleProps.RewriteRuleSet; rewrite != nil && rewrite.Id != nil {
+							rewriteId, err := parse.RewriteRuleSetIDInsensitively(*rewrite.Id)
+							if err != nil {
+								return nil, err
+							}
+							ruleOutput["rewrite_rule_set_name"] = rewriteId.Name
+							ruleOutput["rewrite_rule_set_id"] = rewriteId.ID()
+						}
+
+						if fwp := ruleProps.FirewallPolicy; fwp != nil && fwp.Id != nil {
+							policyId, err := webapplicationfirewallpolicies.ParseApplicationGatewayWebApplicationFirewallPolicyIDInsensitively(*fwp.Id)
+							if err != nil {
+								return nil, err
+							}
+							ruleOutput["firewall_policy_id"] = policyId.ID()
+						}
+
+						pathOutputs := make([]interface{}, 0)
+						if paths := ruleProps.Paths; paths != nil {
+							for _, rulePath := range *paths {
+								pathOutputs = append(pathOutputs, rulePath)
+							}
+						}
+						ruleOutput["paths"] = pathOutputs
+					}
+
+					pathRules = append(pathRules, ruleOutput)
+				}
+			}
+			output["path_rule"] = pathRules
+		}
+
+		results = append(results, output)
+	}
+
+	return results, nil
+}

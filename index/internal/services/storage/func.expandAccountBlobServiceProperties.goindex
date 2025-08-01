@@ -1,0 +1,142 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/blobservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/fileservice"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
+	"github.com/hashicorp/go-azure-sdk/sdk/environments"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	keyVaultsClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/queue/queues"
+)
+func expandAccountBlobServiceProperties(kind storageaccounts.Kind, input []interface{}) (*blobservice.BlobServiceProperties, error) {
+	props := blobservice.BlobServicePropertiesProperties{
+		Cors: &blobservice.CorsRules{
+			CorsRules: &[]blobservice.CorsRule{},
+		},
+		DeleteRetentionPolicy: &blobservice.DeleteRetentionPolicy{
+			Enabled: utils.Bool(false),
+		},
+	}
+
+	// `Storage` (v1) kind doesn't support:
+	// - LastAccessTimeTrackingPolicy: Confirmed by SRP.
+	// - ChangeFeed: See https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blob-change-feed?tabs=azure-portal#enable-and-disable-the-change-feed.
+	// - Versioning: See https://learn.microsoft.com/en-us/azure/storage/blobs/versioning-overview#how-blob-versioning-works
+	// - Restore Policy: See https://learn.microsoft.com/en-us/azure/storage/blobs/point-in-time-restore-overview#prerequisites-for-point-in-time-restore
+	if kind != storageaccounts.KindStorage {
+		props.LastAccessTimeTrackingPolicy = &blobservice.LastAccessTimeTrackingPolicy{
+			Enable: false,
+		}
+		props.ChangeFeed = &blobservice.ChangeFeed{
+			Enabled: pointer.To(false),
+		}
+		props.IsVersioningEnabled = pointer.To(false)
+	}
+
+	if len(input) > 0 {
+		v := input[0].(map[string]interface{})
+
+		deletePolicyRaw := v["delete_retention_policy"].([]interface{})
+		props.DeleteRetentionPolicy = expandAccountBlobDeleteRetentionPolicy(deletePolicyRaw)
+
+		containerDeletePolicyRaw := v["container_delete_retention_policy"].([]interface{})
+		props.ContainerDeleteRetentionPolicy = expandAccountBlobContainerDeleteRetentionPolicy(containerDeletePolicyRaw)
+
+		corsRaw := v["cors_rule"].([]interface{})
+		props.Cors = expandAccountBlobPropertiesCors(corsRaw)
+
+		props.IsVersioningEnabled = pointer.To(v["versioning_enabled"].(bool))
+
+		if version, ok := v["default_service_version"].(string); ok && version != "" {
+			props.DefaultServiceVersion = pointer.To(version)
+		}
+
+		// `Storage` (v1) kind doesn't support:
+		// - LastAccessTimeTrackingPolicy
+		// - ChangeFeed
+		// - Versioning
+		// - RestorePolicy
+		lastAccessTimeEnabled := v["last_access_time_enabled"].(bool)
+		changeFeedEnabled := v["change_feed_enabled"].(bool)
+		changeFeedRetentionInDays := v["change_feed_retention_in_days"].(int)
+		restorePolicyRaw := v["restore_policy"].([]interface{})
+		versioningEnabled := v["versioning_enabled"].(bool)
+		if kind != storageaccounts.KindStorage {
+			props.LastAccessTimeTrackingPolicy = &blobservice.LastAccessTimeTrackingPolicy{
+				Enable: lastAccessTimeEnabled,
+			}
+			props.ChangeFeed = &blobservice.ChangeFeed{
+				Enabled: pointer.To(changeFeedEnabled),
+			}
+			if changeFeedRetentionInDays != 0 {
+				props.ChangeFeed.RetentionInDays = pointer.To(int64(changeFeedRetentionInDays))
+			}
+			props.RestorePolicy = expandAccountBlobPropertiesRestorePolicy(restorePolicyRaw)
+			props.IsVersioningEnabled = &versioningEnabled
+		} else {
+			if lastAccessTimeEnabled {
+				return nil, fmt.Errorf("`last_access_time_enabled` can not be configured when `kind` is set to `Storage` (v1)")
+			}
+			if changeFeedEnabled {
+				return nil, fmt.Errorf("`change_feed_enabled` can not be configured when `kind` is set to `Storage` (v1)")
+			}
+			if changeFeedRetentionInDays != 0 {
+				return nil, fmt.Errorf("`change_feed_retention_in_days` can not be configured when `kind` is set to `Storage` (v1)")
+			}
+			if len(restorePolicyRaw) != 0 {
+				return nil, fmt.Errorf("`restore_policy` can not be configured when `kind` is set to `Storage` (v1)")
+			}
+			if versioningEnabled {
+				return nil, fmt.Errorf("`versioning_enabled` can not be configured when `kind` is set to `Storage` (v1)")
+			}
+		}
+
+		// Sanity check for the prerequisites of restore_policy
+		// Ref: https://learn.microsoft.com/en-us/azure/storage/blobs/point-in-time-restore-overview#prerequisites-for-point-in-time-restore
+		if p := props.RestorePolicy; p != nil && p.Enabled {
+			if props.ChangeFeed == nil || props.ChangeFeed.Enabled == nil || !*props.ChangeFeed.Enabled {
+				return nil, fmt.Errorf("`change_feed_enabled` must be `true` when `restore_policy` is set")
+			}
+			if props.IsVersioningEnabled == nil || !*props.IsVersioningEnabled {
+				return nil, fmt.Errorf("`versioning_enabled` must be `true` when `restore_policy` is set")
+			}
+		}
+	}
+
+	return &blobservice.BlobServiceProperties{
+		Properties: &props,
+	}, nil
+}

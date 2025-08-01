@@ -1,0 +1,98 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func dataSourceArmLoadBalancerBackendAddressPoolRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	lbClient := meta.(*clients.Client).LoadBalancers.LoadBalancersClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	name := d.Get("name").(string)
+	loadBalancerId, err := loadbalancers.ParseLoadBalancerID(d.Get("loadbalancer_id").(string))
+	if err != nil {
+		return err
+	}
+	id := loadbalancers.NewLoadBalancerBackendAddressPoolID(loadBalancerId.SubscriptionId, loadBalancerId.ResourceGroupName, loadBalancerId.LoadBalancerName, name)
+
+	resp, err := lbClient.LoadBalancerBackendAddressPoolsGet(ctx, id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			return fmt.Errorf("%s was not found", id)
+		}
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	d.SetId(id.ID())
+
+	if model := resp.Model; model != nil {
+		if props := model.Properties; props != nil {
+			if err := d.Set("backend_address", flattenArmLoadBalancerBackendAddresses(props.LoadBalancerBackendAddresses)); err != nil {
+				return fmt.Errorf("setting `backend_address`: %v", err)
+			}
+
+			var backendIPConfigurations []interface{}
+			if beipConfigs := props.BackendIPConfigurations; beipConfigs != nil {
+				for _, config := range *beipConfigs {
+					ipConfig := make(map[string]interface{})
+					if id := config.Id; id != nil {
+						ipConfig["id"] = pointer.From(id)
+						backendIPConfigurations = append(backendIPConfigurations, ipConfig)
+					}
+				}
+			}
+			if err := d.Set("backend_ip_configurations", backendIPConfigurations); err != nil {
+				return fmt.Errorf("setting `backend_ip_configurations`: %v", err)
+			}
+
+			var loadBalancingRules []string
+			if rules := props.LoadBalancingRules; rules != nil {
+				for _, rule := range *rules {
+					if rule.Id == nil {
+						continue
+					}
+					loadBalancingRules = append(loadBalancingRules, pointer.From(rule.Id))
+				}
+			}
+			if err := d.Set("load_balancing_rules", loadBalancingRules); err != nil {
+				return fmt.Errorf("setting `load_balancing_rules`: %v", err)
+			}
+
+			var outboundRules []string
+			if rules := props.OutboundRules; rules != nil {
+				for _, rule := range *rules {
+					if rule.Id == nil {
+						continue
+					}
+					outboundRules = append(outboundRules, pointer.From(rule.Id))
+				}
+			}
+			if err := d.Set("outbound_rules", outboundRules); err != nil {
+				return fmt.Errorf("setting `outbound_rules`: %v", err)
+			}
+
+			var inboundNATRules []string
+			if rules := props.InboundNatRules; rules != nil {
+				for _, rule := range *rules {
+					if rule.Id == nil {
+						continue
+					}
+					inboundNATRules = append(inboundNATRules, pointer.From(rule.Id))
+				}
+			}
+			if err := d.Set("inbound_nat_rules", inboundNATRules); err != nil {
+				return fmt.Errorf("setting `inbound_nat_rules`: %v", err)
+			}
+		}
+	}
+
+	return nil
+}

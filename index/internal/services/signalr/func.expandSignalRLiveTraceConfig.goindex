@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/signalr/2023-02-01/signalr"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/migration"
+	signalrValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandSignalRLiveTraceConfig(input []interface{}) *signalr.LiveTraceConfiguration {
+	resourceCategories := make([]signalr.LiveTraceCategory, 0)
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	v := input[0].(map[string]interface{})
+
+	enabled := "false"
+	if v["enabled"].(bool) {
+		enabled = "true"
+	}
+
+	messageLogEnabled := "false"
+	if v["messaging_logs_enabled"].(bool) {
+		messageLogEnabled = "true"
+	}
+	resourceCategories = append(resourceCategories, signalr.LiveTraceCategory{
+		Name:    utils.String("MessagingLogs"),
+		Enabled: utils.String(messageLogEnabled),
+	})
+
+	connectivityLogEnabled := "false"
+	if v["connectivity_logs_enabled"].(bool) {
+		connectivityLogEnabled = "true"
+	}
+	resourceCategories = append(resourceCategories, signalr.LiveTraceCategory{
+		Name:    utils.String("ConnectivityLogs"),
+		Enabled: utils.String(connectivityLogEnabled),
+	})
+
+	httpLogEnabled := "false"
+	if v["http_request_logs_enabled"].(bool) {
+		httpLogEnabled = "true"
+	}
+	resourceCategories = append(resourceCategories, signalr.LiveTraceCategory{
+		Name:    utils.String("HttpRequestLogs"),
+		Enabled: utils.String(httpLogEnabled),
+	})
+
+	return &signalr.LiveTraceConfiguration{
+		Enabled:    &enabled,
+		Categories: &resourceCategories,
+	}
+}

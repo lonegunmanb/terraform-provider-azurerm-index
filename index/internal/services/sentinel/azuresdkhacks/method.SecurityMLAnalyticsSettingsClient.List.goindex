@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/azuresdkhacks
+import (
+	"context"
+	"net/http"
+
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/Azure/go-autorest/autorest/azure"
+	"github.com/Azure/go-autorest/autorest/validation"
+	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
+)
+func (client SecurityMLAnalyticsSettingsClient) List(ctx context.Context, resourceGroupName string, workspaceName string) (result SecurityMLAnalyticsSettingsListPage, err error) {
+	if err := validation.Validate([]validation.Validation{
+		{
+			TargetValue: client.SubscriptionID,
+			Constraints: []validation.Constraint{{Target: "client.SubscriptionID", Name: validation.MinLength, Rule: 1, Chain: nil}},
+		},
+		{
+			TargetValue: resourceGroupName,
+			Constraints: []validation.Constraint{
+				{Target: "resourceGroupName", Name: validation.MaxLength, Rule: 90, Chain: nil},
+				{Target: "resourceGroupName", Name: validation.MinLength, Rule: 1, Chain: nil},
+			},
+		},
+		{
+			TargetValue: workspaceName,
+			Constraints: []validation.Constraint{
+				{Target: "workspaceName", Name: validation.MaxLength, Rule: 90, Chain: nil},
+				{Target: "workspaceName", Name: validation.MinLength, Rule: 1, Chain: nil},
+			},
+		},
+	}); err != nil {
+		return result, validation.NewError("securityinsight.SecurityMLAnalyticsSettingsClient", "List", err.Error()) // nolint: govet
+	}
+
+	result.fn = client.listNextResults
+	req, err := client.ListPreparer(ctx, resourceGroupName, workspaceName)
+	if err != nil {
+		err = autorest.NewErrorWithError(err, "securityinsight.SecurityMLAnalyticsSettingsClient", "List", nil, "Failure preparing request")
+		return
+	}
+
+	resp, err := client.ListSender(req)
+	if err != nil {
+		result.smasl.Response = autorest.Response{Response: resp}
+		err = autorest.NewErrorWithError(err, "securityinsight.SecurityMLAnalyticsSettingsClient", "List", resp, "Failure sending request")
+		return
+	}
+
+	result.smasl, err = client.ListResponder(resp)
+	if err != nil {
+		err = autorest.NewErrorWithError(err, "securityinsight.SecurityMLAnalyticsSettingsClient", "List", resp, "Failure responding to request")
+		return
+	}
+	if result.smasl.hasNextLink() && result.smasl.IsEmpty() {
+		err = result.NextWithContext(ctx)
+		return
+	}
+
+	return
+}

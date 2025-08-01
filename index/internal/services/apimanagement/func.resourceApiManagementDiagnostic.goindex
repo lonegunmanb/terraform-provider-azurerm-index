@@ -1,0 +1,130 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/diagnostic"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/logger"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceApiManagementDiagnostic() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceApiManagementDiagnosticCreateUpdate,
+		Read:   resourceApiManagementDiagnosticRead,
+		Update: resourceApiManagementDiagnosticCreateUpdate,
+		Delete: resourceApiManagementDiagnosticDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := diagnostic.ParseDiagnosticID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"identifier": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					"applicationinsights",
+					"azuremonitor",
+				}, false),
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"api_management_name": schemaz.SchemaApiManagementName(),
+
+			"api_management_logger_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: logger.ValidateLoggerID,
+			},
+
+			"sampling_percentage": {
+				Type:         pluginsdk.TypeFloat,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validation.FloatBetween(0.0, 100.0),
+			},
+
+			"always_log_errors": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Computed: true,
+			},
+
+			"verbosity": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(diagnostic.VerbosityVerbose),
+					string(diagnostic.VerbosityInformation),
+					string(diagnostic.VerbosityError),
+				}, false),
+			},
+
+			"log_client_ip": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Computed: true,
+			},
+
+			"http_correlation_protocol": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				Computed: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(diagnostic.HTTPCorrelationProtocolNone),
+					string(diagnostic.HTTPCorrelationProtocolLegacy),
+					string(diagnostic.HTTPCorrelationProtocolWThreeC),
+				}, false),
+			},
+
+			"frontend_request": resourceApiManagementApiDiagnosticAdditionalContentSchema(),
+
+			"frontend_response": resourceApiManagementApiDiagnosticAdditionalContentSchema(),
+
+			"backend_request": resourceApiManagementApiDiagnosticAdditionalContentSchema(),
+
+			"backend_response": resourceApiManagementApiDiagnosticAdditionalContentSchema(),
+
+			"operation_name_format": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(diagnostic.OperationNameFormatName),
+					string(diagnostic.OperationNameFormatURL),
+				}, false),
+			},
+		},
+
+		CustomizeDiff: func(ctx context.Context, d *pluginsdk.ResourceDiff, i interface{}) error {
+			if _, n := d.GetChange("operation_name_format"); n != "" {
+				if d.Get("identifier") != "applicationinsights" {
+					return fmt.Errorf("`operation_name_format` cannot be set when `identifier` is not `applicationinsights`")
+				}
+			}
+
+			return nil
+		},
+	}
+}

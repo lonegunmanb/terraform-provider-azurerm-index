@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/magodo/terraform-provider-azurerm-example-gen/examplegen"
+)
+func (gen documentationGenerator) processElementForExample(field string, indentLevel int, elem interface{}, isAttribute bool) string {
+	indent := gen.buildIndentForExample(indentLevel)
+
+	// it's an array of something, work out what
+	if array, ok := elem.(*schema.Schema); ok {
+		switch array.Type {
+		case schema.TypeString:
+			return fmt.Sprintf("%s%s = [ \"example\" ]\n", indent, field)
+
+		case schema.TypeInt:
+			return fmt.Sprintf("%s%s = [ 1 ]\n", indent, field)
+
+		default:
+			return "TODO"
+		}
+	}
+
+	// otherwise it's a list so we're gonna have to go around
+	if list, ok := elem.(*schema.Resource); ok && len(list.Schema) > 0 {
+		innerFields := gen.requiredFieldsForExampleBlock(list.Schema, indentLevel+1)
+		attributeSyntax := ""
+		if isAttribute {
+			attributeSyntax = " ="
+		}
+		return fmt.Sprintf("\n%s%s%s {\n%s  %s\n%s}\n", indent, field, attributeSyntax, innerFields, indent, indent)
+	}
+
+	// unless something's broken, since this is likely during provider dev it's likely things could be missing
+	panic("Field %q has an Element but isn't a Set or List - double-check the schema")
+}

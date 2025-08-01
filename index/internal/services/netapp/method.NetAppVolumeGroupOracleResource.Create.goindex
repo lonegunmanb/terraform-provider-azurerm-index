@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/capacitypools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r NetAppVolumeGroupOracleResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 90 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.NetApp.VolumeGroupClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var model netAppModels.NetAppVolumeGroupOracleModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := volumegroups.NewVolumeGroupID(subscriptionId, model.ResourceGroupName, model.AccountName, model.Name)
+
+			metadata.Logger.Infof("Import check for %s", id)
+			existing, err := client.Get(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+
+			if existing.Model != nil && existing.Model.Id != nil && *existing.Model.Id != "" {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			volumeList, err := expandNetAppVolumeGroupOracleVolumes(model.Volumes)
+			if err != nil {
+				return err
+			}
+
+			// Performing some basic validations that are not possible in the schema
+			if errorList := netAppValidate.ValidateNetAppVolumeGroupOracleVolumes(volumeList); len(errorList) > 0 {
+				return fmt.Errorf("one or more issues found while performing deeper validations for %s:\n%+v", id, errorList)
+			}
+
+			parameters := volumegroups.VolumeGroupDetails{
+				Location: utils.String(location.Normalize(model.Location)),
+				Properties: &volumegroups.VolumeGroupProperties{
+					GroupMetaData: &volumegroups.VolumeGroupMetaData{
+						GroupDescription:      utils.String(model.GroupDescription),
+						ApplicationType:       pointer.To(volumegroups.ApplicationTypeORACLE),
+						ApplicationIdentifier: utils.String(model.ApplicationIdentifier),
+					},
+					Volumes: volumeList,
+				},
+			}
+
+			if err = client.CreateThenPoll(ctx, id, parameters); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			// Waiting for volume group be completely provisioned
+			if err := waitForVolumeGroupCreateOrUpdate(ctx, client, id); err != nil {
+				return fmt.Errorf("waiting creation %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			return nil
+		},
+	}
+}

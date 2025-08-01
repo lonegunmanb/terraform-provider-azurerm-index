@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
+)
+func (sbu BlobUpload) createEmptyPageBlob(ctx context.Context) error {
+	if sbu.Size == 0 {
+		return errors.New("`size` cannot be zero for a page blob")
+	}
+
+	input := blobs.PutPageBlobInput{
+		BlobContentLengthBytes: int64(sbu.Size),
+		ContentType:            pointer.To(sbu.ContentType),
+		MetaData:               sbu.MetaData,
+	}
+	if sbu.EncryptionScope != "" {
+		input.EncryptionScope = pointer.To(sbu.EncryptionScope)
+	}
+	if _, err := sbu.Client.PutPageBlob(ctx, sbu.ContainerName, sbu.BlobName, input); err != nil {
+		return fmt.Errorf("PutPageBlob: %s", err)
+	}
+
+	return nil
+}

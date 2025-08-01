@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2022-04-01-preview/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func parseNumberOfWorkersProperties(numberOfWorkersProperty string) (int, int, error) {
+	// The number of workers should be either a fixed number (no autoscaling) or have a format of min:max if autoscaling is set.
+	numOfWorkersParts := strings.Split(numberOfWorkersProperty, ":")
+
+	var min int
+	var max int
+	var err error
+	switch len(numOfWorkersParts) {
+	case 1:
+		min, err = strconv.Atoi(numOfWorkersParts[0])
+	case 2:
+		if min, err = strconv.Atoi(numOfWorkersParts[0]); err == nil {
+			max, err = strconv.Atoi(numOfWorkersParts[1])
+		}
+	default:
+		err = fmt.Errorf("Number of workers property has unknown format: %s", numberOfWorkersProperty)
+	}
+
+	return min, max, err
+}

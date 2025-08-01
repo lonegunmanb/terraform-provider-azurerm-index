@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	artifacts "github.com/jackofallops/kermit/sdk/synapse/2021-06-01-preview/synapse"
+)
+func checkLinkedServiceResponse(response *http.Response) error {
+	respBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return fmt.Errorf("reading status response body: %+v", err)
+	}
+	defer response.Body.Close()
+
+	body := make(map[string]interface{})
+	err = json.Unmarshal(respBody, &body)
+	if err != nil {
+		return fmt.Errorf("could not parse status response: %+v", err)
+	}
+
+	if statusRaw, ok := body["status"]; ok && statusRaw != nil {
+		if status, ok := statusRaw.(string); ok {
+			if status == "Failed" {
+				if errorRaw, ok := body["error"]; ok && errorRaw != nil {
+					if responseError, ok := errorRaw.(map[string]interface{}); ok {
+						if messageRaw, ok := responseError["message"]; ok && messageRaw != nil {
+							if message, ok := messageRaw.(string); ok {
+								return fmt.Errorf("creating/updating Linked Service: %s", message)
+							}
+						}
+					}
+				}
+				// we are specifically checking for `error` in the payload but if the status is Failed, we should return what we know
+				return fmt.Errorf("creating/updating Linked Service: %+v", body)
+			}
+		}
+	}
+
+	return nil
+}

@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/web
+import (
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/web/mgmt/2021-02-01/web" // nolint: staticcheck
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAppServiceBackup(input []interface{}) *web.BackupRequest {
+	if len(input) == 0 {
+		return nil
+	}
+
+	vals := input[0].(map[string]interface{})
+
+	name := vals["name"].(string)
+	storageAccountUrl := vals["storage_account_url"].(string)
+	enabled := vals["enabled"].(bool)
+
+	request := &web.BackupRequest{
+		BackupRequestProperties: &web.BackupRequestProperties{
+			BackupName:        utils.String(name),
+			StorageAccountURL: utils.String(storageAccountUrl),
+			Enabled:           utils.Bool(enabled),
+		},
+	}
+
+	scheduleRaw := vals["schedule"].([]interface{})
+	if len(scheduleRaw) > 0 {
+		schedule := scheduleRaw[0].(map[string]interface{})
+		backupSchedule := web.BackupSchedule{}
+
+		if v, ok := schedule["frequency_interval"].(int); ok {
+			backupSchedule.FrequencyInterval = utils.Int32(int32(v))
+		}
+
+		if v, ok := schedule["frequency_unit"]; ok {
+			backupSchedule.FrequencyUnit = web.FrequencyUnit(v.(string))
+		}
+
+		if v, ok := schedule["keep_at_least_one_backup"]; ok {
+			backupSchedule.KeepAtLeastOneBackup = utils.Bool(v.(bool))
+		}
+
+		if v, ok := schedule["retention_period_in_days"].(int); ok {
+			backupSchedule.RetentionPeriodInDays = utils.Int32(int32(v))
+		}
+
+		if v, ok := schedule["start_time"].(string); ok {
+			dateTimeToStart, _ := time.Parse(time.RFC3339, v) // validated by schema
+			backupSchedule.StartTime = &date.Time{Time: dateTimeToStart}
+		}
+
+		request.BackupRequestProperties.BackupSchedule = &backupSchedule
+	}
+
+	return request
+}

@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func updateCustomHTTPSConfiguration(ctx context.Context, client *frontdoors.FrontDoorsClient, input customHttpsConfigurationUpdateInput) error {
+	// Locking to prevent parallel changes causing issues
+	frontendEndpointResourceId := input.frontendEndpointId.ID()
+	locks.ByID(frontendEndpointResourceId)
+	defer locks.UnlockByID(frontendEndpointResourceId)
+
+	if input.provisioningState == "" {
+		return nil
+	}
+
+	// Check to see if we are going to change the CustomHTTPSProvisioningState, if so check to
+	// see if its current state is configurable, if not return an error...
+	if input.customHttpsProvisioningEnabled != NormalizeCustomHTTPSProvisioningStateToBool(input.provisioningState) {
+		if err := isFrontDoorFrontendEndpointConfigurable(input.provisioningState, input.customHttpsProvisioningEnabled, input.frontendEndpointId); err != nil {
+			return err
+		}
+	}
+
+	if input.customHttpsProvisioningEnabled {
+		if len(input.customHttpsConfigurationNew) > 0 && input.customHttpsConfigurationNew[0] != nil {
+			customHTTPSConfiguration := input.customHttpsConfigurationNew[0].(map[string]interface{})
+			minTLSVersion := frontdoors.MinimumTLSVersionOnePointTwo // Default to TLS 1.2
+			if httpsConfig := input.customHttpsConfigurationCurrent; httpsConfig != nil {
+				minTLSVersion = httpsConfig.MinimumTlsVersion
+			}
+			customHTTPSConfigurationUpdate := makeCustomHTTPSConfiguration(customHTTPSConfiguration, minTLSVersion)
+			if input.provisioningState == frontdoors.CustomHTTPSProvisioningStateDisabled || customHTTPSConfigurationUpdate != *input.customHttpsConfigurationCurrent {
+				// Enable Custom Domain HTTPS for the Frontend Endpoint
+				if err := resourceFrontDoorFrontendEndpointEnableHttpsProvisioning(ctx, client, input.frontendEndpointId, true, customHTTPSConfigurationUpdate); err != nil {
+					return fmt.Errorf("unable to enable/update Custom Domain HTTPS for Frontend Endpoint %q (Resource Group %q): %+v", input.frontendEndpointId.FrontendEndpointName, input.frontendEndpointId.ResourceGroupName, err)
+				}
+			}
+		}
+	} else if !input.customHttpsProvisioningEnabled && input.provisioningState == frontdoors.CustomHTTPSProvisioningStateEnabled {
+		// Disable Custom Domain HTTPS for the Frontend Endpoint
+		if err := resourceFrontDoorFrontendEndpointEnableHttpsProvisioning(ctx, client, input.frontendEndpointId, false, frontdoors.CustomHTTPSConfiguration{}); err != nil {
+			return fmt.Errorf("unable to disable Custom Domain HTTPS for Frontend Endpoint %q (Resource Group %q): %+v", input.frontendEndpointId.FrontendEndpointName, input.frontendEndpointId.ResourceGroupName, err)
+		}
+	}
+
+	return nil
+}

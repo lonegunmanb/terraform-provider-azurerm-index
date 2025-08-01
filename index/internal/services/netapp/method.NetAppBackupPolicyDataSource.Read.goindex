@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/backuppolicy"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r NetAppBackupPolicyDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.NetApp.BackupPolicyClient
+
+			var state netAppModels.NetAppBackupPolicyModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			backupPolicyID := backuppolicy.NewBackupPolicyID(metadata.Client.Account.SubscriptionId, state.ResourceGroupName, state.AccountName, state.Name)
+
+			existing, err := client.BackupPoliciesGet(ctx, backupPolicyID)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("%s was not found", backupPolicyID)
+				}
+				return fmt.Errorf("retrieving %s: %v", backupPolicyID, err)
+			}
+
+			if model := existing.Model; model != nil {
+				state.Location = location.Normalize(model.Location)
+				state.Tags = pointer.From(model.Tags)
+				state.DailyBackupsToKeep = pointer.From(model.Properties.DailyBackupsToKeep)
+				state.WeeklyBackupsToKeep = pointer.From(model.Properties.WeeklyBackupsToKeep)
+				state.MonthlyBackupsToKeep = pointer.From(model.Properties.MonthlyBackupsToKeep)
+				state.Enabled = pointer.From(model.Properties.Enabled)
+			}
+
+			metadata.SetID(backupPolicyID)
+
+			return metadata.Encode(&state)
+		},
+	}
+}

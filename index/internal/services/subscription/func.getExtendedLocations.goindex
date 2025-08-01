@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/subscription
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-12-01/subscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func getExtendedLocations(input *[]subscriptions.Location, normalizedLocation string) []interface{} {
+	results := make([]interface{}, 0)
+	if input == nil {
+		return results
+	}
+
+	for _, item := range *input {
+		if item.Type == nil || item.Metadata == nil || item.Metadata.HomeLocation == nil || item.Name == nil {
+			continue
+		}
+
+		if *item.Type != subscriptions.LocationTypeEdgeZone {
+			continue
+		}
+
+		if location.Normalize(*item.Metadata.HomeLocation) != normalizedLocation {
+			continue
+		}
+
+		results = append(results, location.Normalize(*item.Name))
+	}
+
+	return results
+}

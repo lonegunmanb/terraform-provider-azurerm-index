@@ -1,0 +1,114 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"math"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func ExpandAuthSettings(auth []AuthSettings) *webapps.SiteAuthSettings {
+	result := &webapps.SiteAuthSettings{}
+	if len(auth) == 0 {
+		return result
+	}
+
+	props := &webapps.SiteAuthSettingsProperties{}
+
+	v := auth[0]
+
+	props.Enabled = pointer.To(v.Enabled)
+
+	additionalLoginParams := make([]string, 0)
+	if len(v.AdditionalLoginParameters) > 0 {
+		for k, s := range v.AdditionalLoginParameters {
+			additionalLoginParams = append(additionalLoginParams, fmt.Sprintf("%s=%s", k, s))
+		}
+		props.AdditionalLoginParams = &additionalLoginParams
+	}
+
+	props.AllowedExternalRedirectURLs = &v.AllowedExternalRedirectURLs
+
+	props.DefaultProvider = pointer.To(webapps.BuiltInAuthenticationProvider(v.DefaultProvider))
+
+	props.Issuer = pointer.To(v.Issuer)
+
+	props.RuntimeVersion = pointer.To(v.RuntimeVersion)
+
+	props.TokenStoreEnabled = pointer.To(v.TokenStoreEnabled)
+
+	props.TokenRefreshExtensionHours = pointer.To(v.TokenRefreshExtensionHours)
+
+	props.UnauthenticatedClientAction = pointer.To(webapps.UnauthenticatedClientAction(v.UnauthenticatedClientAction))
+
+	a := AadAuthSettings{}
+	if len(v.AzureActiveDirectoryAuth) > 0 {
+		a = v.AzureActiveDirectoryAuth[0]
+	}
+	props.ClientId = pointer.To(a.ClientId)
+
+	if a.ClientSecret != "" {
+		props.ClientSecret = pointer.To(a.ClientSecret)
+	}
+
+	if a.ClientSecretSettingName != "" {
+		props.ClientSecretSettingName = pointer.To(a.ClientSecretSettingName)
+	}
+
+	props.AllowedAudiences = &a.AllowedAudiences
+
+	f := FacebookAuthSettings{}
+	if len(v.FacebookAuth) > 0 {
+		f = v.FacebookAuth[0]
+	}
+	props.FacebookAppId = pointer.To(f.AppId)
+	props.FacebookAppSecret = pointer.To(f.AppSecret)
+	props.FacebookAppSecretSettingName = pointer.To(f.AppSecretSettingName)
+	props.FacebookOAuthScopes = &f.OauthScopes
+
+	gh := GithubAuthSettings{}
+	if len(v.GithubAuth) > 0 {
+		gh = v.GithubAuth[0]
+	}
+	props.GitHubClientId = pointer.To(gh.ClientId)
+	props.GitHubClientSecret = pointer.To(gh.ClientSecret)
+	props.GitHubClientSecretSettingName = pointer.To(gh.ClientSecretSettingName)
+	props.GitHubOAuthScopes = &gh.OAuthScopes
+
+	g := GoogleAuthSettings{}
+	if len(v.GoogleAuth) > 0 {
+		g = v.GoogleAuth[0]
+	}
+
+	props.GoogleClientId = pointer.To(g.ClientId)
+	props.GoogleClientSecret = pointer.To(g.ClientSecret)
+	props.GoogleClientSecretSettingName = pointer.To(g.ClientSecretSettingName)
+	props.GoogleOAuthScopes = &g.OauthScopes
+
+	m := MicrosoftAuthSettings{}
+	if len(v.MicrosoftAuth) > 0 {
+		m = v.MicrosoftAuth[0]
+	}
+	props.MicrosoftAccountClientId = pointer.To(m.ClientId)
+	props.MicrosoftAccountClientSecret = pointer.To(m.ClientSecret)
+	props.MicrosoftAccountClientSecretSettingName = pointer.To(m.ClientSecretSettingName)
+	props.MicrosoftAccountOAuthScopes = &m.OauthScopes
+
+	t := TwitterAuthSettings{}
+	if len(v.TwitterAuth) > 0 {
+		t = v.TwitterAuth[0]
+	}
+	props.TwitterConsumerKey = pointer.To(t.ConsumerKey)
+	props.TwitterConsumerSecret = pointer.To(t.ConsumerSecret)
+	props.TwitterConsumerSecretSettingName = pointer.To(t.ConsumerSecretSettingName)
+
+	result.Properties = props
+
+	return result
+}

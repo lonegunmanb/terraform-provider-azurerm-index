@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/localnetworkgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandVirtualNetworkGatewayBgpPeeringAddresses(id virtualnetworkgateways.VirtualNetworkGatewayId, ipConfig, input []interface{}) (*[]virtualnetworkgateways.IPConfigurationBgpPeeringAddress, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	result := make([]virtualnetworkgateways.IPConfigurationBgpPeeringAddress, 0)
+
+	var existIpConfigName string
+	if len(ipConfig) == 1 {
+		existIpConfigName = ipConfig[0].(map[string]interface{})["name"].(string)
+	}
+
+	for _, e := range input {
+		if e == nil {
+			continue
+		}
+		b := e.(map[string]interface{})
+
+		ipConfigName := b["ip_configuration_name"].(string)
+
+		if ipConfigName == "" {
+			// existIpConfigName is empty means there are more than one `ip_configuration` blocks, in which case users have to specify the
+			// `ip_configuration_name` used in current `peering_addresses` setting.
+			if existIpConfigName == "" {
+				return nil, fmt.Errorf("`ip_configuration_name` has to be set in current `peering_addresses` block in case there are multiple `ip_configuration` blocks")
+			}
+
+			ipConfigName = existIpConfigName
+		}
+
+		// If there is an existing ip configuration name defined in the only `ip_configuration` block, and users explicitly set the `ip_configuration_name` in current
+		// `peering_addresses` block, they should be the same name.
+		if existIpConfigName != "" && ipConfigName != "" {
+			if ipConfigName != existIpConfigName {
+				return nil, fmt.Errorf("`ip_configuration.0.name` is not the same as `bgp_settings.0.peering_addresses.*.ip_configuration_name`")
+			}
+		}
+
+		ipConfigId := parse.NewVirtualNetworkGatewayIpConfigurationID(id.SubscriptionId, id.ResourceGroupName, id.VirtualNetworkGatewayName, ipConfigName)
+		result = append(result, virtualnetworkgateways.IPConfigurationBgpPeeringAddress{
+			IPconfigurationId:    pointer.To(ipConfigId.ID()),
+			CustomBgpIPAddresses: utils.ExpandStringSlice(b["apipa_addresses"].([]interface{})),
+		})
+	}
+
+	return &result, nil
+}

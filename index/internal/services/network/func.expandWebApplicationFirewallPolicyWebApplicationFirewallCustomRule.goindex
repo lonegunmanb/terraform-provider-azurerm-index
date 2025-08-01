@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandWebApplicationFirewallPolicyWebApplicationFirewallCustomRule(input []interface{}) *[]webapplicationfirewallpolicies.WebApplicationFirewallCustomRule {
+	results := make([]webapplicationfirewallpolicies.WebApplicationFirewallCustomRule, 0)
+	for _, item := range input {
+		v := item.(map[string]interface{})
+		name := v["name"].(string)
+		priority := v["priority"].(int)
+		ruleType := v["rule_type"].(string)
+		matchConditions := v["match_conditions"].([]interface{})
+		action := v["action"].(string)
+
+		enabled := webapplicationfirewallpolicies.WebApplicationFirewallStateEnabled
+		if value, ok := v["enabled"].(bool); ok && !value {
+			enabled = webapplicationfirewallpolicies.WebApplicationFirewallStateDisabled
+		}
+
+		result := webapplicationfirewallpolicies.WebApplicationFirewallCustomRule{
+			State:           pointer.To(enabled),
+			Action:          webapplicationfirewallpolicies.WebApplicationFirewallAction(action),
+			MatchConditions: expandWebApplicationFirewallPolicyMatchCondition(matchConditions),
+			Name:            pointer.To(name),
+			Priority:        int64(priority),
+			RuleType:        webapplicationfirewallpolicies.WebApplicationFirewallRuleType(ruleType),
+		}
+
+		if rateLimitDuration, ok := v["rate_limit_duration"]; ok && rateLimitDuration.(string) != "" {
+			result.RateLimitDuration = pointer.To(webapplicationfirewallpolicies.ApplicationGatewayFirewallRateLimitDuration(rateLimitDuration.(string)))
+		}
+
+		if rateLimitThreshHold, ok := v["rate_limit_threshold"]; ok && rateLimitThreshHold.(int) > 0 {
+			result.RateLimitThreshold = pointer.To(int64(rateLimitThreshHold.(int)))
+		}
+
+		if groupBy, ok := v["group_rate_limit_by"]; ok && groupBy.(string) != "" {
+			groups := []webapplicationfirewallpolicies.GroupByUserSession{
+				{
+					GroupByVariables: []webapplicationfirewallpolicies.GroupByVariable{
+						{
+							VariableName: webapplicationfirewallpolicies.ApplicationGatewayFirewallUserSessionVariable(groupBy.(string)),
+						},
+					},
+				},
+			}
+			result.GroupByUserSession = &groups
+		}
+
+		results = append(results, result)
+	}
+	return &results
+}

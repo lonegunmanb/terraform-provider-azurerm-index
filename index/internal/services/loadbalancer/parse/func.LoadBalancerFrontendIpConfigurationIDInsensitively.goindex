@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/parse
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+)
+func LoadBalancerFrontendIpConfigurationIDInsensitively(input string) (*LoadBalancerFrontendIpConfigurationId, error) {
+	id, err := resourceids.ParseAzureResourceID(input)
+	if err != nil {
+		return nil, err
+	}
+
+	resourceId := LoadBalancerFrontendIpConfigurationId{
+		SubscriptionId: id.SubscriptionID,
+		ResourceGroup:  id.ResourceGroup,
+	}
+
+	if resourceId.SubscriptionId == "" {
+		return nil, errors.New("ID was missing the 'subscriptions' element")
+	}
+
+	if resourceId.ResourceGroup == "" {
+		return nil, errors.New("ID was missing the 'resourceGroups' element")
+	}
+
+	// find the correct casing for the 'loadBalancers' segment
+	loadBalancersKey := "loadBalancers"
+	for key := range id.Path {
+		if strings.EqualFold(key, loadBalancersKey) {
+			loadBalancersKey = key
+			break
+		}
+	}
+	if resourceId.LoadBalancerName, err = id.PopSegment(loadBalancersKey); err != nil {
+		return nil, err
+	}
+
+	// find the correct casing for the 'frontendIPConfigurations' segment
+	frontendIPConfigurationsKey := "frontendIPConfigurations"
+	for key := range id.Path {
+		if strings.EqualFold(key, frontendIPConfigurationsKey) {
+			frontendIPConfigurationsKey = key
+			break
+		}
+	}
+	if resourceId.FrontendIPConfigurationName, err = id.PopSegment(frontendIPConfigurationsKey); err != nil {
+		return nil, err
+	}
+
+	if err := id.ValidateNoEmptySegments(input); err != nil {
+		return nil, err
+	}
+
+	return &resourceId, nil
+}

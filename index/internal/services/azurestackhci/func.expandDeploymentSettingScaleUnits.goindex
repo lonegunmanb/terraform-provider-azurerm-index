@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/azurestackhci
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/azurestackhci/2024-01-01/deploymentsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/azurestackhci/2024-01-01/storagecontainers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/extendedlocation/2021-08-15/customlocations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hybridcompute/2022-11-10/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resourceconnector/2022-10-27/appliances"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandDeploymentSettingScaleUnits(input []ScaleUnitModel) []deploymentsettings.ScaleUnits {
+	if len(input) == 0 {
+		return nil
+	}
+
+	results := make([]deploymentsettings.ScaleUnits, 0, len(input))
+	for _, item := range input {
+		results = append(results, deploymentsettings.ScaleUnits{
+			DeploymentData: deploymentsettings.DeploymentData{
+				AdouPath:              pointer.To(item.ActiveDirectoryOrganizationalUnitPath),
+				Cluster:               expandDeploymentSettingCluster(item.Cluster),
+				DomainFqdn:            pointer.To(item.DomainFqdn),
+				HostNetwork:           expandDeploymentSettingHostNetwork(item.HostNetwork),
+				InfrastructureNetwork: expandDeploymentSettingInfrastructureNetwork(item.InfrastructureNetwork),
+				NamingPrefix:          pointer.To(item.NamePrefix),
+				Observability:         expandDeploymentSettingObservability(item),
+				OptionalServices:      expandDeploymentSettingOptionalService(item.OptionalService),
+				PhysicalNodes:         expandDeploymentSettingPhysicalNode(item.PhysicalNode),
+				SecretsLocation:       pointer.To(item.SecretsLocation),
+				SecuritySettings:      expandDeploymentSettingSecuritySetting(item),
+				Storage:               expandDeploymentSettingStorage(item.Storage),
+			},
+		})
+	}
+
+	return results
+}

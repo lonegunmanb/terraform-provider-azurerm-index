@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate
+import (
+	"context"
+	"fmt"
+	"net/http"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumequotarules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2024-03-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+)
+func ValidateNetAppVolumeQuotaRuleQuotaType(quotaType *volumequotarules.Type, quotaTarget *string) []error {
+	errors := make([]error, 0)
+
+	// Quota Target must be defined for IndividualUserQuota
+	if quotaType != nil && pointer.From(quotaType) == volumequotarules.TypeIndividualUserQuota && (quotaTarget == nil || pointer.From(quotaTarget) == "") {
+		errors = append(errors, fmt.Errorf("'individualUserQuota must have quota target defined'"))
+	}
+
+	// Quota Target must be defined for IndividualGroupQuota
+	if quotaType != nil && pointer.From(quotaType) == volumequotarules.TypeIndividualGroupQuota && (quotaTarget == nil || pointer.From(quotaTarget) == "") {
+		errors = append(errors, fmt.Errorf("'individualGroupQuota must have quota target defined'"))
+	}
+
+	// DefaultUserQuota quota type cannot have quota target defined
+	if quotaType != nil && pointer.From(quotaType) == volumequotarules.TypeDefaultUserQuota && (quotaTarget != nil && pointer.From(quotaTarget) != "") {
+		errors = append(errors, fmt.Errorf("'defaultUserQuota cannot have quota target defined, defined quota target is %v'", pointer.From(quotaTarget)))
+	}
+
+	// DefaultGroupQuota quota type cannot have quota target defined
+	if quotaType != nil && pointer.From(quotaType) == volumequotarules.TypeDefaultGroupQuota && (quotaTarget != nil && pointer.From(quotaTarget) != "") {
+		errors = append(errors, fmt.Errorf("'defaultGroupQuota cannot have quota target defined, defined quota target is %v'", pointer.From(quotaTarget)))
+	}
+
+	return errors
+}

@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/serviceconnector
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicelinker/2022-05-01/links"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicelinker/2024-04-01/servicelinker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandServiceConnectorAuthInfoForUpdate(input []AuthInfoModel) (links.AuthInfoBase, error) {
+	if err := validateServiceConnectorAuthInfo(input); err != nil {
+		return nil, err
+	}
+
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	in := input[0]
+	switch links.AuthType(in.Type) {
+	case links.AuthTypeSecret:
+		return links.SecretAuthInfo{
+			Name: pointer.To(in.Name),
+			SecretInfo: links.ValueSecretInfo{
+				Value: pointer.To(in.Secret),
+			},
+		}, nil
+
+	case links.AuthTypeServicePrincipalSecret:
+		return links.ServicePrincipalSecretAuthInfo{
+			ClientId:    in.ClientId,
+			PrincipalId: in.PrincipalId,
+			Secret:      in.Secret,
+		}, nil
+
+	case links.AuthTypeServicePrincipalCertificate:
+		return links.ServicePrincipalCertificateAuthInfo{
+			Certificate: in.Certificate,
+			ClientId:    in.ClientId,
+			PrincipalId: in.PrincipalId,
+		}, nil
+
+	case links.AuthTypeSystemAssignedIdentity:
+		return links.SystemAssignedIdentityAuthInfo{}, nil
+
+	case links.AuthTypeUserAssignedIdentity:
+		return links.UserAssignedIdentityAuthInfo{
+			ClientId:       pointer.To(in.ClientId),
+			SubscriptionId: pointer.To(in.SubscriptionId),
+		}, nil
+	}
+
+	return nil, fmt.Errorf("unrecognised authentication type: %q", in.Type)
+}

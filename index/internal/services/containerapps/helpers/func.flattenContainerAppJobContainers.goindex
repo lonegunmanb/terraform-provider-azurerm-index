@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers
+import (
+	"reflect"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2024-02-02-preview/jobs"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenContainerAppJobContainers(input *[]jobs.Container) []Container {
+	if input == nil || len(*input) == 0 {
+		return []Container{}
+	}
+	result := make([]Container, 0)
+	for _, v := range *input {
+		container := Container{
+			Name:         pointer.From(v.Name),
+			Image:        pointer.From(v.Image),
+			Args:         pointer.From(v.Args),
+			Command:      pointer.From(v.Command),
+			Env:          flattenContainerJobEnvVar(v.Env),
+			VolumeMounts: flattenContainerJobVolumeMounts(v.VolumeMounts),
+		}
+		if v.Probes != nil {
+			for _, p := range *v.Probes {
+				switch *p.Type {
+				case jobs.TypeLiveness:
+					container.LivenessProbe = flattenContainerAppJobLivenessProbe(p)
+				case jobs.TypeReadiness:
+					container.ReadinessProbe = flattenContainerAppJobReadinessProbe(p)
+				case jobs.TypeStartup:
+					container.StartupProbe = flattenContainerAppJobStartupProbe(p)
+				}
+			}
+		}
+
+		if resources := v.Resources; resources != nil {
+			container.CPU = pointer.From(resources.Cpu)
+			container.EphemeralStorage = pointer.From(resources.EphemeralStorage)
+			container.Memory = pointer.From(resources.Memory)
+		}
+
+		result = append(result, container)
+	}
+	return result
+}

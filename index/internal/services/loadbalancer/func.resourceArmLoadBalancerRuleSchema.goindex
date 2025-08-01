@@ -1,0 +1,120 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	loadBalancerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceArmLoadBalancerRuleSchema() map[string]*pluginsdk.Schema {
+	resource := map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: loadBalancerValidate.RuleName,
+		},
+
+		"loadbalancer_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: loadbalancers.ValidateLoadBalancerID,
+		},
+
+		"frontend_ip_configuration_name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"frontend_ip_configuration_id": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"backend_address_pool_ids": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MinItems: 1,
+			MaxItems: 2, // Only Gateway SKU LB can have 2 backend address pools
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: loadbalancers.ValidateLoadBalancerBackendAddressPoolID,
+			},
+		},
+
+		"protocol": {
+			Type:             pluginsdk.TypeString,
+			Required:         true,
+			DiffSuppressFunc: suppress.CaseDifference,
+			ValidateFunc: validation.StringInSlice([]string{
+				string(loadbalancers.TransportProtocolAll),
+				string(loadbalancers.TransportProtocolTcp),
+				string(loadbalancers.TransportProtocolUdp),
+			}, false),
+		},
+
+		"frontend_port": {
+			Type:         pluginsdk.TypeInt,
+			Required:     true,
+			ValidateFunc: validate.PortNumberOrZero,
+		},
+
+		"backend_port": {
+			Type:         pluginsdk.TypeInt,
+			Required:     true,
+			ValidateFunc: validate.PortNumberOrZero,
+		},
+
+		"probe_id": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+		},
+
+		// TODO 4.0: change this from enable_* to *_enabled
+		"enable_floating_ip": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+		},
+
+		// TODO 4.0: change this from enable_* to *_enabled
+		"enable_tcp_reset": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+		},
+
+		"disable_outbound_snat": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+		},
+
+		"idle_timeout_in_minutes": {
+			Type:         pluginsdk.TypeInt,
+			Optional:     true,
+			Default:      4,
+			ValidateFunc: validation.IntBetween(4, 100),
+		},
+
+		"load_distribution": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Default:  string(loadbalancers.LoadDistributionDefault),
+		},
+	}
+
+	return resource
+}

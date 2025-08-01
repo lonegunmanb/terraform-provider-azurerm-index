@@ -1,0 +1,136 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+)
+func (id ResourceIdGenerator) testCodeForParser() string {
+	testCases := make([]string, 0)
+	testCases = append(testCases, `
+		{
+			// empty
+			Input: "",
+			Error: true,
+		},
+`)
+	assignmentChecks := make([]string, 0)
+	for _, segment := range id.Segments {
+		testCaseFmt := `
+		{
+			// missing %s
+			Input: %q,
+			Error: true,
+		},`
+		// missing the key
+		resourceIdToThisPointIndex := strings.Index(id.IDRaw, segment.SegmentKey)
+		resourceIdToThisPoint := id.IDRaw[0:resourceIdToThisPointIndex]
+		testCases = append(testCases, fmt.Sprintf(testCaseFmt, segment.FieldName, resourceIdToThisPoint))
+
+		// missing the value
+		resourceIdToThisPointIndex = strings.Index(id.IDRaw, segment.SegmentValue)
+		resourceIdToThisPoint = id.IDRaw[0:resourceIdToThisPointIndex]
+		testCases = append(testCases, fmt.Sprintf(testCaseFmt, fmt.Sprintf("value for %s", segment.FieldName), resourceIdToThisPoint))
+
+		assignmentsFmt := "\t\tif actual.%[1]s != v.Expected.%[1]s {\n\t\t\tt.Fatalf(\"Expected %%q but got %%q for %[1]s\", v.Expected.%[1]s, actual.%[1]s)\n\t\t}"
+		assignmentChecks = append(assignmentChecks, fmt.Sprintf(assignmentsFmt, segment.FieldName))
+	}
+
+	// add a successful test case
+	expectAssignments := make([]string, 0)
+	for _, segment := range id.Segments {
+		expectAssignments = append(expectAssignments, fmt.Sprintf("\t\t\t\t%s:\t%q,", segment.FieldName, segment.SegmentValue))
+	}
+	typeName := fmt.Sprintf("%sId", id.TypeName)
+	if id.TestPackageSuffix != "" {
+		typeName = fmt.Sprintf("parse.%s", typeName)
+	}
+	testCases = append(testCases, fmt.Sprintf(`
+		{
+			// valid
+			Input: "%[1]s",
+			Expected: &%[2]s{
+%[3]s
+			},
+		},
+`, id.IDRaw, typeName, strings.Join(expectAssignments, "\n")))
+
+	// add an intentionally failing upper-cased test case
+	testCases = append(testCases, fmt.Sprintf(`
+		{
+			// upper-cased
+			Input: %q,
+			Error: true,
+		},`, strings.ToUpper(id.IDRaw)))
+
+	testCasesStr := strings.Join(testCases, "\n")
+	assignmentCheckStr := strings.Join(assignmentChecks, "\n")
+
+	if id.TestPackageSuffix == "" {
+		return fmt.Sprintf(`
+func Test%[1]sID(t *testing.T) {
+	testData := []struct {
+		Input  string
+		Error  bool
+		Expected *%[1]sId
+	}{%[2]s
+	}
+
+	for _, v := range testData {
+		t.Logf("[DEBUG] Testing %%q", v.Input)
+
+		actual, err := %[1]sID(v.Input)
+		if err != nil {
+			if v.Error {
+				continue
+			}
+
+			t.Fatalf("Expect a value but got an error: %%s", err)
+		}
+		if v.Error {
+			t.Fatal("Expect an error but didn't get one")
+		}
+
+%[3]s
+	}
+}
+`, id.TypeName, testCasesStr, assignmentCheckStr)
+	}
+
+	return fmt.Sprintf(`
+func Test%[1]sID(t *testing.T) {
+	testData := []struct {
+		Input  string
+		Error  bool
+		Expected *parse.%[1]sId
+	}{%[2]s
+	}
+
+	for _, v := range testData {
+		t.Logf("[DEBUG] Testing %%q", v.Input)
+
+		actual, err := parse.%[1]sID(v.Input)
+		if err != nil {
+			if v.Error {
+				continue
+			}
+
+			t.Fatalf("Expect a value but got an error: %%s", err)
+		}
+		if v.Error {
+			t.Fatal("Expect an error but didn't get one")
+		}
+
+%[3]s
+	}
+}
+`, id.TypeName, testCasesStr, assignmentCheckStr)
+}

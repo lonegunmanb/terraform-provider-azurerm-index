@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/analysisservices
+import (
+	"bytes"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/analysisservices/2017-08-01/servers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/analysisservices/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandAnalysisServicesServerFirewallSettings(d *pluginsdk.ResourceData) *servers.IPv4FirewallSettings {
+	firewallRules := d.Get("ipv4_firewall_rule").(*pluginsdk.Set).List()
+
+	if len(firewallRules) == 0 {
+		return nil
+	}
+
+	firewallSettings := servers.IPv4FirewallSettings{}
+	fwRules := make([]servers.IPv4FirewallRule, len(firewallRules))
+	for i, v := range firewallRules {
+		fwRule := v.(map[string]interface{})
+		fwRules[i] = servers.IPv4FirewallRule{
+			FirewallRuleName: pointer.To(fwRule["name"].(string)),
+			RangeStart:       pointer.To(fwRule["range_start"].(string)),
+			RangeEnd:         pointer.To(fwRule["range_end"].(string)),
+		}
+	}
+	firewallSettings.FirewallRules = &fwRules
+
+	return &firewallSettings
+}

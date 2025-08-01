@@ -1,0 +1,79 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2022-08-29/localrulestacks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2022-08-29/prefixlistlocalrulestack"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r LocalRuleStackPrefixList) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.PaloAlto.Client.PrefixListLocalRulestack
+			rulestackClient := metadata.Client.PaloAlto.Client.LocalRulestacks
+			model := LocalRuleStackPrefixListModel{}
+
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			rulestackId, err := localrulestacks.ParseLocalRulestackID(model.RuleStackID)
+			if err != nil {
+				return err
+			}
+			locks.ByID(rulestackId.ID())
+			defer locks.UnlockByID(rulestackId.ID())
+
+			id := prefixlistlocalrulestack.NewLocalRulestackPrefixListID(rulestackId.SubscriptionId, rulestackId.ResourceGroupName, rulestackId.LocalRulestackName, model.Name)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			props := prefixlistlocalrulestack.PrefixObject{
+				PrefixList: model.PrefixList,
+			}
+
+			if model.AuditComment != "" {
+				props.AuditComment = pointer.To(model.AuditComment)
+			}
+
+			if model.Description != "" {
+				props.Description = pointer.To(model.Description)
+			}
+
+			prefixList := prefixlistlocalrulestack.PrefixListResource{
+				Properties: props,
+			}
+
+			if err = client.CreateOrUpdateThenPoll(ctx, id, prefixList); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			if err = rulestackClient.CommitThenPoll(ctx, *rulestackId); err != nil {
+				return fmt.Errorf("committing Local RuleStack config for %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

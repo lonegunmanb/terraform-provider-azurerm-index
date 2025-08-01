@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub"
+)
+func flattenAccessRights(r devices.AccessRights) accessRights {
+	rights := accessRights{
+		registryRead:   false,
+		registryWrite:  false,
+		deviceConnect:  false,
+		serviceConnect: false,
+	}
+
+	actualAccessRights := strings.Split(string(r), ",")
+
+	for _, right := range actualAccessRights {
+		switch strings.ToLower(strings.Trim(right, " ")) {
+		case "registrywrite":
+			rights.registryWrite = true
+			// RegistryWrite implies RegistryRead.
+			// What's more, creating a Access Policy with both RegistryRead and RegistryWrite
+			// only really sets RegistryWrite permission, which then also implies RedistryRead
+			fallthrough
+		case "registryread":
+			rights.registryRead = true
+		case "deviceconnect":
+			rights.deviceConnect = true
+		case "serviceconnect":
+			rights.serviceConnect = true
+		}
+	}
+
+	return rights
+}

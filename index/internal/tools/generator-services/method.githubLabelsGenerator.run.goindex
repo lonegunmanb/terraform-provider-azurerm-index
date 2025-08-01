@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk" // nolint: typecheck
+)
+func (githubLabelsGenerator) run(outputFileName string, _ map[string]struct{}) error {
+	packagesToLabel := make(map[string]string)
+	// combine and unique these
+	for _, service := range provider.SupportedTypedServices() {
+		v, ok := service.(sdk.TypedServiceRegistrationWithAGitHubLabel)
+		if !ok {
+			// skipping since this doesn't implement the label interface
+			continue
+		}
+
+		info := reflect.TypeOf(service)
+		packageSegments := strings.Split(info.PkgPath(), "/")
+		packageName := packageSegments[len(packageSegments)-1]
+		packagesToLabel[packageName] = v.AssociatedGitHubLabel()
+	}
+	for _, service := range provider.SupportedUntypedServices() {
+		v, ok := service.(sdk.UntypedServiceRegistrationWithAGitHubLabel)
+		if !ok {
+			// skipping since this doesn't implement the label interface
+			continue
+		}
+
+		info := reflect.TypeOf(service)
+		packageSegments := strings.Split(info.PkgPath(), "/")
+		packageName := packageSegments[len(packageSegments)-1]
+		packagesToLabel[packageName] = v.AssociatedGitHubLabel()
+	}
+
+	// labels can be present in more than one package, so we need to group them
+	labelsToPackages := make(map[string][]string)
+	for pkg, label := range packagesToLabel {
+		existing, ok := labelsToPackages[label]
+		if !ok {
+			existing = []string{}
+		}
+
+		existing = append(existing, pkg)
+		labelsToPackages[label] = existing
+	}
+
+	sortedLabels := make([]string, 0)
+	for k := range labelsToPackages {
+		sortedLabels = append(sortedLabels, k)
+	}
+	sort.Strings(sortedLabels)
+
+	output := strings.TrimSpace(githubLabelsTemplate)
+	for _, labelName := range sortedLabels {
+		pkgs := labelsToPackages[labelName]
+
+		// for consistent generation
+		sort.Strings(pkgs)
+
+		out := []string{
+			fmt.Sprintf("%[1]s:", labelName),
+			"- changed-files:",
+			"  - any-glob-to-any-file:",
+		}
+
+		for _, pkg := range pkgs {
+			out = append(out, fmt.Sprintf("    - internal/services/%[1]s/**/*", pkg))
+		}
+
+		out = append(out, "")
+		output += fmt.Sprintf("\n%s", strings.Join(out, "\n"))
+	}
+
+	return writeToFile(outputFileName, output)
+}

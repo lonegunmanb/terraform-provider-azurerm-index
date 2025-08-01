@@ -1,0 +1,79 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backupinstances"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2023-06-01-preview/servers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r DataProtectionBackupInstancePostgreSQLFlexibleServerResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 60 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DataProtection.BackupInstanceClient
+
+			id, err := backupinstances.ParseBackupInstanceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var model BackupInstancePostgreSQLFlexibleServerModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("reading %s: %+v", *id, err)
+			}
+
+			parameters := *existing.Model
+
+			if metadata.ResourceData.HasChange("backup_policy_id") {
+				policyId, err := backuppolicies.ParseBackupPolicyID(model.BackupPolicyId)
+				if err != nil {
+					return err
+				}
+				parameters.Properties.PolicyInfo.PolicyId = policyId.ID()
+			}
+
+			if err := client.CreateOrUpdateThenPoll(ctx, *id, parameters, backupinstances.DefaultCreateOrUpdateOperationOptions()); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			// Service will update the protection after the resource is updated and `provisioningState` returns `Succeeded`. At this time, service doesn't allow to change the resource until it is updated completely
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return fmt.Errorf("internal-error: context had no deadline")
+			}
+
+			stateConf := &pluginsdk.StateChangeConf{
+				Delay:        5 * time.Second,
+				Pending:      []string{string(backupinstances.CurrentProtectionStateUpdatingProtection)},
+				Target:       []string{string(backupinstances.CurrentProtectionStateProtectionConfigured)},
+				Refresh:      dataProtectionBackupInstancePostgreSQLFlexibleServerStateRefreshFunc(ctx, client, *id),
+				PollInterval: 1 * time.Minute,
+				Timeout:      time.Until(deadline),
+			}
+
+			if _, err = stateConf.WaitForStateContext(ctx); err != nil {
+				return fmt.Errorf("waiting for %s to become available: %s", id, err)
+			}
+
+			return nil
+		},
+	}
+}

@@ -1,0 +1,165 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2022-06-01/datacollectionrules"
+	sharedKeyWorkspaces "github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceLogAnalyticsWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	sharedKeyClient := meta.(*clients.Client).LogAnalytics.SharedKeyWorkspacesClient
+	client := meta.(*clients.Client).LogAnalytics.WorkspaceClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+	id, err := workspaces.ParseWorkspaceID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("making Read request on AzureRM Log Analytics workspaces '%s': %+v", id.WorkspaceName, err)
+	}
+
+	d.Set("name", id.WorkspaceName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		if model.Identity != nil {
+			flattenIdentity, err := identity.FlattenSystemOrUserAssignedMap(model.Identity)
+			if err != nil {
+				return fmt.Errorf("flattening identity: %+v", err)
+			}
+			d.Set("identity", flattenIdentity)
+		}
+
+		if props := model.Properties; props != nil {
+			internetIngestionEnabled := true
+			if props.PublicNetworkAccessForIngestion != nil {
+				internetIngestionEnabled = *props.PublicNetworkAccessForIngestion == workspaces.PublicNetworkAccessTypeEnabled
+			}
+			d.Set("internet_ingestion_enabled", internetIngestionEnabled)
+
+			internetQueryEnabled := true
+			if props.PublicNetworkAccessForQuery != nil {
+				internetQueryEnabled = *props.PublicNetworkAccessForQuery == workspaces.PublicNetworkAccessTypeEnabled
+			}
+			d.Set("internet_query_enabled", internetQueryEnabled)
+
+			customerId := ""
+			if props.CustomerId != nil {
+				customerId = *props.CustomerId
+			}
+			d.Set("workspace_id", customerId)
+
+			skuName := ""
+			if props.Sku != nil {
+				sku := *props.Sku
+				for _, v := range workspaces.PossibleValuesForWorkspaceSkuNameEnum() {
+					if strings.EqualFold(v, string(sku.Name)) {
+						skuName = v
+					}
+				}
+				if capacityReservationLevel := sku.CapacityReservationLevel; capacityReservationLevel != nil {
+					d.Set("reservation_capacity_in_gb_per_day", int64(pointer.From(capacityReservationLevel)))
+				}
+			}
+			d.Set("sku", skuName)
+
+			forceCmkForQuery := false
+			if props.ForceCmkForQuery != nil {
+				forceCmkForQuery = *props.ForceCmkForQuery
+			}
+			d.Set("cmk_for_query_forced", forceCmkForQuery)
+
+			var retentionInDays int64
+			if props.RetentionInDays != nil {
+				retentionInDays = *props.RetentionInDays
+			}
+			d.Set("retention_in_days", retentionInDays)
+
+			switch {
+			case strings.EqualFold(skuName, string(workspaces.WorkspaceSkuNameEnumFree)):
+				// Special case for "Free" tier
+				d.Set("daily_quota_gb", utils.Float(0.5))
+			case props.WorkspaceCapping != nil && props.WorkspaceCapping.DailyQuotaGb != nil:
+				d.Set("daily_quota_gb", props.WorkspaceCapping.DailyQuotaGb)
+			default:
+				d.Set("daily_quota_gb", utils.Float(-1))
+			}
+
+			allowResourceOnlyPermissions := true
+			disableLocalAuth := false
+			purgeDataOnThirtyDays := false
+			if features := props.Features; features != nil {
+				allowResourceOnlyPermissions = pointer.From(features.EnableLogAccessUsingOnlyResourcePermissions)
+				disableLocalAuth = pointer.From(features.DisableLocalAuth)
+				purgeDataOnThirtyDays = pointer.From(features.ImmediatePurgeDataOn30Days)
+			}
+			d.Set("allow_resource_only_permissions", allowResourceOnlyPermissions)
+			d.Set("local_authentication_disabled", disableLocalAuth)
+			d.Set("immediate_data_purge_on_30_days_enabled", purgeDataOnThirtyDays)
+
+			defaultDataCollectionRuleResourceId := ""
+			if props.DefaultDataCollectionRuleResourceId != nil {
+				dataCollectionId, err := datacollectionrules.ParseDataCollectionRuleID(*props.DefaultDataCollectionRuleResourceId)
+				if err != nil {
+					return err
+				}
+
+				defaultDataCollectionRuleResourceId = dataCollectionId.ID()
+			}
+			d.Set("data_collection_rule_id", defaultDataCollectionRuleResourceId)
+
+			sharedKeyId := sharedKeyWorkspaces.NewWorkspaceID(id.SubscriptionId, id.ResourceGroupName, id.WorkspaceName)
+			sharedKeysResp, err := sharedKeyClient.SharedKeysGetSharedKeys(ctx, sharedKeyId)
+			if err != nil {
+				log.Printf("[ERROR] Unable to List Shared keys for Log Analytics workspaces %s: %+v", id.WorkspaceName, err)
+			} else {
+				if sharedKeysModel := sharedKeysResp.Model; sharedKeysModel != nil {
+					primarySharedKey := ""
+					if sharedKeysModel.PrimarySharedKey != nil {
+						primarySharedKey = *sharedKeysModel.PrimarySharedKey
+					}
+					d.Set("primary_shared_key", primarySharedKey)
+
+					secondarySharedKey := ""
+					if sharedKeysModel.SecondarySharedKey != nil {
+						secondarySharedKey = *sharedKeysModel.SecondarySharedKey
+					}
+					d.Set("secondary_shared_key", secondarySharedKey)
+				}
+			}
+		}
+
+		d.Set("location", azure.NormalizeLocation(model.Location))
+
+		if err = tags.FlattenAndSet(d, flattenTags(model.Tags)); err != nil {
+			return err
+		}
+	}
+	return nil
+}

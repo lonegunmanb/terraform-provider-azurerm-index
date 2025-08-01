@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/managementgroups/2020-05-01/managementgroups"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenManagementGroupSubscriptionIds(input *[]managementgroups.ManagementGroupChildInfo) (*pluginsdk.Set, error) {
+	subscriptionIds := &pluginsdk.Set{F: pluginsdk.HashString}
+	if input == nil {
+		return subscriptionIds, nil
+	}
+
+	for _, child := range *input {
+		if child.Type == nil || *child.Type != managementgroups.ManagementGroupChildTypeSubscriptions || child.Id == nil {
+			continue
+		}
+
+		id, err := commonids.ParseSubscriptionID(*child.Id)
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse child Subscription ID %+v", err)
+		}
+
+		if id != nil {
+			subscriptionIds.Add(id.SubscriptionId)
+		}
+	}
+
+	return subscriptionIds, nil
+}

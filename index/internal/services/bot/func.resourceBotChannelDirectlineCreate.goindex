@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/bot
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/botservice/2021-05-01-preview/botservice"
+)
+func resourceBotChannelDirectlineCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Bot.ChannelClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
+	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	resourceId := parse.NewBotChannelID(subscriptionId, d.Get("resource_group_name").(string), d.Get("bot_name").(string), string(botservice.ChannelNameBasicChannelChannelNameDirectLineChannel))
+	existing, err := client.Get(ctx, resourceId.ResourceGroup, resourceId.BotServiceName, resourceId.ChannelName)
+	if err != nil {
+		if !utils.ResponseWasNotFound(existing.Response) {
+			return fmt.Errorf("checking for presence of existing Directline Channel for Bot %q (Resource Group %q): %+v", resourceId.BotServiceName, resourceId.ResourceGroup, err)
+		}
+	}
+	if !utils.ResponseWasNotFound(existing.Response) {
+		// a "Default Site" site gets created and returned.. so let's check it's not just that
+		if props := existing.Properties; props != nil {
+			directLineChannel, ok := props.AsDirectLineChannel()
+			if ok && directLineChannel.Properties != nil {
+				sites := filterSites(directLineChannel.Properties.Sites)
+				if len(sites) != 0 {
+					return tf.ImportAsExistsError("azurerm_bot_channel_directline", resourceId.ID())
+				}
+			}
+		}
+	}
+
+	channel := botservice.BotChannel{
+		Properties: botservice.DirectLineChannel{
+			Properties: &botservice.DirectLineChannelProperties{
+				Sites: expandDirectlineSites(d.Get("site").(*pluginsdk.Set).List()),
+			},
+			ChannelName: botservice.ChannelNameBasicChannelChannelNameDirectLineChannel,
+		},
+		Location: utils.String(azure.NormalizeLocation(d.Get("location").(string))),
+		Kind:     botservice.KindBot,
+	}
+
+	if _, err := client.Create(ctx, resourceId.ResourceGroup, resourceId.BotServiceName, botservice.ChannelNameDirectLineChannel, channel); err != nil {
+		return fmt.Errorf("creating Directline Channel for Bot %q (Resource Group %q): %+v", resourceId.BotServiceName, resourceId.ResourceGroup, err)
+	}
+	d.SetId(resourceId.ID())
+
+	// Unable to add a new site with enhanced_authentication_enabled, user_upload_enabled, endpoint_parameters_enabled, storage_enabled in the same operation, so we need to make two calls
+	if _, err := client.Update(ctx, resourceId.ResourceGroup, resourceId.BotServiceName, botservice.ChannelNameDirectLineChannel, channel); err != nil {
+		return fmt.Errorf("updating Directline Channel for Bot %q (Resource Group %q): %+v", resourceId.BotServiceName, resourceId.ResourceGroup, err)
+	}
+
+	return resourceBotChannelDirectlineRead(d, meta)
+}

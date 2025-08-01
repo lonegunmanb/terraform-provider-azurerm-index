@@ -1,0 +1,30 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2024-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+var existingClusterCommonErr = `
+Azure Kubernetes Service has recently made several breaking changes to Cluster Authentication as
+the Managed Identity Preview has concluded and entered General Availability.
+
+During the Preview it was possible to create a Kubernetes Cluster using Mixed Mode Authentication,
+meaning that you could specify both a Service Principal and a Managed Identity. Now that this has
+entered General Availability, Managed Identity is used for all cluster related authentication.
+
+This means that it's no longer possible to create a Mixed-Mode cluster - as such the 'identity'
+and 'service_principal' block cannot be specified together.
+
+Existing clusters using Mixed-Mode authentication will be updated to use only Managed Identity for
+authentication when any change is made to the Cluster (but _not_ the Node Pool) - for example when
+a tag is added or removed from the Cluster.
+`

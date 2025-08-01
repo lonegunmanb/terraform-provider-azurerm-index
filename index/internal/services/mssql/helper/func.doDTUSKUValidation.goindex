@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper
+import (
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func doDTUSKUValidation(s sku) error {
+	if s.MaxAllowedGB == 0 {
+		return errors.New(getDTUCapacityErrorMsg(s))
+	}
+
+	if strings.EqualFold(s.Name, "BasicPool") {
+		// Basic SKU does not let you pick your max_size_GB they are fixed values
+		if s.MaxSizeGb != s.MaxAllowedGB {
+			return fmt.Errorf("service tier 'Basic' with a 'capacity' of %d must have a 'max_size_gb' of %.7f GB, got %.7f GB", s.Capacity, s.MaxAllowedGB, s.MaxSizeGb)
+		}
+	} else {
+		// All other DTU based SKUs
+		if s.MaxSizeGb > s.MaxAllowedGB {
+			return fmt.Errorf("service tier '%s' with a 'capacity' of %d must have a 'max_size_gb' no greater than %d GB, got %d GB", s.Tier, s.Capacity, int(s.MaxAllowedGB), int(s.MaxSizeGb))
+		}
+
+		if int(s.MaxSizeGb) < 50 {
+			return fmt.Errorf("service tier '%s', must have a 'max_size_gb' value equal to or greater than 50 GB, got %d GB", s.Tier, int(s.MaxSizeGb))
+		}
+
+		// Check to see if the max_size_gb value is valid for this SKU type and capacity
+		if supportedDTUMaxGBValues[int(s.MaxSizeGb)] != 1 {
+			return errors.New(getDTUNotValidSizeErrorMsg(s))
+		}
+	}
+
+	// All Other DTU based SKU Checks
+	if s.MinCapacity != math.Trunc(s.MinCapacity) {
+		return fmt.Errorf("service tier '%s' must have whole numbers as their 'minCapacity'", s.Tier)
+	}
+
+	if s.MaxCapacity != math.Trunc(s.MaxCapacity) {
+		return fmt.Errorf("service tier '%s' must have whole numbers as their 'maxCapacity'", s.Tier)
+	}
+
+	return nil
+}

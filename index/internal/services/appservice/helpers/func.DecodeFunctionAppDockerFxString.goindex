@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func DecodeFunctionAppDockerFxString(input string, partial ApplicationStackDocker) ([]ApplicationStackDocker, error) {
+	if input == "" {
+		// This is a valid string for "Custom" stack which we picked up earlier, so we can skip here
+		return nil, nil
+	}
+
+	parts := strings.Split(input, "|")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("unrecognised LinuxFxVersion format received, got %s", input)
+	}
+
+	if !strings.EqualFold(parts[0], "docker") {
+		return nil, fmt.Errorf("expected a docker FX version, got %q", parts[0])
+	}
+
+	dockerUrl := partial.RegistryURL
+	for _, prefix := range urlSchemes {
+		if strings.HasPrefix(dockerUrl, prefix) {
+			dockerUrl = strings.TrimPrefix(dockerUrl, prefix)
+			continue
+		}
+	}
+	dockerParts := strings.Split(strings.TrimPrefix(parts[1], dockerUrl), ":")
+	if len(dockerParts) != 2 {
+		return nil, fmt.Errorf("invalid docker image reference %q", parts[1])
+	}
+
+	partial.ImageName = strings.TrimPrefix(dockerParts[0], "/")
+	partial.ImageTag = dockerParts[1]
+
+	return []ApplicationStackDocker{partial}, nil
+}

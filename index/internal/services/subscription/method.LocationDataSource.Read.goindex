@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/subscription
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	resourcesSubscription "github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-12-01/subscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r LocationDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Subscription.SubscriptionsClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			id := commonids.NewSubscriptionID(subscriptionId)
+			resp, err := client.ListLocations(ctx, id, resourcesSubscription.DefaultListLocationsOperationOptions())
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if resp.Model == nil {
+				return fmt.Errorf("retrieving %s: model was nil", id)
+			}
+
+			if resp.Model.Value == nil {
+				return fmt.Errorf("retrieving %s: model value was nil", id)
+			}
+
+			var model LocationDataSourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			normalizedLocation := location.Normalize(model.Location)
+
+			locationValue, err := getLocation(normalizedLocation, resp.Model.Value)
+			if err != nil {
+				return err
+			}
+
+			var state LocationDataSourceModel
+			state.ZoneMappings = flattenZonesMapping(locationValue)
+			state.DisplayName = pointer.From(locationValue.DisplayName)
+			state.Location = normalizedLocation
+
+			metadata.ResourceData.SetId(fmt.Sprintf("%s/locations/%s", id.ID(), normalizedLocation))
+
+			return metadata.Encode(&state)
+		},
+	}
+}

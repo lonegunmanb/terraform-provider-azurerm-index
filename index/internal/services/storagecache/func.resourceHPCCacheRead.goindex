@@ -1,0 +1,130 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagecache
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagecache/2023-05-01/caches"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceHPCCacheRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).StorageCache.Caches
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := caches.ParseCacheID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] HPC Cache was not found in - removing from state! (%s)", id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving HPC Cache %q: %+v", id, err)
+	}
+
+	d.Set("name", id.CacheName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if m := resp.Model; m != nil {
+		if sku := m.Sku; sku != nil {
+			d.Set("sku_name", sku.Name)
+		}
+
+		if props := m.Properties; props != nil {
+			d.Set("location", azure.NormalizeLocation(pointer.From(m.Location)))
+			d.Set("cache_size_in_gb", props.CacheSizeGB)
+			d.Set("subnet_id", props.Subnet)
+			d.Set("mount_addresses", utils.FlattenStringSlice(props.MountAddresses))
+
+			mtu, ntpServer, dnsSetting := flattenStorageCacheNetworkSettings(props.NetworkSettings)
+			d.Set("mtu", mtu)
+			d.Set("ntp_server", ntpServer)
+			if err := d.Set("dns", dnsSetting); err != nil {
+				return fmt.Errorf("setting `dns`: %v", err)
+			}
+
+			ad, flatFile, ldap, err := flattenStorageCacheDirectorySettings(d, props.DirectoryServicesSettings)
+			if err != nil {
+				return err
+			}
+
+			if err := d.Set("directory_active_directory", ad); err != nil {
+				return fmt.Errorf("setting `directory_active_directory`: %v", err)
+			}
+
+			if err := d.Set("directory_flat_file", flatFile); err != nil {
+				return fmt.Errorf("setting `directory_flat_file`: %v", err)
+			}
+
+			if err := d.Set("directory_ldap", ldap); err != nil {
+				return fmt.Errorf("setting `directory_ldap`: %v", err)
+			}
+
+			if securitySettings := props.SecuritySettings; securitySettings != nil {
+				if securitySettings.AccessPolicies != nil {
+					defaultPolicy := CacheGetAccessPolicyByName(*securitySettings.AccessPolicies, "default")
+					if defaultPolicy != nil {
+						defaultAccessPolicy, err := flattenStorageCacheNfsDefaultAccessPolicy(*defaultPolicy)
+						if err != nil {
+							return err
+						}
+						if err := d.Set("default_access_policy", defaultAccessPolicy); err != nil {
+							return fmt.Errorf("setting `default_access_policy`: %v", err)
+						}
+					}
+				}
+			}
+
+			keyVaultKeyId := ""
+			autoKeyRotationEnabled := false
+			if eprops := props.EncryptionSettings; eprops != nil {
+				if eprops.KeyEncryptionKey != nil {
+					keyVaultKeyId = eprops.KeyEncryptionKey.KeyURL
+				}
+
+				if eprops.RotationToLatestKeyVersionEnabled != nil {
+					autoKeyRotationEnabled = *eprops.RotationToLatestKeyVersionEnabled
+				}
+			}
+			d.Set("key_vault_key_id", keyVaultKeyId)
+			d.Set("automatically_rotate_key_to_latest_enabled", autoKeyRotationEnabled)
+		}
+
+		i, err := identity.FlattenSystemAndUserAssignedMap(m.Identity)
+		if err != nil {
+			return err
+		}
+		if err := d.Set("identity", i); err != nil {
+			return fmt.Errorf("setting `identity`: %+v", err)
+		}
+
+		return tags.FlattenAndSet(d, m.Tags)
+	}
+
+	return nil
+}

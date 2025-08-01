@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2020-10-01/activitylogalertsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceMonitorActivityLogAlertRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Monitor.ActivityLogAlertsClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := activitylogalertsapis.ParseActivityLogAlertID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.ActivityLogAlertsGet(ctx, *id)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[DEBUG] %s was not found - removing from state!", *id)
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("getting Monitor %s: %+v", *id, err)
+	}
+
+	d.Set("name", id.ActivityLogAlertName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.NormalizeNilable(model.Location))
+		if props := model.Properties; props != nil {
+			d.Set("enabled", props.Enabled)
+			d.Set("description", props.Description)
+
+			var scopes []interface{}
+			if props.Scopes != nil {
+				scopes = utils.FlattenStringSlice(&props.Scopes)
+			}
+			if err := d.Set("scopes", scopes); err != nil {
+				return fmt.Errorf("setting `scopes`: %+v", err)
+			}
+
+			if err := d.Set("criteria", flattenMonitorActivityLogAlertCriteria(props.Condition)); err != nil {
+				return fmt.Errorf("setting `criteria`: %+v", err)
+			}
+			if err := d.Set("action", flattenMonitorActivityLogAlertAction(props.Actions)); err != nil {
+				return fmt.Errorf("setting `action`: %+v", err)
+			}
+		}
+		if err = d.Set("tags", utils.FlattenPtrMapStringString(model.Tags)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

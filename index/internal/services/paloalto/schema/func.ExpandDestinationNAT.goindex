@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/schema
+import (
+	"strconv"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/paloaltonetworks/2023-09-01/firewalls"
+	helpersValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/paloalto/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandDestinationNAT(input []DestinationNAT) *[]firewalls.FrontendSetting {
+	fes := make([]firewalls.FrontendSetting, 0)
+	for _, v := range input {
+		fe := firewalls.FrontendSetting{
+			Name:                  v.Name,
+			Protocol:              firewalls.ProtocolType(v.Protocol),
+			BackendConfiguration:  firewalls.EndpointConfiguration{},
+			FrontendConfiguration: firewalls.EndpointConfiguration{},
+		}
+
+		if len(v.FrontendConfiguration) > 0 {
+			fec := v.FrontendConfiguration[0]
+			fe.FrontendConfiguration = firewalls.EndpointConfiguration{
+				Address: firewalls.IPAddress{
+					ResourceId: pointer.To(fec.PublicIPID),
+				},
+				Port: strconv.FormatInt(fec.Port, 10),
+			}
+		}
+
+		if len(v.BackendConfiguration) > 0 {
+			bec := v.BackendConfiguration[0]
+			fe.BackendConfiguration = firewalls.EndpointConfiguration{
+				Address: firewalls.IPAddress{
+					Address: pointer.To(bec.PublicIP),
+				},
+				Port: strconv.FormatInt(bec.Port, 10),
+			}
+		}
+
+		fes = append(fes, fe)
+	}
+
+	return &fes
+}

@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/serviceconnector
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicelinker/2022-05-01/links"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicelinker/2024-04-01/servicelinker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenServiceConnectorAuthInfo(input servicelinker.AuthInfoBase, pwd string) []AuthInfoModel {
+	var authType string
+	var name string
+	var secret string
+	var clientId string
+	var principalId string
+	var subscriptionId string
+	var certificate string
+
+	if value, ok := input.(servicelinker.SecretAuthInfo); ok {
+		authType = string(servicelinker.AuthTypeSecret)
+		if value.Name != nil {
+			name = *value.Name
+		}
+		secret = pwd
+	}
+
+	if _, ok := input.(servicelinker.SystemAssignedIdentityAuthInfo); ok {
+		authType = string(servicelinker.AuthTypeSystemAssignedIdentity)
+	}
+
+	if value, ok := input.(servicelinker.UserAssignedIdentityAuthInfo); ok {
+		authType = string(servicelinker.AuthTypeUserAssignedIdentity)
+		if value.ClientId != nil {
+			clientId = *value.ClientId
+		}
+		if value.SubscriptionId != nil {
+			subscriptionId = *value.SubscriptionId
+		}
+	}
+
+	if value, ok := input.(servicelinker.ServicePrincipalSecretAuthInfo); ok {
+		authType = string(servicelinker.AuthTypeServicePrincipalSecret)
+		clientId = value.ClientId
+		principalId = value.PrincipalId
+		secret = pwd
+	}
+
+	if value, ok := input.(servicelinker.ServicePrincipalCertificateAuthInfo); ok {
+		authType = string(servicelinker.AuthTypeServicePrincipalCertificate)
+		certificate = value.Certificate
+		clientId = value.ClientId
+		principalId = value.PrincipalId
+	}
+
+	return []AuthInfoModel{
+		{
+			Type:           authType,
+			Name:           name,
+			Secret:         secret,
+			ClientId:       clientId,
+			PrincipalId:    principalId,
+			SubscriptionId: subscriptionId,
+			Certificate:    certificate,
+		},
+	}
+}

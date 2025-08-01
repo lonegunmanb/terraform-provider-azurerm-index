@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/orbital
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/orbital/2022-11-01/contactprofile"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r ContactProfileResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model ContactProfileResourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+
+			client := metadata.Client.Orbital.ContactProfileClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			id := contactprofile.NewContactProfileID(subscriptionId, model.ResourceGroup, model.Name)
+			existing, err := client.Get(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			links, err := expandContactProfileLinks(model.Links)
+			if err != nil {
+				return fmt.Errorf("expanding `links`: %+v", err)
+			}
+
+			autoTrackingConfiguration := contactprofile.AutoTrackingConfiguration(model.AutoTrackingConfiguration)
+
+			networkConfiguration := contactprofile.ContactProfilesPropertiesNetworkConfiguration{
+				SubnetId: model.NetworkConfigurationSubnetId,
+			}
+
+			// The service only accept `null` or non-empty value, empty string will cause a 400 response
+			var eventHubUri *string
+			if model.EventHubUri != "" {
+				eventHubUri = pointer.To(model.EventHubUri)
+			}
+
+			contactProfilesProperties := contactprofile.ContactProfilesProperties{
+				AutoTrackingConfiguration:    pointer.To(autoTrackingConfiguration),
+				EventHubUri:                  eventHubUri,
+				Links:                        links,
+				MinimumElevationDegrees:      pointer.To(model.MinimumElevationDegrees),
+				MinimumViableContactDuration: pointer.To(model.MinimumVariableContactDuration),
+				NetworkConfiguration:         networkConfiguration,
+			}
+
+			contactProfile := contactprofile.ContactProfile{
+				Id:         utils.String(id.ID()),
+				Location:   model.Location,
+				Name:       utils.String(model.Name),
+				Properties: contactProfilesProperties,
+				Tags:       pointer.To(model.Tags),
+			}
+
+			if err := client.CreateOrUpdateThenPoll(ctx, id, contactProfile); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

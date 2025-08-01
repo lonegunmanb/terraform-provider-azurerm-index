@@ -1,0 +1,133 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	apimValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func windowsFunctionAppStackSchema() *pluginsdk.Schema {
+	return &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Optional: true,
+		Computed: true,
+		MaxItems: 1,
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"dotnet_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Default:  "v4.0",
+					ValidateFunc: validation.StringInSlice([]string{
+						"v3.0",
+						"v4.0",
+						"v6.0",
+						"v7.0",
+						"v8.0",
+						"v9.0",
+					}, false),
+					ExactlyOneOf: []string{
+						"site_config.0.application_stack.0.dotnet_version",
+						"site_config.0.application_stack.0.java_version",
+						"site_config.0.application_stack.0.node_version",
+						"site_config.0.application_stack.0.powershell_core_version",
+						"site_config.0.application_stack.0.use_custom_runtime",
+					},
+					Description: "The version of .Net. Possible values are `v3.0`, `v4.0`, `v6.0`, `v7.0`, `v8.0` and `v9.0`",
+				},
+
+				"use_dotnet_isolated_runtime": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Computed: true,
+					ConflictsWith: []string{
+						"site_config.0.application_stack.0.java_version",
+						"site_config.0.application_stack.0.node_version",
+						"site_config.0.application_stack.0.powershell_core_version",
+						"site_config.0.application_stack.0.use_custom_runtime",
+					},
+					Description: "Should the DotNet process use an isolated runtime. Defaults to `false`.",
+				},
+
+				"node_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"~12",
+						"~14",
+						"~16",
+						"~18",
+						"~20",
+						"~22",
+					}, false),
+					ExactlyOneOf: []string{
+						"site_config.0.application_stack.0.dotnet_version",
+						"site_config.0.application_stack.0.java_version",
+						"site_config.0.application_stack.0.node_version",
+						"site_config.0.application_stack.0.powershell_core_version",
+						"site_config.0.application_stack.0.use_custom_runtime",
+					},
+					Description: "The version of Node to use. Possible values include `~12`, `~14`, `~16`, `~18`, `~20` and `~22`",
+				},
+
+				"java_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"1.8",
+						"11",
+						"17",
+						"21",
+					}, false),
+					ExactlyOneOf: []string{
+						"site_config.0.application_stack.0.dotnet_version",
+						"site_config.0.application_stack.0.java_version",
+						"site_config.0.application_stack.0.node_version",
+						"site_config.0.application_stack.0.powershell_core_version",
+						"site_config.0.application_stack.0.use_custom_runtime",
+					},
+					Description: "The version of Java to use. Possible values are `1.8`, `11`, `17`, and `21`",
+				},
+
+				"powershell_core_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"7",   // Deprecated / not available in the portal
+						"7.2", // preview LTS Support
+						"7.4", // current LTS Support
+					}, false),
+					ExactlyOneOf: []string{
+						"site_config.0.application_stack.0.dotnet_version",
+						"site_config.0.application_stack.0.java_version",
+						"site_config.0.application_stack.0.node_version",
+						"site_config.0.application_stack.0.powershell_core_version",
+						"site_config.0.application_stack.0.use_custom_runtime",
+					},
+					Description: "The PowerShell Core version to use. Possible values are `7`, `7.2`, and `7.4`",
+				},
+
+				"use_custom_runtime": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Computed: true,
+					ExactlyOneOf: []string{
+						"site_config.0.application_stack.0.dotnet_version",
+						"site_config.0.application_stack.0.java_version",
+						"site_config.0.application_stack.0.node_version",
+						"site_config.0.application_stack.0.powershell_core_version",
+						"site_config.0.application_stack.0.use_custom_runtime",
+					},
+					Description: "Does the Function App use a custom Application Stack?",
+				},
+			},
+		},
+	}
+}

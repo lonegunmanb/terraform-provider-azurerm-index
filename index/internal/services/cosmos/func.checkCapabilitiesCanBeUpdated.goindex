@@ -1,0 +1,112 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"math"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cosmos-db/mgmt/2021-10-15/documentdb" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cosmosdb/2024-08-15/cosmosdb"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/customermanagedkeys"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
+	keyVaultSuppress "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/suppress"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func checkCapabilitiesCanBeUpdated(kind string, oldCapabilities *[]cosmosdb.Capability, newCapabilities *[]cosmosdb.Capability) bool {
+	// The feedback from service team : capabilities that can be added to an existing account
+	canBeAddedCaps := []string{
+		strings.ToLower(string(databaseAccountCapabilitiesDisableRateLimitingResponses)),
+		strings.ToLower(string(databaseAccountCapabilitiesAllowSelfServeUpgradeToMongo36)),
+		strings.ToLower(string(databaseAccountCapabilitiesEnableAggregationPipeline)),
+		strings.ToLower(string(databaseAccountCapabilitiesMongoDBv34)),
+		strings.ToLower(string(databaseAccountCapabilitiesMongoEnableDocLevelTTL)),
+		strings.ToLower(string(databaseAccountCapabilitiesEnableMongo16MBDocumentSupport)),
+		strings.ToLower(string(databaseAccountCapabilitiesEnableMongoRetryableWrites)),
+		strings.ToLower(string(databaseAccountCapabilitiesEnableMongoRoleBasedAccessControl)),
+		strings.ToLower(string(databaseAccountCapabilitiesEnableUniqueCompoundNestedDocs)),
+		strings.ToLower(string(databaseAccountCapabilitiesEnableTtlOnCustomPath)),
+		strings.ToLower(string(databaseAccountCapabilitiesEnablePartialUniqueIndex)),
+	}
+
+	// The feedback from service team: capabilities that can be removed from an existing account
+	canBeRemovedCaps := []string{
+		strings.ToLower(string(databaseAccountCapabilitiesEnableMongoRetryableWrites)),
+		strings.ToLower(string(databaseAccountCapabilitiesDisableRateLimitingResponses)),
+	}
+
+	// first check the new capabilities can be added
+	for _, capability := range *newCapabilities {
+		if capability.Name == nil {
+			continue
+		}
+		existedPreviously := false
+		for _, existing := range *oldCapabilities {
+			if existing.Name != nil && strings.EqualFold(*existing.Name, *capability.Name) {
+				existedPreviously = true
+				break
+			}
+		}
+		if existedPreviously {
+			continue
+		}
+
+		// retrieve a list of capabilities for this DB type
+		supportedKindsForCapability, ok := capabilitiesToKindMap[strings.ToLower(*capability.Name)]
+		if !ok {
+			return false
+		}
+
+		// first check if this is supported
+		if isSupported := utils.SliceContainsValue(supportedKindsForCapability.([]string), strings.ToLower(kind)); !isSupported {
+			return false
+		}
+
+		// then check if it can be added via an update
+		if !utils.SliceContainsValue(canBeAddedCaps, strings.ToLower(*capability.Name)) {
+			return false
+		}
+	}
+	// then check if we're removing any that they can be removed
+	for _, capability := range *oldCapabilities {
+		existsNow := false
+		for _, new := range *newCapabilities {
+			if new.Name != nil && strings.EqualFold(*new.Name, *capability.Name) {
+				existsNow = true
+				break
+			}
+		}
+		if existsNow {
+			continue
+		}
+
+		if !utils.SliceContainsValue(canBeRemovedCaps, strings.ToLower(*capability.Name)) {
+			return false
+		}
+	}
+
+	return true
+}

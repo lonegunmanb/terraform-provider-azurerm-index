@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"regexp"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/integrationaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/integrationserviceenvironments"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflows"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandLogicAppWorkflowAccessControl(input []interface{}) *workflows.FlowAccessControlConfiguration {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+	v := input[0].(map[string]interface{})
+
+	result := workflows.FlowAccessControlConfiguration{}
+
+	if contents := v["content"].([]interface{}); len(contents) != 0 {
+		result.Contents = expandLogicAppWorkflowAccessControlConfigurationPolicy(contents)
+	}
+
+	if actions := v["action"].([]interface{}); len(actions) != 0 {
+		result.Actions = expandLogicAppWorkflowAccessControlConfigurationPolicy(actions)
+	}
+
+	if triggers := v["trigger"].([]interface{}); len(triggers) != 0 {
+		result.Triggers = expandLogicAppWorkflowAccessControlTriggerConfigurationPolicy(triggers)
+	}
+
+	if workflowManagement := v["workflow_management"].([]interface{}); len(workflowManagement) != 0 {
+		result.WorkflowManagement = expandLogicAppWorkflowAccessControlConfigurationPolicy(workflowManagement)
+	}
+
+	return &result
+}

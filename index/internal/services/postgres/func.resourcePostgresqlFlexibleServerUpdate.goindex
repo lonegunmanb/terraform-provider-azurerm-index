@@ -1,0 +1,249 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2021-06-01/serverrestart"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2023-06-01-preview/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Postgres.FlexibleServersClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := servers.ParseFlexibleServerID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	parameters := servers.ServerForUpdate{
+		Properties: &servers.ServerPropertiesForUpdate{},
+	}
+
+	requireUpdateOnLogin := false // it's required to call Create with `createMode` set to `Update` to update login name.
+
+	createMode := d.Get("create_mode").(string)
+	if createMode == "" || servers.CreateMode(createMode) == servers.CreateModeDefault {
+		_, adminLoginSet := d.GetOk("administrator_login")
+		_, adminPwdSet := d.GetOk("administrator_password")
+
+		pwdEnabled := true // it defaults to true
+		if authRaw, authExist := d.GetOk("authentication"); authExist {
+			authConfig := expandFlexibleServerAuthConfig(authRaw.([]interface{}))
+			if authConfig.PasswordAuth != nil {
+				pwdEnabled = *authConfig.PasswordAuth == servers.PasswordAuthEnumEnabled
+			}
+		}
+
+		if pwdEnabled {
+			if !adminLoginSet {
+				return fmt.Errorf("`administrator_login` is required when `authentication.password_auth_enabled` is set to `true`")
+			}
+			if !adminPwdSet {
+				return fmt.Errorf("`administrator_password` is required when `authentication.password_auth_enabled` is set to `true`")
+			}
+		}
+
+		if d.HasChange("administrator_login") {
+			requireUpdateOnLogin = true
+			if adminLoginSet && !pwdEnabled {
+				return fmt.Errorf("when `administrator_login` is first set, `authentication.password_auth_enabled` must be set to `true`")
+			}
+		}
+	}
+
+	if d.HasChange("private_dns_zone_id") || d.HasChange("public_network_access_enabled") {
+		parameters.Properties.Network = expandArmServerNetwork(d)
+	}
+
+	var requireFailover bool
+	// failover is only supported when `zone` and `high_availability.0.standby_availability_zone` are exchanged with each other
+	if d.HasChanges("zone", "high_availability") {
+		resp, err := client.Get(ctx, *id)
+		if err != nil || resp.Model == nil {
+			return err
+		}
+		props := resp.Model.Properties
+
+		if d.HasChange("zone") {
+			if !d.HasChange("high_availability.0.standby_availability_zone") {
+				return fmt.Errorf("`zone` can only be changed when exchanged with the zone specified in `high_availability.0.standby_availability_zone`")
+			} else {
+				// zone can only be changed when it is swapped for an existing high_availability.0.standby_availability_zone - a failover is triggered to make it the new primary availability zone
+				// compare current values of zone and high_availability.0.standby_availability_zone with new values and only allow update/failover if the values of zone and an existing high_availability.0.standby_availability_zone have been swapped
+				var newZone, newHAStandbyZone string
+				newZone = d.Get("zone").(string)
+				newHAStandbyZone = d.Get("high_availability.0.standby_availability_zone").(string)
+				if props != nil && props.AvailabilityZone != nil && props.HighAvailability != nil && props.HighAvailability.StandbyAvailabilityZone != nil {
+					if newZone == *props.HighAvailability.StandbyAvailabilityZone && newHAStandbyZone == *props.AvailabilityZone {
+						requireFailover = true
+					} else {
+						return fmt.Errorf("`zone` can only be changed when exchanged with the zone specified in `high_availability.0.standby_availability_zone`")
+					}
+				}
+			}
+
+			// changes can occur in high_availability.0.standby_availability_zone when zone has not changed in the case where a high_availability block has been newly added or a high_availability block is removed, meaning HA is now disabled
+		} else if d.HasChange("high_availability.0.standby_availability_zone") {
+			if props != nil && props.HighAvailability != nil && props.HighAvailability.Mode != nil {
+				// if HA Mode is currently "ZoneRedundant" and is still set to "ZoneRedundant", high_availability.0.standby_availability_zone cannot be changed
+				if *props.HighAvailability.Mode == servers.HighAvailabilityModeZoneRedundant && !d.HasChange("high_availability.0.mode") {
+					return fmt.Errorf("an existing `high_availability.0.standby_availability_zone` can only be changed when exchanged with the zone specified in `zone`")
+				}
+				// if high_availability.0.mode changes from "ZoneRedundant", an existing high_availability block has been removed as this is a required field
+				// if high_availability.0.mode is not currently "ZoneRedundant", this must be a newly added block
+			}
+		}
+	}
+
+	if d.HasChange("replication_role") {
+		createMode := d.Get("create_mode").(string)
+		replicationRole := d.Get("replication_role").(string)
+		if createMode == string(servers.CreateModeReplica) && replicationRole == string(servers.ReplicationRoleNone) {
+			replicationRole := servers.ReplicationRoleNone
+			parameters := servers.ServerForUpdate{
+				Properties: &servers.ServerPropertiesForUpdate{
+					ReplicationRole: &replicationRole,
+				},
+			}
+
+			if err := client.UpdateThenPoll(ctx, *id, parameters); err != nil {
+				return fmt.Errorf("updating `replication_role` for %s: %+v", *id, err)
+			}
+		} else {
+			return fmt.Errorf("`replication_role` only can be updated to `None` for replica server")
+		}
+	}
+
+	if d.HasChange("administrator_password") {
+		parameters.Properties.AdministratorLoginPassword = utils.String(d.Get("administrator_password").(string))
+	}
+
+	if d.HasChange("authentication") {
+		parameters.Properties.AuthConfig = expandFlexibleServerAuthConfig(d.Get("authentication").([]interface{}))
+	}
+
+	if d.HasChange("auto_grow_enabled") || d.HasChange("storage_mb") || d.HasChange("storage_tier") {
+		// TODO remove the additional update after https://github.com/Azure/azure-rest-api-specs/issues/22867 is fixed
+		storage, err := expandArmServerStorage(d)
+		if err != nil {
+			return err
+		}
+
+		storageUpdateParameters := servers.ServerForUpdate{
+			Properties: &servers.ServerPropertiesForUpdate{
+				Storage: storage,
+			},
+		}
+
+		if err := client.UpdateThenPoll(ctx, *id, storageUpdateParameters); err != nil {
+			return fmt.Errorf("updating `auto_grow_enabled` / `storage_mb` for %s: %+v", *id, err)
+		}
+	}
+
+	if d.HasChange("backup_retention_days") {
+		parameters.Properties.Backup = expandArmServerBackup(d)
+	}
+
+	if d.HasChange("maintenance_window") {
+		parameters.Properties.MaintenanceWindow = expandArmServerMaintenanceWindow(d.Get("maintenance_window").([]interface{}))
+	}
+
+	if d.HasChange("sku_name") {
+		sku, err := expandFlexibleServerSku(d.Get("sku_name").(string))
+		if err != nil {
+			return fmt.Errorf("expanding `sku_name` for %s: %v", id, err)
+		}
+		parameters.Sku = sku
+	}
+
+	if d.HasChange("tags") {
+		parameters.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+	}
+
+	if d.HasChange("high_availability") {
+		parameters.Properties.HighAvailability = expandFlexibleServerHighAvailability(d.Get("high_availability").([]interface{}), false)
+	}
+
+	if d.HasChange("customer_managed_key") {
+		parameters.Properties.DataEncryption = expandFlexibleServerDataEncryption(d.Get("customer_managed_key").([]interface{}))
+	}
+
+	if d.HasChange("identity") {
+		identity, err := identity.ExpandUserAssignedMap(d.Get("identity").([]interface{}))
+		if err != nil {
+			return fmt.Errorf("expanding `identity` for %s: %+v", *id, err)
+		}
+		parameters.Identity = identity
+	}
+
+	if d.HasChange("create_mode") {
+		createMode := servers.CreateModeForUpdate(d.Get("create_mode").(string))
+		parameters.Properties.CreateMode = &createMode
+	}
+
+	if d.HasChange("version") {
+		version := servers.ServerVersion(d.Get("version").(string))
+		parameters.Properties.Version = &version
+	}
+
+	if requireUpdateOnLogin {
+		updateMode := servers.CreateModeUpdate
+		loginParameters := servers.Server{
+			Location: location.Normalize(d.Get("location").(string)),
+			Properties: &servers.ServerProperties{
+				CreateMode:                 &updateMode,
+				AuthConfig:                 expandFlexibleServerAuthConfig(d.Get("authentication").([]interface{})),
+				AdministratorLogin:         utils.String(d.Get("administrator_login").(string)),
+				AdministratorLoginPassword: utils.String(d.Get("administrator_password").(string)),
+				Network:                    expandArmServerNetwork(d),
+			},
+		}
+		if err = client.CreateThenPoll(ctx, *id, loginParameters); err != nil {
+			return fmt.Errorf("updating %s: %+v", id, err)
+		}
+	}
+
+	if err = client.UpdateThenPoll(ctx, *id, parameters); err != nil {
+		return fmt.Errorf("updating %s: %+v", id, err)
+	}
+
+	if requireFailover {
+		restartClient := meta.(*clients.Client).Postgres.ServerRestartClient
+
+		restartServerId := serverrestart.NewFlexibleServerID(id.SubscriptionId, id.ResourceGroupName, id.FlexibleServerName)
+		failoverMode := serverrestart.FailoverModePlannedFailover
+		restartParameters := serverrestart.RestartParameter{
+			RestartWithFailover: utils.Bool(true),
+			FailoverMode:        &failoverMode,
+		}
+
+		if err = restartClient.ServersRestartThenPoll(ctx, restartServerId, restartParameters); err != nil {
+			return fmt.Errorf("failing over %s: %+v", *id, err)
+		}
+	}
+
+	return resourcePostgresqlFlexibleServerRead(d, meta)
+}

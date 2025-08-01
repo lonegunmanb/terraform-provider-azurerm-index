@@ -1,0 +1,190 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	validate2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceVirtualMachineScaleSetRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Compute.VirtualMachineScaleSetsClient
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := virtualmachinescalesets.ParseVirtualMachineScaleSetID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	opts := virtualmachinescalesets.DefaultGetOperationOptions()
+	opts.Expand = pointer.To(virtualmachinescalesets.ExpandTypesForGetVMScaleSetsUserData)
+	resp, err := client.Get(ctx, *id, opts)
+	if err != nil {
+		if response.WasNotFound(resp.HttpResponse) {
+			log.Printf("[INFO] %s was not found. Removing from State", id)
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("making Read request on %s: %+v", id, err)
+	}
+
+	d.Set("name", id.VirtualMachineScaleSetName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model := resp.Model; model != nil {
+		d.Set("location", location.Normalize(model.Location))
+		d.Set("zones", model.Zones)
+
+		if err := d.Set("sku", flattenAzureRmVirtualMachineScaleSetSku(model.Sku)); err != nil {
+			return fmt.Errorf("[DEBUG] setting `sku`: %#v", err)
+		}
+
+		flattenedIdentity, err := identity.FlattenSystemAndUserAssignedMap(model.Identity)
+		if err != nil {
+			return fmt.Errorf("flattening `identity`: %+v", err)
+		}
+		if err := d.Set("identity", flattenedIdentity); err != nil {
+			return fmt.Errorf("[DEBUG] setting `identity`: %+v", err)
+		}
+
+		if plan := model.Plan; plan != nil {
+			flattenedPlan := flattenAzureRmVirtualMachineScaleSetPlan(plan)
+			if err := d.Set("plan", flattenedPlan); err != nil {
+				return fmt.Errorf("[DEBUG] setting `plan`: %#v", err)
+			}
+		}
+
+		if props := model.Properties; props != nil {
+			if upgradePolicy := props.UpgradePolicy; upgradePolicy != nil {
+				d.Set("upgrade_policy_mode", pointer.From(upgradePolicy.Mode))
+				if policy := upgradePolicy.AutomaticOSUpgradePolicy; policy != nil {
+					d.Set("automatic_os_upgrade", policy.EnableAutomaticOSUpgrade)
+				}
+
+				if rollingUpgradePolicy := upgradePolicy.RollingUpgradePolicy; rollingUpgradePolicy != nil {
+					if err := d.Set("rolling_upgrade_policy", flattenAzureRmVirtualMachineScaleSetRollingUpgradePolicy(rollingUpgradePolicy)); err != nil {
+						return fmt.Errorf("[DEBUG] setting Virtual Machine Scale Set Rolling Upgrade Policy error: %#v", err)
+					}
+				}
+
+				if proximityPlacementGroup := props.ProximityPlacementGroup; proximityPlacementGroup != nil {
+					d.Set("proximity_placement_group_id", proximityPlacementGroup.Id)
+				}
+			}
+			d.Set("overprovision", props.Overprovision)
+			d.Set("single_placement_group", props.SinglePlacementGroup)
+
+			if profile := props.VirtualMachineProfile; profile != nil {
+				d.Set("license_type", profile.LicenseType)
+				d.Set("priority", string(pointer.From(profile.Priority)))
+				d.Set("eviction_policy", string(pointer.From(profile.EvictionPolicy)))
+
+				osProfile := flattenAzureRMVirtualMachineScaleSetOsProfile(d, profile.OsProfile)
+				if err := d.Set("os_profile", osProfile); err != nil {
+					return fmt.Errorf("[DEBUG] setting `os_profile`: %#v", err)
+				}
+
+				if osProfile := profile.OsProfile; osProfile != nil {
+					if linuxConfiguration := osProfile.LinuxConfiguration; linuxConfiguration != nil {
+						flattenedLinuxConfiguration := flattenAzureRmVirtualMachineScaleSetOsProfileLinuxConfig(linuxConfiguration)
+						if err := d.Set("os_profile_linux_config", flattenedLinuxConfiguration); err != nil {
+							return fmt.Errorf("[DEBUG] setting `os_profile_linux_config`: %#v", err)
+						}
+					}
+
+					if secrets := osProfile.Secrets; secrets != nil {
+						flattenedSecrets := flattenAzureRmVirtualMachineScaleSetOsProfileSecrets(secrets)
+						if err := d.Set("os_profile_secrets", flattenedSecrets); err != nil {
+							return fmt.Errorf("[DEBUG] setting `os_profile_secrets`: %#v", err)
+						}
+					}
+
+					if windowsConfiguration := osProfile.WindowsConfiguration; windowsConfiguration != nil {
+						flattenedWindowsConfiguration := flattenAzureRmVirtualMachineScaleSetOsProfileWindowsConfig(windowsConfiguration)
+						if err := d.Set("os_profile_windows_config", flattenedWindowsConfiguration); err != nil {
+							return fmt.Errorf("[DEBUG] setting `os_profile_windows_config`: %#v", err)
+						}
+					}
+				}
+
+				if diagnosticsProfile := profile.DiagnosticsProfile; diagnosticsProfile != nil {
+					if bootDiagnostics := diagnosticsProfile.BootDiagnostics; bootDiagnostics != nil {
+						flattenedDiagnostics := flattenAzureRmVirtualMachineScaleSetBootDiagnostics(bootDiagnostics)
+						if err := d.Set("boot_diagnostics", flattenedDiagnostics); err != nil {
+							return fmt.Errorf("[DEBUG] setting `boot_diagnostics`: %#v", err)
+						}
+					}
+				}
+
+				if networkProfile := profile.NetworkProfile; networkProfile != nil {
+					if hp := networkProfile.HealthProbe; hp != nil {
+						if id := hp.Id; id != nil {
+							d.Set("health_probe_id", id)
+						}
+					}
+
+					flattenedNetworkProfile := flattenAzureRmVirtualMachineScaleSetNetworkProfile(networkProfile)
+					if err := d.Set("network_profile", flattenedNetworkProfile); err != nil {
+						return fmt.Errorf("[DEBUG] setting `network_profile`: %#v", err)
+					}
+				}
+
+				if storageProfile := profile.StorageProfile; storageProfile != nil {
+					if dataDisks := props.VirtualMachineProfile.StorageProfile.DataDisks; dataDisks != nil {
+						flattenedDataDisks := flattenAzureRmVirtualMachineScaleSetStorageProfileDataDisk(dataDisks)
+						if err := d.Set("storage_profile_data_disk", flattenedDataDisks); err != nil {
+							return fmt.Errorf("[DEBUG] setting `storage_profile_data_disk`: %#v", err)
+						}
+					}
+
+					if imageRef := storageProfile.ImageReference; imageRef != nil {
+						flattenedImageRef := flattenAzureRmVirtualMachineScaleSetStorageProfileImageReference(imageRef)
+						if err := d.Set("storage_profile_image_reference", flattenedImageRef); err != nil {
+							return fmt.Errorf("[DEBUG] setting `storage_profile_image_reference`: %#v", err)
+						}
+					}
+
+					if osDisk := storageProfile.OsDisk; osDisk != nil {
+						flattenedOSDisk := flattenAzureRmVirtualMachineScaleSetStorageProfileOSDisk(osDisk)
+						if err := d.Set("storage_profile_os_disk", flattenedOSDisk); err != nil {
+							return fmt.Errorf("[DEBUG] setting `storage_profile_os_disk`: %#v", err)
+						}
+					}
+				}
+
+				if extensionProfile := props.VirtualMachineProfile.ExtensionProfile; extensionProfile != nil {
+					extension, err := flattenAzureRmVirtualMachineScaleSetExtensionProfile(extensionProfile)
+					if err != nil {
+						return fmt.Errorf("[DEBUG] setting Virtual Machine Scale Set Extension Profile error: %#v", err)
+					}
+					if err := d.Set("extension", extension); err != nil {
+						return fmt.Errorf("[DEBUG] setting `extension`: %#v", err)
+					}
+				}
+			}
+		}
+		return tags.FlattenAndSet(d, model.Tags)
+	}
+	return nil
+}

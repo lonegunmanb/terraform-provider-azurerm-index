@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate
+import (
+	"fmt"
+	"net"
+	"strings"
+)
+func validateCIDROverlap(sourceCIDR string, checkCIDR string) (bool, error) {
+	_, sourceNetwork, err := net.ParseCIDR(sourceCIDR)
+	if err != nil {
+		return false, err
+	}
+
+	sourceOnes, sourceBits := sourceNetwork.Mask.Size()
+	if sourceOnes == 0 && sourceBits == 0 {
+		return false, fmt.Errorf("%q CIDR must be in its canonical form", sourceCIDR)
+	}
+
+	_, checkNetwork, err := net.ParseCIDR(checkCIDR)
+	if err != nil {
+		return false, err
+	}
+
+	checkOnes, checkBits := checkNetwork.Mask.Size()
+	if checkOnes == 0 && checkBits == 0 {
+		return false, fmt.Errorf("%q CIDR must be in its canonical form", checkCIDR)
+	}
+
+	ipStr := checkNetwork.IP.String()
+	checkIp := net.ParseIP(ipStr)
+	if checkIp == nil {
+		return false, fmt.Errorf("unable to parse %q, invalid IP address", ipStr)
+	}
+
+	ipStr = sourceNetwork.IP.String()
+	sourceIp := net.ParseIP(ipStr)
+	if sourceIp == nil {
+		return false, fmt.Errorf("unable to parse %q, invalid IP address", ipStr)
+	}
+
+	// swap the check values depending on which CIDR is more specific
+	if sourceOnes > checkOnes {
+		sourceNetwork = checkNetwork
+		checkIp = sourceIp
+	}
+
+	// CIDRs overlap was detected
+	if sourceNetwork.Contains(checkIp) {
+		return true, nil
+	}
+
+	// CIDR overlap was not detected
+	return false, nil
+}

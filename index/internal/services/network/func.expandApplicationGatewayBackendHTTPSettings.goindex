@@ -1,0 +1,117 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewayBackendHTTPSettings(d *pluginsdk.ResourceData, gatewayID string) *[]applicationgateways.ApplicationGatewayBackendHTTPSettings {
+	results := make([]applicationgateways.ApplicationGatewayBackendHTTPSettings, 0)
+	vs := d.Get("backend_http_settings").(*schema.Set).List()
+
+	for _, raw := range vs {
+		v := raw.(map[string]interface{})
+
+		name := v["name"].(string)
+		path := v["path"].(string)
+		port := int64(v["port"].(int))
+		protocol := v["protocol"].(string)
+		cookieBasedAffinity := v["cookie_based_affinity"].(string)
+		pickHostNameFromBackendAddress := v["pick_host_name_from_backend_address"].(bool)
+		requestTimeout := int64(v["request_timeout"].(int))
+
+		setting := applicationgateways.ApplicationGatewayBackendHTTPSettings{
+			Name: &name,
+			Properties: &applicationgateways.ApplicationGatewayBackendHTTPSettingsPropertiesFormat{
+				CookieBasedAffinity:            pointer.To(applicationgateways.ApplicationGatewayCookieBasedAffinity(cookieBasedAffinity)),
+				Path:                           pointer.To(path),
+				PickHostNameFromBackendAddress: pointer.To(pickHostNameFromBackendAddress),
+				Port:                           pointer.To(port),
+				Protocol:                       pointer.To(applicationgateways.ApplicationGatewayProtocol(protocol)),
+				RequestTimeout:                 pointer.To(requestTimeout),
+				ConnectionDraining:             expandApplicationGatewayConnectionDraining(v),
+			},
+		}
+
+		hostName := v["host_name"].(string)
+		if hostName != "" {
+			setting.Properties.HostName = pointer.To(hostName)
+		}
+
+		affinityCookieName := v["affinity_cookie_name"].(string)
+		if affinityCookieName != "" {
+			setting.Properties.AffinityCookieName = pointer.To(affinityCookieName)
+		}
+
+		if v["authentication_certificate"] != nil {
+			authCerts := v["authentication_certificate"].([]interface{})
+			authCertSubResources := make([]applicationgateways.SubResource, 0)
+
+			for _, rawAuthCert := range authCerts {
+				authCert := rawAuthCert.(map[string]interface{})
+				authCertName := authCert["name"].(string)
+				authCertID := fmt.Sprintf("%s/authenticationCertificates/%s", gatewayID, authCertName)
+				authCertSubResource := applicationgateways.SubResource{
+					Id: pointer.To(authCertID),
+				}
+
+				authCertSubResources = append(authCertSubResources, authCertSubResource)
+			}
+
+			setting.Properties.AuthenticationCertificates = &authCertSubResources
+		}
+
+		if v["trusted_root_certificate_names"] != nil {
+			trustedRootCertNames := v["trusted_root_certificate_names"].([]interface{})
+			trustedRootCertSubResources := make([]applicationgateways.SubResource, 0)
+
+			for _, rawTrustedRootCertName := range trustedRootCertNames {
+				trustedRootCertName := rawTrustedRootCertName.(string)
+				trustedRootCertID := fmt.Sprintf("%s/trustedRootCertificates/%s", gatewayID, trustedRootCertName)
+				trustedRootCertSubResource := applicationgateways.SubResource{
+					Id: pointer.To(trustedRootCertID),
+				}
+
+				trustedRootCertSubResources = append(trustedRootCertSubResources, trustedRootCertSubResource)
+			}
+
+			setting.Properties.TrustedRootCertificates = &trustedRootCertSubResources
+		}
+
+		probeName := v["probe_name"].(string)
+		if probeName != "" {
+			probeID := fmt.Sprintf("%s/probes/%s", gatewayID, probeName)
+			setting.Properties.Probe = &applicationgateways.SubResource{
+				Id: pointer.To(probeID),
+			}
+		}
+
+		results = append(results, setting)
+	}
+
+	return &results
+}

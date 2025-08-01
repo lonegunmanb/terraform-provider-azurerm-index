@@ -1,0 +1,145 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mongocluster
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mongocluster/2024-07-01/mongoclusters"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r MongoClusterResource) Arguments() map[string]*schema.Schema {
+	return map[string]*schema.Schema{
+		"name": {
+			ForceNew: true,
+			Required: true,
+			Type:     schema.TypeString,
+			ValidateFunc: validation.StringMatch(
+				regexp.MustCompile(`^[a-z\d]([-a-z\d]{1,38}[a-z\d])$`),
+				"`name` must be between 3 and 40 characters. It can contain only lowercase letters, numbers, and hyphens (-). It must start and end with a lowercase letter or number.",
+			),
+		},
+
+		"resource_group_name": commonschema.ResourceGroupName(),
+
+		"location": commonschema.Location(),
+
+		"administrator_username": {
+			Type:         schema.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			RequiredWith: []string{"administrator_password"},
+		},
+
+		"create_mode": {
+			Type:     schema.TypeString,
+			Optional: true,
+			ForceNew: true,
+			Default:  string(mongoclusters.CreateModeDefault),
+			// Confirmed with service team the 'Default' and `GeoReplica` are the only accepted value currently, other values will be supported later.
+			ValidateFunc: validation.StringInSlice([]string{
+				string(mongoclusters.CreateModeDefault),
+				string(mongoclusters.CreateModeGeoReplica),
+			}, false),
+		},
+
+		"preview_features": {
+			Type:     schema.TypeList,
+			Optional: true,
+			ForceNew: true,
+			Elem: &schema.Schema{
+				Type:         schema.TypeString,
+				ValidateFunc: validation.StringInSlice(mongoclusters.PossibleValuesForPreviewFeature(), false),
+			},
+		},
+
+		"shard_count": {
+			Type:         schema.TypeInt,
+			Optional:     true,
+			ValidateFunc: validation.IntAtLeast(1),
+			ForceNew:     true,
+		},
+
+		"source_location": {
+			Type:             schema.TypeString,
+			Optional:         true,
+			ForceNew:         true,
+			StateFunc:        location.StateFunc,
+			DiffSuppressFunc: location.DiffSuppressFunc,
+			ValidateFunc:     validation.StringIsNotEmpty,
+			RequiredWith:     []string{"source_server_id"},
+		},
+
+		"source_server_id": {
+			Type:         schema.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			ValidateFunc: mongoclusters.ValidateMongoClusterID,
+		},
+
+		"administrator_password": {
+			Type:         schema.TypeString,
+			Optional:     true,
+			Sensitive:    true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			RequiredWith: []string{"administrator_username"},
+		},
+
+		"compute_tier": {
+			Type:     schema.TypeString,
+			Optional: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				"Free",
+				"M25",
+				"M30",
+				"M40",
+				"M50",
+				"M60",
+				"M80",
+			}, false),
+		},
+
+		"high_availability_mode": {
+			Type:     schema.TypeString,
+			Optional: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				// Confirmed with service team the `SameZone` is currently not supported.
+				string(mongoclusters.HighAvailabilityModeDisabled),
+				string(mongoclusters.HighAvailabilityModeZoneRedundantPreferred),
+			}, false),
+		},
+
+		"public_network_access": {
+			Type:         schema.TypeString,
+			Optional:     true,
+			Default:      string(mongoclusters.PublicNetworkAccessEnabled),
+			ValidateFunc: validation.StringInSlice(mongoclusters.PossibleValuesForPublicNetworkAccess(), false),
+		},
+
+		"storage_size_in_gb": {
+			Type:         schema.TypeInt,
+			Optional:     true,
+			ValidateFunc: validation.IntBetween(32, 16384),
+		},
+
+		"tags": commonschema.Tags(),
+
+		"version": {
+			Type:     schema.TypeString,
+			Optional: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				"5.0",
+				"6.0",
+				"7.0",
+			}, false),
+		},
+	}
+}

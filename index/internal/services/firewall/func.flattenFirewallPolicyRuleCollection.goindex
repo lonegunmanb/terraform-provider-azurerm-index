@@ -1,0 +1,123 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/firewallpolicyrulecollectiongroups"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFirewallPolicyRuleCollection(input *[]firewallpolicyrulecollectiongroups.FirewallPolicyRuleCollection) ([]interface{}, []interface{}, []interface{}, error) {
+	var (
+		applicationRuleCollection = []interface{}{}
+		networkRuleCollection     = []interface{}{}
+		natRuleCollection         = []interface{}{}
+	)
+	if input == nil {
+		return applicationRuleCollection, networkRuleCollection, natRuleCollection, nil
+	}
+
+	for _, e := range *input {
+		var result map[string]interface{}
+
+		switch rule := e.(type) {
+		case firewallpolicyrulecollectiongroups.FirewallPolicyFilterRuleCollection:
+			var name string
+			if rule.Name != nil {
+				name = *rule.Name
+			}
+			var priority int64
+			if rule.Priority != nil {
+				priority = *rule.Priority
+			}
+
+			var action string
+			if rule.Action != nil {
+				action = string(pointer.From(rule.Action.Type))
+			}
+
+			result = map[string]interface{}{
+				"name":     name,
+				"priority": priority,
+				"action":   action,
+			}
+
+			if rule.Rules == nil || len(*rule.Rules) == 0 {
+				continue
+			}
+
+			// Determine the rule type based on the first rule's type
+			switch (*rule.Rules)[0].(type) {
+			case firewallpolicyrulecollectiongroups.ApplicationRule:
+				appRules, err := flattenFirewallPolicyRuleApplication(rule.Rules)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				result["rule"] = appRules
+
+				applicationRuleCollection = append(applicationRuleCollection, result)
+
+			case firewallpolicyrulecollectiongroups.FirewallPolicyRule:
+				networkRules, err := flattenFirewallPolicyRuleNetwork(rule.Rules)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				result["rule"] = networkRules
+
+				networkRuleCollection = append(networkRuleCollection, result)
+
+			default:
+				return nil, nil, nil, fmt.Errorf("unknown rule condition type %+v", (*rule.Rules)[0])
+			}
+		case firewallpolicyrulecollectiongroups.FirewallPolicyNatRuleCollection:
+			var name string
+			if rule.Name != nil {
+				name = *rule.Name
+			}
+			var priority int64
+			if rule.Priority != nil {
+				priority = *rule.Priority
+			}
+
+			var action string
+			if rule.Action != nil {
+				// todo 4.0 change this from DNAT to Dnat
+				// doing this because we hardcode Dnat for https://github.com/Azure/azure-rest-api-specs/issues/9986
+				if strings.EqualFold(string(pointer.From(rule.Action.Type)), "Dnat") {
+					action = "Dnat"
+				} else {
+					action = string(pointer.From(rule.Action.Type))
+				}
+			}
+
+			rules, err := flattenFirewallPolicyRuleNat(rule.Rules)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			result = map[string]interface{}{
+				"name":     name,
+				"priority": priority,
+				"action":   action,
+				"rule":     rules,
+			}
+
+			natRuleCollection = append(natRuleCollection, result)
+
+		default:
+			return nil, nil, nil, fmt.Errorf("unknown rule type %+v", rule)
+		}
+	}
+	return applicationRuleCollection, networkRuleCollection, natRuleCollection, nil
+}

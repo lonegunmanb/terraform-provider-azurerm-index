@@ -1,0 +1,241 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-03-01/virtualmachineruncommands"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r VirtualMachineRunCommandResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.VirtualMachineRunCommandName,
+		},
+
+		"virtual_machine_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: commonids.ValidateVirtualMachineID,
+		},
+
+		"source": {
+			Type:     pluginsdk.TypeList,
+			Required: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"command_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+						ExactlyOneOf: []string{
+							"source.0.command_id",
+							"source.0.script",
+							"source.0.script_uri",
+						},
+					},
+					"script": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+						ExactlyOneOf: []string{
+							"source.0.command_id",
+							"source.0.script",
+							"source.0.script_uri",
+						},
+					},
+					"script_uri": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validation.IsURLWithHTTPS,
+						ExactlyOneOf: []string{
+							"source.0.command_id",
+							"source.0.script",
+							"source.0.script_uri",
+						},
+					},
+					"script_uri_managed_identity": {
+						Type:      pluginsdk.TypeList,
+						Optional:  true,
+						Sensitive: true,
+						MaxItems:  1,
+						RequiredWith: []string{
+							"source.0.script_uri",
+						},
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"client_id": {
+									Type:         pluginsdk.TypeString,
+									Optional:     true,
+									Sensitive:    true,
+									ValidateFunc: validation.StringIsNotEmpty,
+									ConflictsWith: []string{
+										"source.0.script_uri_managed_identity.0.object_id",
+									},
+								},
+								"object_id": {
+									Type:         pluginsdk.TypeString,
+									Optional:     true,
+									Sensitive:    true,
+									ValidateFunc: validation.StringIsNotEmpty,
+									ConflictsWith: []string{
+										"source.0.script_uri_managed_identity.0.client_id",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+
+		"error_blob_managed_identity": {
+			Type:      pluginsdk.TypeList,
+			Optional:  true,
+			MaxItems:  1,
+			Sensitive: true,
+			RequiredWith: []string{
+				"error_blob_uri",
+			},
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"client_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Sensitive:    true,
+						ValidateFunc: validation.IsUUID,
+						ConflictsWith: []string{
+							"error_blob_managed_identity.0.object_id",
+						},
+					},
+					"object_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Sensitive:    true,
+						ValidateFunc: validation.IsUUID,
+						ConflictsWith: []string{
+							"error_blob_managed_identity.0.client_id",
+						},
+					},
+				},
+			},
+		},
+
+		"error_blob_uri": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.IsURLWithHTTPS,
+		},
+
+		"output_blob_managed_identity": {
+			Type:      pluginsdk.TypeList,
+			Optional:  true,
+			MaxItems:  1,
+			Sensitive: true,
+			RequiredWith: []string{
+				"output_blob_uri",
+			},
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"client_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Sensitive:    true,
+						ValidateFunc: validation.StringIsNotEmpty,
+						ConflictsWith: []string{
+							"output_blob_managed_identity.0.object_id",
+						},
+					},
+					"object_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Sensitive:    true,
+						ValidateFunc: validation.StringIsNotEmpty,
+						ConflictsWith: []string{
+							"output_blob_managed_identity.0.client_id",
+						},
+					},
+				},
+			},
+		},
+
+		"output_blob_uri": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.IsURLWithHTTPS,
+		},
+
+		"parameter": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"value": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+				},
+			},
+		},
+
+		"protected_parameter": {
+			Type:      pluginsdk.TypeList,
+			Optional:  true,
+			Sensitive: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						Sensitive:    true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"value": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						Sensitive:    true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+				},
+			},
+		},
+
+		"run_as_password": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Sensitive:    true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"run_as_user": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"location": commonschema.Location(),
+
+		"tags": commonschema.Tags(),
+	}
+}

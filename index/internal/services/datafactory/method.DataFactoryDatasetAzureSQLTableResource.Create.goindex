@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
+)
+func (r DataFactoryDatasetAzureSQLTableResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DataFactory.DatasetClient
+			subscriptionId := client.SubscriptionID
+			var data DataFactoryDatasetAzureSQLTableResourceSchema
+			if err := metadata.Decode(&data); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			dataFactoryId, err := factories.ParseFactoryID(data.DataFactoryId)
+			if err != nil {
+				return err
+			}
+
+			id := parse.NewDataSetID(subscriptionId, dataFactoryId.ResourceGroupName, dataFactoryId.FactoryName, data.Name)
+
+			existing, err := client.Get(ctx, id.ResourceGroup, id.FactoryName, id.Name, "")
+			if err != nil {
+				if !utils.ResponseWasNotFound(existing.Response) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+			if !utils.ResponseWasNotFound(existing.Response) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			azureSqlDatasetProperties := datafactory.AzureSQLTableDatasetTypeProperties{
+				Schema: data.Schema,
+				Table:  data.Table,
+			}
+
+			linkedServiceId, err := parse.LinkedServiceID(data.LinkedServiceId)
+			if err != nil {
+				return err
+			}
+			if linkedServiceId.SubscriptionId != id.SubscriptionId || linkedServiceId.ResourceGroup != id.ResourceGroup || linkedServiceId.FactoryName != id.FactoryName {
+				return fmt.Errorf("checking the linked service %s: not within the same data factory as this dataset %s", data.LinkedServiceId, id.ID())
+			}
+			linkedService := &datafactory.LinkedServiceReference{
+				Type:          pointer.To("LinkedServiceReference"),
+				ReferenceName: pointer.To(linkedServiceId.Name),
+			}
+
+			description := data.Description
+			azureSqlTableset := datafactory.AzureSQLTableDataset{
+				AzureSQLTableDatasetTypeProperties: &azureSqlDatasetProperties,
+				LinkedServiceName:                  linkedService,
+				Description:                        &description,
+			}
+
+			if data.Folder != "" {
+				azureSqlTableset.Folder = &datafactory.DatasetFolder{
+					Name: &data.Folder,
+				}
+			}
+
+			if len(data.Parameters) > 0 {
+				azureSqlTableset.Parameters = expandDataSetParameters(data.Parameters)
+			}
+
+			if len(data.Annotations) > 0 {
+				annotations := make([]interface{}, len(data.Annotations))
+				for i, v := range data.Annotations {
+					annotations[i] = v
+				}
+				azureSqlTableset.Annotations = &annotations
+			}
+
+			if len(data.AdditionalProperties) > 0 {
+				azureSqlTableset.AdditionalProperties = data.AdditionalProperties
+			}
+
+			if len(data.SchemaColumn) > 0 {
+				azureSqlTableset.Structure = data.SchemaColumn
+			}
+
+			datasetType := string(datafactory.TypeBasicDatasetTypeAzureSQLTable)
+			dataset := datafactory.DatasetResource{
+				Properties: &azureSqlTableset,
+				Type:       &datasetType,
+			}
+
+			if _, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.FactoryName, id.Name, dataset, ""); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

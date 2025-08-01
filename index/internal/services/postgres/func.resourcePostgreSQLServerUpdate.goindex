@@ -1,0 +1,172 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/replicas"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/serversecurityalertpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourcePostgreSQLServerUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Postgres.ServersClient
+	securityClient := meta.(*clients.Client).Postgres.ServerSecurityAlertPoliciesClient
+	replicasClient := meta.(*clients.Client).Postgres.ReplicasClient
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	// TODO: support for Delta updates
+
+	id, err := servers.ParseServerID(d.Id())
+	if err != nil {
+		return fmt.Errorf("parsing Postgres Server ID : %v", err)
+	}
+
+	// Locks for upscaling of replicas
+	mode := servers.CreateMode(d.Get("create_mode").(string))
+	primaryID := id.String()
+	if mode == servers.CreateModeReplica {
+		primaryID = d.Get("creation_source_server_id").(string)
+
+		// Wait for possible restarts triggered by scaling primary (and its replicas)
+		log.Printf("[DEBUG] Waiting for %s to become available", *id)
+		stateConf := &pluginsdk.StateChangeConf{
+			Pending:    []string{string(servers.ServerStateInaccessible), "Restarting"},
+			Target:     []string{string(servers.ServerStateReady)},
+			Refresh:    postgreSqlStateRefreshFunc(ctx, client, *id),
+			MinTimeout: 15 * time.Second,
+			Timeout:    d.Timeout(pluginsdk.TimeoutCreate),
+		}
+
+		if _, err = stateConf.WaitForStateContext(ctx); err != nil {
+			return fmt.Errorf("waiting for %s to become available: %+v", *id, err)
+		}
+	}
+	locks.ByID(primaryID)
+	defer locks.UnlockByID(primaryID)
+
+	sku, err := expandServerSkuName(d.Get("sku_name").(string))
+	if err != nil {
+		return fmt.Errorf("expanding `sku_name`: %v", err)
+	}
+
+	if d.HasChange("sku_name") && mode != servers.CreateModeReplica {
+		oldRaw, newRaw := d.GetChange("sku_name")
+		old := oldRaw.(string)
+		new := newRaw.(string)
+
+		if indexOfSku(old) < indexOfSku(new) {
+			replicasId := replicas.NewServerID(id.SubscriptionId, id.ResourceGroupName, id.ServerName)
+			listReplicas, err := replicasClient.ListByServer(ctx, replicasId)
+			if err != nil {
+				return fmt.Errorf("listing replicas for %s: %+v", *id, err)
+			}
+
+			propertiesReplica := servers.ServerUpdateParameters{
+				Sku: sku,
+			}
+
+			if listReplicas.Model != nil && listReplicas.Model.Value != nil {
+				replicaList := *listReplicas.Model.Value
+				for _, replica := range replicaList {
+					replicaId, err := servers.ParseServerID(*replica.Id)
+					if err != nil {
+						return fmt.Errorf("parsing Postgres Server Replica ID : %v", err)
+					}
+					if err = client.UpdateThenPoll(ctx, *replicaId, propertiesReplica); err != nil {
+						return fmt.Errorf("updating SKU for Replica %s: %+v", *replicaId, err)
+					}
+				}
+			}
+		}
+	}
+
+	ssl := servers.SslEnforcementEnumEnabled
+	if v := d.Get("ssl_enforcement_enabled"); !v.(bool) {
+		ssl = servers.SslEnforcementEnumDisabled
+	}
+
+	tlsMin := servers.MinimalTlsVersionEnum(d.Get("ssl_minimal_tls_version_enforced").(string))
+
+	if ssl == servers.SslEnforcementEnumDisabled && tlsMin != servers.MinimalTlsVersionEnumTLSEnforcementDisabled {
+		return fmt.Errorf("`ssl_minimal_tls_version_enforced` must be set to `TLSEnforcementDisabled` if `ssl_enforcement_enabled` is set to `false`")
+	}
+
+	expandedIdentity, err := identity.ExpandSystemAssigned(d.Get("identity").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding `identity`: %+v", err)
+	}
+
+	serverVersion := servers.ServerVersion(d.Get("version").(string))
+	properties := servers.ServerUpdateParameters{
+		Identity: expandedIdentity,
+		Properties: &servers.ServerUpdateParametersProperties{
+			SslEnforcement:    &ssl,
+			MinimalTlsVersion: &tlsMin,
+			StorageProfile:    expandPostgreSQLStorageProfile(d),
+			Version:           &serverVersion,
+		},
+		Sku:  sku,
+		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	publicAccess := servers.PublicNetworkAccessEnumEnabled
+	if v := d.Get("public_network_access_enabled"); !v.(bool) {
+		publicAccess = servers.PublicNetworkAccessEnumDisabled
+	}
+	properties.Properties.PublicNetworkAccess = &publicAccess
+
+	oldCreateMode, newCreateMode := d.GetChange("create_mode")
+	replicaUpdatedToDefault := servers.CreateMode(oldCreateMode.(string)) == servers.CreateModeReplica && servers.CreateMode(newCreateMode.(string)) == servers.CreateModeDefault
+	if replicaUpdatedToDefault {
+		properties.Properties.ReplicationRole = utils.String("None")
+	}
+
+	// Update Admin Password in the separate call when Replication is stopped: https://github.com/Azure/azure-rest-api-specs/issues/16898
+	if d.HasChange("administrator_login_password") && !replicaUpdatedToDefault {
+		properties.Properties.AdministratorLoginPassword = utils.String(d.Get("administrator_login_password").(string))
+	}
+
+	if err = client.UpdateThenPoll(ctx, *id, properties); err != nil {
+		return fmt.Errorf("updating %s: %+v", *id, err)
+	}
+
+	// Update Admin Password in a separate call when Replication is stopped: https://github.com/Azure/azure-rest-api-specs/issues/16898
+	if d.HasChange("administrator_login_password") && replicaUpdatedToDefault {
+		properties.Properties.AdministratorLoginPassword = utils.String(d.Get("administrator_login_password").(string))
+
+		if err = client.UpdateThenPoll(ctx, *id, properties); err != nil {
+			return fmt.Errorf("updating Admin Password of %q: %+v", id, err)
+		}
+	}
+
+	if v, ok := d.GetOk("threat_detection_policy"); ok {
+		alert := expandSecurityAlertPolicy(v)
+		securityId := serversecurityalertpolicies.NewServerID(id.SubscriptionId, id.ResourceGroupName, id.ServerName)
+		if alert != nil {
+			if err = securityClient.CreateOrUpdateThenPoll(ctx, securityId, *alert); err != nil {
+				return fmt.Errorf("updating security alert policy for %s: %+v", *id, err)
+			}
+		}
+	}
+
+	return resourcePostgreSQLServerRead(d, meta)
+}

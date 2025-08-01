@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflows"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/logic/2019-05-01/workflowtriggers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceLogicAppComponentRemove(d *pluginsdk.ResourceData, meta interface{}, kind, propertyName string, id workflows.WorkflowId, name string) error {
+	client := meta.(*clients.Client).Logic.WorkflowClient
+	ctx, cancel := timeouts.ForDelete(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	log.Printf("[DEBUG] Preparing arguments for Logic App Workspace %q (Resource Group %q) %s %q Deletion", id.WorkflowName, id.ResourceGroupName, kind, name)
+
+	// lock to prevent against Actions, Parameters or Actions conflicting
+	locks.ByName(id.WorkflowName, logicAppResourceName)
+	defer locks.UnlockByName(id.WorkflowName, logicAppResourceName)
+
+	read, err := client.Get(ctx, id)
+	if err != nil {
+		if response.WasNotFound(read.HttpResponse) {
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("[ERROR] Error making Read request on %s: %+v", id.ID(), err)
+	}
+
+	if read.Model == nil {
+		return fmt.Errorf("[ERROR] Error parsing Logic App Workflow - `Model` is nil")
+	}
+
+	if read.Model.Properties == nil {
+		return fmt.Errorf("[ERROR] Error parsing Logic App Workflow - `Properties` is nil")
+	}
+
+	if read.Model.Properties.Definition == nil {
+		return fmt.Errorf("[ERROR] Error parsing Logic App Workflow - `WorkflowProperties.Definition` is nil")
+	}
+
+	var definition interface{}
+	definitionRaw := *read.Model.Properties.Definition
+	definitionMap := definitionRaw.(map[string]interface{})
+	vs := definitionMap[propertyName].(map[string]interface{})
+	delete(vs, name)
+	definitionMap[propertyName] = vs
+	definition = definitionMap
+
+	properties := workflows.Workflow{
+		Location: read.Model.Location,
+		Properties: &workflows.WorkflowProperties{
+			Definition:                    &definition,
+			Parameters:                    read.Model.Properties.Parameters,
+			AccessControl:                 read.Model.Properties.AccessControl,
+			IntegrationAccount:            read.Model.Properties.IntegrationAccount,
+			IntegrationServiceEnvironment: read.Model.Properties.IntegrationServiceEnvironment,
+		},
+		Tags: read.Model.Tags,
+	}
+
+	if _, err = client.CreateOrUpdate(ctx, id, properties); err != nil {
+		return fmt.Errorf("removing %s %q from %s: %+v", kind, name, id.ID(), err)
+	}
+
+	return nil
+}

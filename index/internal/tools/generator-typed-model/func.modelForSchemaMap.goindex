@@ -1,0 +1,91 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"sort"
+	"strings"
+
+	. "github.com/dave/jennifer/jen"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+)
+func modelForSchemaMap(name string, sm map[string]*schema.Schema) []Statement {
+	var out []Statement
+
+	var thisStmt Statement
+
+	fields := []Code{}
+
+	keys := []string{}
+	for k := range sm {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		sch := sm[key]
+		fieldName := snake2Camel(key)
+		tag := map[string]string{"tfschema": key}
+
+		switch sch.Type {
+		case schema.TypeBool:
+			fields = append(fields, Id(fieldName).Bool().Tag(tag))
+		case schema.TypeInt:
+			fields = append(fields, Id(fieldName).Int().Tag(tag))
+		case schema.TypeString:
+			fields = append(fields, Id(fieldName).String().Tag(tag))
+		case schema.TypeFloat:
+			fields = append(fields, Id(fieldName).Float64().Tag(tag))
+		case schema.TypeList,
+			schema.TypeSet:
+			field := Id(fieldName).Index()
+
+			switch elemSch := sch.Elem.(type) {
+			case *schema.Resource:
+				typeName := fieldName + "Model"
+				out = append(out, modelForSchemaMap(typeName, elemSch.Schema)...)
+				fields = append(fields, field.Id(typeName).Tag(tag))
+			case *schema.Schema:
+				switch elemSch.Type {
+				case schema.TypeBool:
+					fields = append(fields, field.Bool().Tag(tag))
+				case schema.TypeInt:
+					fields = append(fields, field.Int().Tag(tag))
+				case schema.TypeString:
+					fields = append(fields, field.String().Tag(tag))
+				case schema.TypeFloat:
+					fields = append(fields, field.Float64().Tag(tag))
+				default:
+					panic(fmt.Errorf("unhandled type: List/Set of Schema of %s", elemSch.Type))
+				}
+			default:
+				panic(fmt.Errorf("unhandled type: List/Set of %t", sch.Elem))
+			}
+		case schema.TypeMap:
+			field := Id(fieldName).Map(String())
+			// Map's element must be of type *schema.Schema
+			elemSch := sch.Elem.(*schema.Schema)
+			switch elemSch.Type {
+			case schema.TypeBool:
+				fields = append(fields, field.Bool().Tag(tag))
+			case schema.TypeInt:
+				fields = append(fields, field.Int().Tag(tag))
+			case schema.TypeString:
+				fields = append(fields, field.String().Tag(tag))
+			case schema.TypeFloat:
+				fields = append(fields, field.Float64().Tag(tag))
+			default:
+				panic(fmt.Errorf("unhandled type: Map of %s", elemSch.Type))
+			}
+		default:
+			panic(fmt.Errorf("unhandled type: %s", sch.Type))
+		}
+	}
+	thisStmt = *Type().Id(name).Struct(fields...)
+
+	out = append(out, thisStmt)
+
+	return out
+}

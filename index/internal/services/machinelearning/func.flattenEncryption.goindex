@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/machinelearningservices/2024-04-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	keyvaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyvaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/machinelearning/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenEncryption(input *workspaces.EncryptionProperty) ([]Encryption, error) {
+	out := make([]Encryption, 0)
+
+	if input == nil || input.Status != workspaces.EncryptionStatusEnabled {
+		return out, nil
+	}
+
+	encryption := Encryption{}
+	if v := input.KeyVaultProperties.KeyVaultArmId; v != "" {
+		keyVaultId, err := commonids.ParseKeyVaultID(v)
+		if err != nil {
+			return nil, err
+		}
+		encryption.KeyVaultID = keyVaultId.ID()
+	}
+	if v := input.KeyVaultProperties.KeyIdentifier; v != "" {
+		keyId, err := keyvaultParse.ParseNestedItemID(v)
+		if err != nil {
+			return nil, err
+		}
+		encryption.KeyID = keyId.ID()
+	}
+
+	if input.Identity != nil && input.Identity.UserAssignedIdentity != nil {
+		userAssignedId, err := commonids.ParseUserAssignedIdentityIDInsensitively(*input.Identity.UserAssignedIdentity)
+		if err != nil {
+			return nil, err
+		}
+		encryption.IdentityClientID = userAssignedId.ID()
+	}
+
+	return append(out, encryption), nil
+}

@@ -1,0 +1,113 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/desktopvirtualization
+import (
+	"fmt"
+	"log"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/desktopvirtualization/2022-02-10-preview/application"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/desktopvirtualization/2022-02-10-preview/applicationgroup"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceVirtualDesktopApplication() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceVirtualDesktopApplicationCreateUpdate,
+		Read:   resourceVirtualDesktopApplicationRead,
+		Update: resourceVirtualDesktopApplicationCreateUpdate,
+		Delete: resourceVirtualDesktopApplicationDelete,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(60 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(60 * time.Minute),
+		},
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := application.ParseApplicationID(id)
+			return err
+		}),
+
+		SchemaVersion: 0,
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+				ValidateFunc: validation.All(
+					validation.StringIsNotEmpty,
+					validation.StringMatch(
+						regexp.MustCompile("^[-a-zA-Z0-9]{1,260}$"),
+						"Virtual desktop application name must be 1 - 260 characters long, contain only letters, numbers and hyphens.",
+					),
+				),
+			},
+
+			"application_group_id": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: applicationgroup.ValidateApplicationGroupID,
+			},
+
+			"friendly_name": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringLenBetween(1, 64),
+				// NOTE: O+C The API will use the value in `name` as the default
+				Computed: true,
+			},
+
+			"description": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringLenBetween(1, 512),
+			},
+
+			"path": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+			},
+
+			"command_line_argument_policy": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(application.CommandLineSettingAllow),
+					string(application.CommandLineSettingDoNotAllow),
+					string(application.CommandLineSettingRequire),
+				}, false),
+			},
+
+			"command_line_arguments": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+			},
+
+			"show_in_portal": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+			},
+
+			"icon_path": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				// NOTE: O+C The API will use the value in `path` as the default
+				Computed: true,
+			},
+
+			"icon_index": {
+				Type:     pluginsdk.TypeInt,
+				Optional: true,
+			},
+		},
+	}
+}

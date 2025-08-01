@@ -1,0 +1,144 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	validate2 "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/legacy/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenAzureRmVirtualMachineScaleSetNetworkProfile(profile *virtualmachinescalesets.VirtualMachineScaleSetNetworkProfile) []map[string]interface{} {
+	networkConfigurations := profile.NetworkInterfaceConfigurations
+	result := make([]map[string]interface{}, 0, len(*networkConfigurations))
+	for _, netConfig := range *networkConfigurations {
+		s := map[string]interface{}{
+			"name":    netConfig.Name,
+			"primary": *netConfig.Properties.Primary,
+		}
+
+		if v := netConfig.Properties.EnableAcceleratedNetworking; v != nil {
+			s["accelerated_networking"] = *v
+		}
+
+		if v := netConfig.Properties.EnableIPForwarding; v != nil {
+			s["ip_forwarding"] = *v
+		}
+
+		if v := netConfig.Properties.NetworkSecurityGroup; v != nil {
+			s["network_security_group_id"] = *v.Id
+		}
+
+		if dnsSettings := netConfig.Properties.DnsSettings; dnsSettings != nil {
+			dnsServers := make([]string, 0)
+			if s := dnsSettings.DnsServers; s != nil {
+				dnsServers = *s
+			}
+
+			s["dns_settings"] = []interface{}{map[string]interface{}{
+				"dns_servers": dnsServers,
+			}}
+		}
+
+		if netConfig.Properties.IPConfigurations != nil {
+			ipConfigs := make([]map[string]interface{}, 0, len(netConfig.Properties.IPConfigurations))
+			for _, ipConfig := range netConfig.Properties.IPConfigurations {
+				config := make(map[string]interface{})
+				config["name"] = ipConfig.Name
+
+				if properties := ipConfig.Properties; properties != nil {
+					if properties.Subnet != nil {
+						config["subnet_id"] = *properties.Subnet.Id
+					}
+
+					addressPools := make([]interface{}, 0)
+					if properties.ApplicationGatewayBackendAddressPools != nil {
+						for _, pool := range *properties.ApplicationGatewayBackendAddressPools {
+							if v := pool.Id; v != nil {
+								addressPools = append(addressPools, *v)
+							}
+						}
+					}
+					config["application_gateway_backend_address_pool_ids"] = pluginsdk.NewSet(pluginsdk.HashString, addressPools)
+
+					applicationSecurityGroups := make([]interface{}, 0)
+					if properties.ApplicationSecurityGroups != nil {
+						for _, asg := range *properties.ApplicationSecurityGroups {
+							if v := asg.Id; v != nil {
+								applicationSecurityGroups = append(applicationSecurityGroups, *v)
+							}
+						}
+					}
+					config["application_security_group_ids"] = pluginsdk.NewSet(pluginsdk.HashString, applicationSecurityGroups)
+
+					if properties.LoadBalancerBackendAddressPools != nil {
+						addressPools := make([]interface{}, 0, len(*properties.LoadBalancerBackendAddressPools))
+						for _, pool := range *properties.LoadBalancerBackendAddressPools {
+							if v := pool.Id; v != nil {
+								addressPools = append(addressPools, *v)
+							}
+						}
+						config["load_balancer_backend_address_pool_ids"] = pluginsdk.NewSet(pluginsdk.HashString, addressPools)
+					}
+
+					if properties.LoadBalancerInboundNatPools != nil {
+						inboundNatPools := make([]interface{}, 0, len(*properties.LoadBalancerInboundNatPools))
+						for _, rule := range *properties.LoadBalancerInboundNatPools {
+							if v := rule.Id; v != nil {
+								inboundNatPools = append(inboundNatPools, *v)
+							}
+						}
+						config["load_balancer_inbound_nat_rules_ids"] = pluginsdk.NewSet(pluginsdk.HashString, inboundNatPools)
+					}
+
+					if properties.Primary != nil {
+						config["primary"] = *properties.Primary
+					}
+
+					if publicIpInfo := properties.PublicIPAddressConfiguration; publicIpInfo != nil {
+						publicIpConfigs := make([]map[string]interface{}, 0, 1)
+						publicIpConfig := make(map[string]interface{})
+						publicIpConfig["name"] = publicIpInfo.Name
+						if publicIpProperties := publicIpInfo.Properties; publicIpProperties != nil {
+							if dns := publicIpProperties.DnsSettings; dns != nil {
+								publicIpConfig["domain_name_label"] = dns.DomainNameLabel
+							}
+							if timeout := publicIpProperties.IdleTimeoutInMinutes; timeout != nil {
+								publicIpConfig["idle_timeout"] = *timeout
+							}
+							publicIpConfigs = append(publicIpConfigs, publicIpConfig)
+						}
+						config["public_ip_address_configuration"] = publicIpConfigs
+					}
+
+					ipConfigs = append(ipConfigs, config)
+				}
+			}
+
+			s["ip_configuration"] = ipConfigs
+		}
+
+		result = append(result, s)
+	}
+
+	return result
+}

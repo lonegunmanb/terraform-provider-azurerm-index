@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/parse
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+)
+func CommunityGalleryImageVersionID(input string) (*CommunityGalleryImageVersionId, error) {
+	id := CommunityGalleryImageVersionId{}
+	parsed, err := resourceids.NewParserFromResourceIdType(&id).Parse(input, false)
+	if err != nil {
+		return nil, err
+	}
+
+	var ok bool
+	if id.GalleryName, ok = parsed.Parsed["galleryName"]; !ok {
+		return nil, resourceids.NewSegmentNotSpecifiedError(&id, "galleryName", *parsed)
+	}
+	if id.ImageName, ok = parsed.Parsed["imageName"]; !ok {
+		return nil, resourceids.NewSegmentNotSpecifiedError(&id, "imageName", *parsed)
+	}
+	if id.Version, ok = parsed.Parsed["version"]; !ok {
+		return nil, resourceids.NewSegmentNotSpecifiedError(&id, "version", *parsed)
+	}
+
+	// Additional validation for version, it can be the word "latest" or
+	// a string in the format of Major.Minor.Patch, it must always be
+	// a semantic version...
+	if !strings.EqualFold(id.Version, "latest") {
+		versionParts := strings.Split(id.Version, ".")
+
+		if len(versionParts) != 3 {
+			return nil, fmt.Errorf("ID 'Version' element is invalid, 'Version' must either be 'latest' or the semantic version(Major.Minor.Patch) for the image, got %s", id.Version)
+		}
+
+		for _, v := range versionParts {
+			if _, err := strconv.Atoi(v); err != nil {
+				return nil, fmt.Errorf("ID 'Version' element is invalid, semantic version elements must all be valid integers, got %s", id.Version)
+			}
+		}
+	}
+
+	return &id, nil
+}

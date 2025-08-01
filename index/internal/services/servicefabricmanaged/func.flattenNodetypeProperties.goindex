@@ -1,0 +1,95 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/servicefabricmanaged
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicefabricmanagedcluster/2021-05-01/managedcluster"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/servicefabricmanagedcluster/2021-05-01/nodetype"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenNodetypeProperties(nt nodetype.NodeType) NodeType {
+	props := nt.Properties
+	if props == nil {
+		return NodeType{Name: pointer.From(nt.Name)}
+	}
+
+	out := NodeType{
+		DataDiskSize:     nt.Properties.DataDiskSizeGB,
+		Name:             pointer.From(nt.Name),
+		Primary:          props.IsPrimary,
+		VmImageOffer:     pointer.From(props.VMImageOffer),
+		VmImagePublisher: pointer.From(props.VMImagePublisher),
+		VmImageSku:       pointer.From(props.VMImageSku),
+		VmImageVersion:   pointer.From(props.VMImageVersion),
+		VmInstanceCount:  props.VMInstanceCount,
+		VmSize:           pointer.From(props.VMSize),
+		Id:               pointer.From(nt.Id),
+	}
+
+	if appPorts := props.ApplicationPorts; appPorts != nil {
+		out.ApplicationPorts = fmt.Sprintf("%d-%d", appPorts.StartPort, appPorts.EndPort)
+	}
+
+	if ephemeralPorts := props.EphemeralPorts; ephemeralPorts != nil {
+		out.EphemeralPorts = fmt.Sprintf("%d-%d", ephemeralPorts.StartPort, ephemeralPorts.EndPort)
+	}
+
+	if mpg := props.MultiplePlacementGroups; mpg != nil {
+		out.MultiplePlacementGroupsEnabled = *mpg
+	}
+
+	if stateless := props.IsStateless; stateless != nil {
+		out.Stateless = *stateless
+	}
+
+	if capacities := props.Capacities; capacities != nil {
+		caps := make(map[string]string)
+		for k, v := range *capacities {
+			caps[k] = v
+		}
+		out.Capacities = caps
+	}
+
+	if diskType := props.DataDiskType; diskType != nil {
+		out.DataDiskType = *diskType
+	}
+
+	if placementProps := props.PlacementProperties; placementProps != nil {
+		placements := make(map[string]string)
+		for k, v := range *placementProps {
+			placements[k] = v
+		}
+		out.PlacementProperties = placements
+	}
+
+	if secrets := props.VMSecrets; secrets != nil {
+		secs := make([]VmSecrets, len(*secrets))
+		for idx, sec := range *secrets {
+			certs := make([]VaultCertificates, len(sec.VaultCertificates))
+			for idx, cert := range sec.VaultCertificates {
+				certs[idx] = VaultCertificates{
+					Store: cert.CertificateStore,
+					Url:   cert.CertificateURL,
+				}
+			}
+			secs[idx] = VmSecrets{
+				SourceVault:  pointer.From(sec.SourceVault.Id),
+				Certificates: certs,
+			}
+		}
+		out.VmSecrets = secs
+	}
+	return out
+}

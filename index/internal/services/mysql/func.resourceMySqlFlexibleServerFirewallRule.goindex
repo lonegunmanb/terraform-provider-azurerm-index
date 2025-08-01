@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2023-12-30/firewallrules"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceMySqlFlexibleServerFirewallRule() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Create: resourceMySqlFlexibleServerFirewallRuleCreateUpdate,
+		Read:   resourceMySqlFlexibleServerFirewallRuleRead,
+		Update: resourceMySqlFlexibleServerFirewallRuleCreateUpdate,
+		Delete: resourceMySqlFlexibleServerFirewallRuleDelete,
+
+		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
+			_, err := firewallrules.ParseFirewallRuleID(id)
+			return err
+		}),
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
+			Update: pluginsdk.DefaultTimeout(30 * time.Minute),
+			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
+			},
+
+			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"server_name": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ForceNew:     true,
+				ValidateFunc: validate.FlexibleServerName,
+			},
+
+			"start_ip_address": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: azValidate.IPv4Address,
+			},
+
+			"end_ip_address": {
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: azValidate.IPv4Address,
+			},
+		},
+	}
+}

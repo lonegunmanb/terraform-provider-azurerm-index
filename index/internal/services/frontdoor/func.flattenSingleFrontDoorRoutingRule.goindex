@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenSingleFrontDoorRoutingRule(input frontdoors.RoutingRule, oldBlocks interface{}, frontDoorId frontdoors.FrontDoorId) (map[string]interface{}, error) {
+	id := ""
+	name := ""
+	if input.Name != nil {
+		// rewrite the ID to ensure it's consistent
+		id = parse.NewRoutingRuleID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, *input.Name).ID()
+		name = *input.Name
+	}
+
+	acceptedProtocols := make([]string, 0)
+	enabled := false
+	forwardingConfiguration := make([]interface{}, 0)
+	frontEndEndpoints := make([]string, 0)
+	patternsToMatch := make([]string, 0)
+	redirectConfiguration := make([]interface{}, 0)
+
+	if props := input.Properties; props != nil {
+		acceptedProtocols = flattenFrontDoorAcceptedProtocol(props.AcceptedProtocols)
+		if props.EnabledState != nil {
+			enabled = *props.EnabledState == frontdoors.RoutingRuleEnabledStateEnabled
+		}
+		forwardConfiguration, err := flattenRoutingRuleForwardingConfiguration(props.RouteConfiguration, oldBlocks)
+		if err != nil {
+			return nil, fmt.Errorf("flattening `forward_configuration`: %+v", err)
+		}
+
+		forwardingConfiguration = *forwardConfiguration
+		frontendEndpoints, err := flattenFrontDoorFrontendEndpointsSubResources(props.FrontendEndpoints)
+		if err != nil {
+			return nil, fmt.Errorf("flattening `frontend_endpoints`: %+v", err)
+		}
+
+		frontEndEndpoints = *frontendEndpoints
+		if props.PatternsToMatch != nil {
+			patternsToMatch = *props.PatternsToMatch
+		}
+		redirectConfiguration = flattenRoutingRuleRedirectConfiguration(props.RouteConfiguration)
+	}
+
+	output := map[string]interface{}{
+		"accepted_protocols":       acceptedProtocols,
+		"enabled":                  enabled,
+		"forwarding_configuration": forwardingConfiguration,
+		"frontend_endpoints":       frontEndEndpoints,
+		"id":                       id,
+		"name":                     name,
+		"patterns_to_match":        patternsToMatch,
+		"redirect_configuration":   redirectConfiguration,
+	}
+
+	return output, nil
+}

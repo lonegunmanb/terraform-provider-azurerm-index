@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-07-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenOrchestratedVirtualMachineScaleSetWindowsConfiguration(input *virtualmachinescalesets.VirtualMachineScaleSetOSProfile, d *pluginsdk.ResourceData) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	output := make(map[string]interface{})
+	winConfig := input.WindowsConfiguration
+	patchSettings := winConfig.PatchSettings
+
+	if v := input.AdminUsername; v != nil {
+		output["admin_username"] = *v
+	}
+
+	if v := d.Get("os_profile").([]interface{}); len(v) > 0 {
+		osProfile := v[0].(map[string]interface{})
+		if winConfigRaw := osProfile["windows_configuration"].([]interface{}); len(winConfigRaw) > 0 {
+			winCfg := winConfigRaw[0].(map[string]interface{})
+			output["admin_password"] = winCfg["admin_password"].(string)
+		}
+	}
+
+	if v := input.ComputerNamePrefix; v != nil {
+		output["computer_name_prefix"] = *v
+	}
+
+	if v := winConfig.AdditionalUnattendContent; v != nil {
+		output["additional_unattend_content"] = flattenWindowsConfigurationAdditionalUnattendContent(winConfig, d)
+	}
+
+	if v := winConfig.EnableAutomaticUpdates; v != nil {
+		output["enable_automatic_updates"] = *v
+	}
+
+	if v := winConfig.ProvisionVMAgent; v != nil {
+		output["provision_vm_agent"] = *v
+	}
+
+	if v := input.Secrets; v != nil {
+		output["secret"] = flattenWindowsSecretsVMSS(v)
+	}
+
+	if v := winConfig.WinRM; v != nil {
+		output["winrm_listener"] = flattenWinRMListenerVMSS(winConfig.WinRM)
+	}
+
+	if v := winConfig.TimeZone; v != nil {
+		output["timezone"] = v
+	}
+
+	output["patch_mode"] = string(virtualmachinescalesets.WindowsVMGuestPatchModeAutomaticByOS)
+	output["patch_assessment_mode"] = string(virtualmachinescalesets.WindowsPatchAssessmentModeAutomaticByPlatform)
+	output["hotpatching_enabled"] = false
+
+	if patchSettings != nil {
+		output["patch_mode"] = pointer.From(patchSettings.PatchMode)
+		output["patch_assessment_mode"] = pointer.From(patchSettings.AssessmentMode)
+
+		if v := patchSettings.EnableHotpatching; v != nil {
+			output["hotpatching_enabled"] = *v
+		}
+	}
+
+	return []interface{}{output}
+}

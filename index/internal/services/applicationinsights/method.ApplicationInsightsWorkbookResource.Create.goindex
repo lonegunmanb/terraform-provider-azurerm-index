@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	workbooks "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2022-04-01/workbooksapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r ApplicationInsightsWorkbookResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model ApplicationInsightsWorkbookModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			client := metadata.Client.AppInsights.WorkbookClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+			id := workbooks.NewWorkbookID(subscriptionId, model.ResourceGroupName, model.Name)
+			existing, err := client.WorkbooksGet(ctx, id, workbooks.WorkbooksGetOperationOptions{CanFetchContent: utils.Bool(true)})
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for existing %s: %+v", id, err)
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			identityValue, err := identity.ExpandLegacySystemAndUserAssignedMap(metadata.ResourceData.Get("identity").([]interface{}))
+			if err != nil {
+				return fmt.Errorf("expanding `identity`: %+v", err)
+			}
+
+			kindValue := workbooks.WorkbookSharedTypeKindShared
+			properties := &workbooks.Workbook{
+				Identity: identityValue,
+				Kind:     &kindValue,
+				Location: location.Normalize(model.Location),
+				Properties: &workbooks.WorkbookProperties{
+					Category:       model.Category,
+					DisplayName:    model.DisplayName,
+					SerializedData: model.DataJson,
+					SourceId:       &model.SourceId,
+				},
+
+				Tags: &model.Tags,
+			}
+
+			if model.Description != "" {
+				properties.Properties.Description = &model.Description
+			}
+
+			if model.StorageContainerId != "" {
+				properties.Properties.StorageUri = &model.StorageContainerId
+			}
+
+			if _, err := client.WorkbooksCreateOrUpdate(ctx, id, *properties, workbooks.WorkbooksCreateOrUpdateOperationOptions{SourceId: &model.SourceId}); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

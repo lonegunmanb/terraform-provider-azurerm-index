@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/preview/synapse/mgmt/v2.0/synapse" // nolint: staticcheck
+	"github.com/gofrs/uuid"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/purview/2021-07-01/account"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandWorkspaceRepositoryConfiguration(d *pluginsdk.ResourceData) *synapse.WorkspaceRepositoryConfiguration {
+	if azdoList, ok := d.GetOk("azure_devops_repo"); ok {
+		azdo := azdoList.([]interface{})[0].(map[string]interface{})
+		config := synapse.WorkspaceRepositoryConfiguration{
+			Type:                utils.String(workspaceVSTSConfiguration),
+			AccountName:         utils.String(azdo["account_name"].(string)),
+			CollaborationBranch: utils.String(azdo["branch_name"].(string)),
+			LastCommitID:        utils.String(azdo["last_commit_id"].(string)),
+			ProjectName:         utils.String(azdo["project_name"].(string)),
+			RepositoryName:      utils.String(azdo["repository_name"].(string)),
+			RootFolder:          utils.String(azdo["root_folder"].(string)),
+		}
+		if azdoTenantId := uuid.FromStringOrNil(azdo["tenant_id"].(string)); azdoTenantId != uuid.Nil {
+			config.TenantID = &azdoTenantId
+		}
+		return &config
+	}
+
+	if githubList, ok := d.GetOk("github_repo"); ok {
+		github := githubList.([]interface{})[0].(map[string]interface{})
+		return &synapse.WorkspaceRepositoryConfiguration{
+			Type:                utils.String(workspaceGitHubConfiguration),
+			AccountName:         utils.String(github["account_name"].(string)),
+			CollaborationBranch: utils.String(github["branch_name"].(string)),
+			HostName:            utils.String(github["git_url"].(string)),
+			LastCommitID:        utils.String(github["last_commit_id"].(string)),
+			RepositoryName:      utils.String(github["repository_name"].(string)),
+			RootFolder:          utils.String(github["root_folder"].(string)),
+		}
+	}
+
+	// API won't clear an existing repository config with nil
+	return &synapse.WorkspaceRepositoryConfiguration{}
+}

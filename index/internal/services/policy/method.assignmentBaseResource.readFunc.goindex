@@ -1,0 +1,92 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-06-01/policyassignments"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (br assignmentBaseResource) readFunc(scopeFieldName string) sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Policy.AssignmentsClient
+
+			id, err := policyassignments.ParseScopedPolicyAssignmentID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("reading %s: %+v", *id, err)
+			}
+			if resp.Model == nil {
+				return fmt.Errorf("reading nil model")
+			}
+
+			model := resp.Model
+			metadata.ResourceData.Set("name", id.PolicyAssignmentName)
+			metadata.ResourceData.Set("location", location.NormalizeNilable(model.Location))
+			// lintignore:R001
+			metadata.ResourceData.Set(scopeFieldName, id.Scope)
+
+			identityIns, err := identity.FlattenSystemOrUserAssignedMap(model.Identity)
+			if err != nil {
+				return fmt.Errorf("FlattenSystemOrUserAssignedMap: %+v", err)
+			}
+			if err = metadata.ResourceData.Set("identity", identityIns); err != nil {
+				return fmt.Errorf("setting `identity`: %+v", err)
+			}
+
+			if props := model.Properties; props != nil {
+				metadata.ResourceData.Set("description", props.Description)
+				metadata.ResourceData.Set("display_name", props.DisplayName)
+				var enforce bool
+				if mode := props.EnforcementMode; mode != nil {
+					enforce = (*props.EnforcementMode) == policyassignments.EnforcementModeDefault
+				}
+				metadata.ResourceData.Set("enforce", enforce)
+				metadata.ResourceData.Set("not_scopes", props.NotScopes)
+				metadata.ResourceData.Set("policy_definition_id", props.PolicyDefinitionId)
+
+				metadata.ResourceData.Set("non_compliance_message", br.flattenNonComplianceMessages(props.NonComplianceMessages))
+
+				flattenedMetaData := flattenJSON(pointer.From(props.Metadata))
+				metadata.ResourceData.Set("metadata", flattenedMetaData)
+
+				flattenedParameters, err := flattenParameterValuesValueToStringV2(props.Parameters)
+				if err != nil {
+					return fmt.Errorf("serializing JSON from `parameters`: %+v", err)
+				}
+				metadata.ResourceData.Set("parameters", flattenedParameters)
+
+				overrides := br.flattenOverrides(props.Overrides)
+				metadata.ResourceData.Set("overrides", overrides)
+
+				resourceSel := br.flattenResourceSelectors(props.ResourceSelectors)
+				metadata.ResourceData.Set("resource_selectors", resourceSel)
+			}
+
+			return nil
+		},
+		Timeout: 5 * time.Minute,
+	}
+}

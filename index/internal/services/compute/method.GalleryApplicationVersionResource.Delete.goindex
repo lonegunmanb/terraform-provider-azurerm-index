@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryapplications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryapplicationversions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r GalleryApplicationVersionResource) Delete() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Compute.GalleryApplicationVersionsClient
+			id, err := galleryapplicationversions.ParseApplicationVersionID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			if err := client.DeleteThenPoll(ctx, *id); err != nil {
+				return fmt.Errorf("deleting %s: %+v", id, err)
+			}
+
+			metadata.Logger.Infof("Waiting for %s to be eventually deleted", *id)
+			timeout, _ := ctx.Deadline()
+			stateConf := &pluginsdk.StateChangeConf{
+				Pending: []string{"Exists"},
+				Target:  []string{"NotFound"},
+				Refresh: func() (interface{}, string, error) {
+					// Whilst the Gallery Application Version is deleted quickly, it appears it's not actually finished replicating at this time
+					// so the deletion of the parent Gallery Application fails with "can not delete until nested resources are deleted"
+					// ergo we need to poll on this for a bit, see https://github.com/Azure/azure-rest-api-specs/issues/19686
+					res, err := client.Get(ctx, *id, galleryapplicationversions.DefaultGetOperationOptions())
+					if err != nil {
+						if response.WasNotFound(res.HttpResponse) {
+							return "NotFound", "NotFound", nil
+						}
+
+						return nil, "", fmt.Errorf("polling to check if the %s has been deleted: %+v", *id, err)
+					}
+
+					return res, "Exists", nil
+				},
+				MinTimeout:                10 * time.Second,
+				ContinuousTargetOccurence: 10,
+				Timeout:                   time.Until(timeout),
+			}
+
+			if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+				return fmt.Errorf("waiting for %s to be deleted: %+v", *id, err)
+			}
+
+			return nil
+		},
+		Timeout: 30 * time.Minute,
+	}
+}

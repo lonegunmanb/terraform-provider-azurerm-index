@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault
+import (
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2023-02-01/vaults"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandAccessPolicies(input []interface{}) *[]vaults.AccessPolicyEntry {
+	output := make([]vaults.AccessPolicyEntry, 0)
+
+	for _, policySet := range input {
+		policyRaw := policySet.(map[string]interface{})
+
+		certificatePermissionsRaw := policyRaw["certificate_permissions"].([]interface{})
+		keyPermissionsRaw := policyRaw["key_permissions"].([]interface{})
+		secretPermissionsRaw := policyRaw["secret_permissions"].([]interface{})
+		storagePermissionsRaw := policyRaw["storage_permissions"].([]interface{})
+
+		policy := vaults.AccessPolicyEntry{
+			Permissions: vaults.Permissions{
+				Certificates: expandCertificatePermissions(certificatePermissionsRaw),
+				Keys:         expandKeyPermissions(keyPermissionsRaw),
+				Secrets:      expandSecretPermissions(secretPermissionsRaw),
+				Storage:      expandStoragePermissions(storagePermissionsRaw),
+			},
+			ObjectId: policyRaw["object_id"].(string),
+			TenantId: policyRaw["tenant_id"].(string),
+		}
+		if v := policyRaw["application_id"]; v != "" {
+			policy.ApplicationId = pointer.To(v.(string))
+		}
+		output = append(output, policy)
+	}
+
+	return &output
+}

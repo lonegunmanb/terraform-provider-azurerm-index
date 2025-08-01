@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iotcentral
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/iotcentral/2021-11-01-preview/apps"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	iothubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r IotCentralApplicationNetworkRuleSetResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.IoTCentral.AppsClient
+			id, err := apps.ParseIotAppID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var state IotCentralApplicationNetworkRuleSetModel
+			if err := metadata.Decode(&state); err != nil {
+				return err
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil || existing.Model == nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if existing.Model.Properties == nil {
+				existing.Model.Properties = &apps.AppProperties{}
+			}
+
+			if existing.Model.Properties.NetworkRuleSets == nil {
+				existing.Model.Properties.NetworkRuleSets = &apps.NetworkRuleSets{}
+			}
+
+			// ApplyToIoTCentral must be set to false explicitly
+			existing.Model.Properties.NetworkRuleSets.ApplyToIoTCentral = utils.Bool(false)
+
+			if metadata.ResourceData.HasChange("apply_to_device") {
+				existing.Model.Properties.NetworkRuleSets.ApplyToDevices = utils.Bool(state.ApplyToDevice)
+			}
+
+			if metadata.ResourceData.HasChange("default_action") {
+				existing.Model.Properties.NetworkRuleSets.DefaultAction = &state.DefaultAction
+			}
+
+			if metadata.ResourceData.HasChange("ip_rule") {
+				existing.Model.Properties.NetworkRuleSets.IPRules = expandIotCentralApplicationNetworkRuleSetIPRule(state.IPRule)
+			}
+
+			if err := client.CreateOrUpdateThenPoll(ctx, *id, *existing.Model); err != nil {
+				return fmt.Errorf("updating Network Rule Set of %s: %+v", id, err)
+			}
+
+			return nil
+		},
+		Timeout: 30 * time.Minute,
+	}
+}

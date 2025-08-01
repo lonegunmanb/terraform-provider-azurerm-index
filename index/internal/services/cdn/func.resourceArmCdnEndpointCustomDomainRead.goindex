@@ -1,0 +1,86 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	keyvaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	keyvaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyvaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceArmCdnEndpointCustomDomainRead(d *pluginsdk.ResourceData, meta interface{}) error {
+	client := meta.(*clients.Client).Cdn.CustomDomainsClient
+	keyVaultsClient := meta.(*clients.Client).KeyVault
+	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	id, err := parse.CustomDomainID(d.Id())
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(ctx, id.ResourceGroup, id.ProfileName, id.EndpointName, id.Name)
+	if err != nil {
+		if utils.ResponseWasNotFound(resp.Response) {
+			log.Printf("[DEBUG] %q was not found - removing from state!", id)
+			d.SetId("")
+			return nil
+		}
+
+		return fmt.Errorf("retrieving %q: %+v", id, err)
+	}
+
+	cdnEndpointId := parse.NewEndpointID(id.SubscriptionId, id.ResourceGroup, id.ProfileName, id.EndpointName)
+
+	d.Set("name", resp.Name)
+	d.Set("cdn_endpoint_id", cdnEndpointId.ID())
+	if props := resp.CustomDomainProperties; props != nil {
+		d.Set("host_name", props.HostName)
+
+		switch params := props.CustomHTTPSParameters.(type) {
+		case cdn.ManagedHTTPSParameters:
+			if err := d.Set("cdn_managed_https", flattenArmCdnEndpointCustomDomainCdnManagedHttpsSettings(params)); err != nil {
+				return fmt.Errorf("setting `cdn_managed_https`: %+v", err)
+			}
+		case cdn.UserManagedHTTPSParameters:
+			var isVersioned bool
+			if b := d.Get("user_managed_https").([]interface{}); len(b) == 1 {
+				b := b[0].(map[string]interface{})
+
+				secretIdRaw := b["key_vault_secret_id"].(string)
+				if secretIdRaw != "" {
+					id, err := keyvaultParse.ParseOptionallyVersionedNestedItemID(secretIdRaw)
+					if err != nil {
+						return fmt.Errorf("parsing Key Vault Secret Id %q: %v", secretIdRaw, err)
+					}
+					isVersioned = id.Version != ""
+				}
+			}
+			settings, err := flattenArmCdnEndpointCustomDomainUserManagedHttpsSettings(ctx, params, keyVaultsClient, isVersioned)
+			if err != nil {
+				return err
+			}
+			if err := d.Set("user_managed_https", settings); err != nil {
+				return fmt.Errorf("setting `user_managed_https`: %+v", err)
+			}
+		default:
+			d.Set("cdn_managed_https", nil)
+			d.Set("user_managed_https", nil)
+		}
+	}
+
+	return nil
+}

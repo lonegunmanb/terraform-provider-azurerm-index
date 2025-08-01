@@ -1,0 +1,119 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenFirewallPolicyIntrusionDetection(input *firewallpolicies.FirewallPolicyIntrusionDetection) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	signatureOverrides := make([]interface{}, 0)
+	trafficBypass := make([]interface{}, 0)
+
+	if input.Configuration == nil {
+		return []interface{}{
+			map[string]interface{}{
+				"mode":                string(pointer.From(input.Mode)),
+				"signature_overrides": signatureOverrides,
+				"traffic_bypass":      trafficBypass,
+			},
+		}
+	}
+
+	if overrides := input.Configuration.SignatureOverrides; overrides != nil {
+		for _, override := range *overrides {
+			id := ""
+			if override.Id != nil {
+				id = *override.Id
+			}
+			signatureOverrides = append(signatureOverrides, map[string]interface{}{
+				"id":    id,
+				"state": string(pointer.From(override.Mode)),
+			})
+		}
+	}
+
+	if bypasses := input.Configuration.BypassTrafficSettings; bypasses != nil {
+		for _, bypass := range *bypasses {
+			name := ""
+			if bypass.Name != nil {
+				name = *bypass.Name
+			}
+
+			description := ""
+			if bypass.Description != nil {
+				description = *bypass.Description
+			}
+
+			var sourceAddresses []string
+			if bypass.SourceAddresses != nil {
+				sourceAddresses = *bypass.SourceAddresses
+			}
+
+			var destinationAddresses []string
+			if bypass.DestinationAddresses != nil {
+				destinationAddresses = *bypass.DestinationAddresses
+			}
+
+			destinationPorts := make([]string, 0)
+			if bypass.DestinationPorts != nil {
+				destinationPorts = *bypass.DestinationPorts
+			}
+
+			sourceIPGroups := make([]string, 0)
+			if bypass.SourceIPGroups != nil {
+				sourceIPGroups = *bypass.SourceIPGroups
+			}
+
+			destinationIPGroups := make([]string, 0)
+			if bypass.DestinationIPGroups != nil {
+				destinationIPGroups = *bypass.DestinationIPGroups
+			}
+
+			trafficBypass = append(trafficBypass, map[string]interface{}{
+				"name":                  name,
+				"description":           description,
+				"protocol":              string(pointer.From(bypass.Protocol)),
+				"source_addresses":      sourceAddresses,
+				"destination_addresses": destinationAddresses,
+				"destination_ports":     destinationPorts,
+				"source_ip_groups":      sourceIPGroups,
+				"destination_ip_groups": destinationIPGroups,
+			})
+		}
+	}
+	var privateRanges []string
+	if privates := input.Configuration.PrivateRanges; privates != nil {
+		privateRanges = *privates
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"mode":                string(pointer.From(input.Mode)),
+			"signature_overrides": signatureOverrides,
+			"traffic_bypass":      trafficBypass,
+			"private_ranges":      privateRanges,
+		},
+	}
+}

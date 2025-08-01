@@ -1,0 +1,109 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
+import (
+	"context"
+	"fmt"
+	"log"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/maintenance/2023-04-01/publicmaintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstanceadministrators"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstanceazureadonlyauthentications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstances"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r MsSqlManagedInstanceResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 24 * time.Hour,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MSSQLManagedInstance.ManagedInstancesClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var model MsSqlManagedInstanceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := commonids.NewSqlManagedInstanceID(subscriptionId, model.ResourceGroupName, model.Name)
+
+			metadata.Logger.Infof("Import check for %s", id)
+			existing, err := client.Get(ctx, id, managedinstances.GetOperationOptions{})
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			sku, err := r.expandSkuName(model.SkuName)
+			if err != nil {
+				return fmt.Errorf("expanding `sku_name` for SQL Managed Instance Server %q: %v", id.ID(), err)
+			}
+
+			maintenanceConfigId := publicmaintenanceconfigurations.NewPublicMaintenanceConfigurationID(subscriptionId, model.MaintenanceConfigurationName)
+
+			parameters := managedinstances.ManagedInstance{
+				Sku:      sku,
+				Identity: r.expandIdentity(model.Identity),
+				Location: location.Normalize(model.Location),
+				Properties: &managedinstances.ManagedInstanceProperties{
+					AdministratorLogin:               pointer.To(model.AdministratorLogin),
+					AdministratorLoginPassword:       pointer.To(model.AdministratorLoginPassword),
+					Collation:                        pointer.To(model.Collation),
+					DnsZonePartner:                   pointer.To(model.DnsZonePartnerId),
+					LicenseType:                      pointer.To(managedinstances.ManagedInstanceLicenseType(model.LicenseType)),
+					MaintenanceConfigurationId:       pointer.To(maintenanceConfigId.ID()),
+					MinimalTlsVersion:                pointer.To(model.MinimumTlsVersion),
+					ProxyOverride:                    pointer.To(managedinstances.ManagedInstanceProxyOverride(model.ProxyOverride)),
+					PublicDataEndpointEnabled:        pointer.To(model.PublicDataEndpointEnabled),
+					RequestedBackupStorageRedundancy: pointer.To(storageAccTypeToBackupStorageRedundancy(model.StorageAccountType)),
+					StorageSizeInGB:                  pointer.To(model.StorageSizeInGb),
+					SubnetId:                         pointer.To(model.SubnetId),
+					TimezoneId:                       pointer.To(model.TimezoneId),
+					VCores:                           pointer.To(model.VCores),
+					ZoneRedundant:                    pointer.To(model.ZoneRedundantEnabled),
+					// `Administrators` is only valid when specified during creation`
+					Administrators: expandMsSqlManagedInstanceExternalAdministrators(model.AzureActiveDirectoryAdministrator),
+				},
+				Tags: pointer.To(model.Tags),
+			}
+
+			if parameters.Identity != nil && len(parameters.Identity.IdentityIds) > 0 {
+				for k := range parameters.Identity.IdentityIds {
+					parameters.Properties.PrimaryUserAssignedIdentityId = pointer.To(k)
+					break
+				}
+			}
+
+			if model.ServicePrincipalType != "" {
+				parameters.Properties.ServicePrincipal = &managedinstances.ServicePrincipal{
+					Type: pointer.To(managedinstances.ServicePrincipalType(model.ServicePrincipalType)),
+				}
+			}
+
+			metadata.Logger.Infof("Creating %s", id)
+
+			err = client.CreateOrUpdateThenPoll(ctx, id, parameters)
+			if err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

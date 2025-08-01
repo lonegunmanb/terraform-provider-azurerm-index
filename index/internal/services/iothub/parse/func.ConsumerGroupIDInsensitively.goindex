@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/parse
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+)
+func ConsumerGroupIDInsensitively(input string) (*ConsumerGroupId, error) {
+	id, err := resourceids.ParseAzureResourceID(input)
+	if err != nil {
+		return nil, err
+	}
+
+	resourceId := ConsumerGroupId{
+		SubscriptionId: id.SubscriptionID,
+		ResourceGroup:  id.ResourceGroup,
+	}
+
+	if resourceId.SubscriptionId == "" {
+		return nil, errors.New("ID was missing the 'subscriptions' element")
+	}
+
+	if resourceId.ResourceGroup == "" {
+		return nil, errors.New("ID was missing the 'resourceGroups' element")
+	}
+
+	// find the correct casing for the 'iotHubs' segment
+	iotHubsKey := "iotHubs"
+	for key := range id.Path {
+		if strings.EqualFold(key, iotHubsKey) {
+			iotHubsKey = key
+			break
+		}
+	}
+	if resourceId.IotHubName, err = id.PopSegment(iotHubsKey); err != nil {
+		return nil, err
+	}
+
+	// find the correct casing for the 'eventHubEndpoints' segment
+	eventHubEndpointsKey := "eventHubEndpoints"
+	for key := range id.Path {
+		if strings.EqualFold(key, eventHubEndpointsKey) {
+			eventHubEndpointsKey = key
+			break
+		}
+	}
+	if resourceId.EventHubEndpointName, err = id.PopSegment(eventHubEndpointsKey); err != nil {
+		return nil, err
+	}
+
+	// find the correct casing for the 'consumerGroups' segment
+	consumerGroupsKey := "consumerGroups"
+	for key := range id.Path {
+		if strings.EqualFold(key, consumerGroupsKey) {
+			consumerGroupsKey = key
+			break
+		}
+	}
+	if resourceId.Name, err = id.PopSegment(consumerGroupsKey); err != nil {
+		return nil, err
+	}
+
+	if err := id.ValidateNoEmptySegments(input); err != nil {
+		return nil, err
+	}
+
+	return &resourceId, nil
+}

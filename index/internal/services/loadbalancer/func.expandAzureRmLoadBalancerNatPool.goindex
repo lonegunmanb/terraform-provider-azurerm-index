@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/loadbalancers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandAzureRmLoadBalancerNatPool(d *pluginsdk.ResourceData, lb *loadbalancers.LoadBalancer) (*loadbalancers.InboundNatPool, error) {
+	properties := loadbalancers.InboundNatPoolPropertiesFormat{
+		Protocol:               loadbalancers.TransportProtocol(d.Get("protocol").(string)),
+		FrontendPortRangeStart: int64(d.Get("frontend_port_start").(int)),
+		FrontendPortRangeEnd:   int64(d.Get("frontend_port_end").(int)),
+		BackendPort:            int64(d.Get("backend_port").(int)),
+	}
+
+	if v, ok := d.GetOk("floating_ip_enabled"); ok {
+		properties.EnableFloatingIP = utils.Bool(v.(bool))
+	}
+
+	if v, ok := d.GetOk("tcp_reset_enabled"); ok {
+		properties.EnableTcpReset = utils.Bool(v.(bool))
+	}
+
+	properties.IdleTimeoutInMinutes = pointer.To(int64(d.Get("idle_timeout_in_minutes").(int)))
+
+	if v := d.Get("frontend_ip_configuration_name").(string); v != "" {
+		rule, exists := FindLoadBalancerFrontEndIpConfigurationByName(lb, v)
+		if !exists {
+			return nil, fmt.Errorf("[ERROR] Cannot find FrontEnd IP Configuration with the name %s", v)
+		}
+
+		properties.FrontendIPConfiguration = &loadbalancers.SubResource{
+			Id: rule.Id,
+		}
+	}
+
+	return &loadbalancers.InboundNatPool{
+		Name:       pointer.To(d.Get("name").(string)),
+		Properties: &properties,
+	}, nil
+}

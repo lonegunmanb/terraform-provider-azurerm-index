@@ -1,0 +1,77 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/nginx
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/nginx/2024-11-01-preview/nginxconfiguration"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/nginx/2024-11-01-preview/nginxdeployment"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (m ConfigurationDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Nginx.NginxConfiguration
+			var model ConfigurationDataSourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return err
+			}
+			deploymentId, err := nginxdeployment.ParseNginxDeploymentID(model.NginxDeploymentId)
+			if err != nil {
+				return err
+			}
+			id := nginxconfiguration.NewConfigurationID(
+				deploymentId.SubscriptionId,
+				deploymentId.ResourceGroupName,
+				deploymentId.NginxDeploymentName,
+				defaultConfigurationName,
+			)
+			result, err := client.ConfigurationsGet(ctx, id)
+			if err != nil {
+				if response.WasNotFound(result.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			output := ConfigurationDataSourceModel{
+				NginxDeploymentId: deploymentId.ID(),
+			}
+
+			if model := result.Model; model != nil {
+				prop := result.Model.Properties
+				output.RootFile = pointer.From(prop.RootFile)
+
+				if prop.Package != nil && prop.Package.Data != nil {
+					output.PackageData = pointer.From(prop.Package.Data)
+				}
+
+				if files := prop.Files; files != nil {
+					for _, file := range *files {
+						output.ConfigFile = append(output.ConfigFile, ConfigFile{
+							Content:     pointer.From(file.Content),
+							VirtualPath: pointer.From(file.VirtualPath),
+						})
+					}
+				}
+
+				if files := prop.ProtectedFiles; files != nil {
+					for _, file := range *files {
+						output.ProtectedFile = append(output.ProtectedFile, ProtectedFileData{
+							VirtualPath: pointer.From(file.VirtualPath),
+							ContentHash: pointer.From(file.ContentHash),
+						})
+					}
+				}
+			}
+
+			metadata.SetID(id)
+			return metadata.Encode(&output)
+		},
+	}
+}
