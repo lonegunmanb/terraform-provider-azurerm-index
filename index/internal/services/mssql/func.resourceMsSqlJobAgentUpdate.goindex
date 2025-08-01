@@ -10,7 +10,6 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/jobagents"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
@@ -18,14 +17,13 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceMsSqlJobAgentCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceMsSqlJobAgentUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).MSSQL.JobAgentsClient
-	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	log.Printf("[INFO] preparing arguments for Job Agent creation.")
+	log.Printf("[INFO] preparing arguments for Job Agent update.")
 
-	location := azure.NormalizeLocation(d.Get("location").(string))
 	databaseId := d.Get("database_id").(string)
 	dbId, err := commonids.ParseSqlDatabaseID(databaseId)
 	if err != nil {
@@ -33,34 +31,24 @@ func resourceMsSqlJobAgentCreateUpdate(d *pluginsdk.ResourceData, meta interface
 	}
 	id := jobagents.NewJobAgentID(dbId.SubscriptionId, dbId.ResourceGroupName, dbId.ServerName, d.Get("name").(string))
 
-	if d.IsNewResource() {
-		existing, err := client.Get(ctx, id)
-		if err != nil {
-			if !response.WasNotFound(existing.HttpResponse) {
-				return fmt.Errorf("failed to check for presence of existing %s: %s", id, err)
-			}
-		}
-
-		if !response.WasNotFound(existing.HttpResponse) {
-			return tf.ImportAsExistsError("azurerm_mssql_job_agent", id.ID())
-		}
-	}
-
-	params := jobagents.JobAgent{
-		Name:     &id.JobAgentName,
-		Location: location,
-		Properties: &jobagents.JobAgentProperties{
-			DatabaseId: databaseId,
-		},
-		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
-	}
-
-	err = client.CreateOrUpdateThenPoll(ctx, id, params)
+	existing, err := client.Get(ctx, id)
 	if err != nil {
-		return fmt.Errorf("creating %s: %+v", id, err)
+		return fmt.Errorf("retrieving existing %s: %+v", id, err)
 	}
 
-	d.SetId(id.ID())
+	if existing.Model == nil {
+		return fmt.Errorf("retrieving existing %s: `model` was nil", id)
+	}
+	params := existing.Model
+
+	if d.HasChanges("tags") {
+		params.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+	}
+
+	err = client.CreateOrUpdateThenPoll(ctx, id, *params)
+	if err != nil {
+		return fmt.Errorf("updating %s: %+v", id, err)
+	}
 
 	return resourceMsSqlJobAgentRead(d, meta)
 }

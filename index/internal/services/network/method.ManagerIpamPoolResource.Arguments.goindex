@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/ipampools"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (ManagerIpamPoolResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:     pluginsdk.TypeString,
+			Required: true,
+			ForceNew: true,
+			ValidateFunc: validation.StringMatch(
+				regexp.MustCompile(`^[a-zA-Z0-9\_\.\-]{1,64}$`),
+				"`name` must be between 1 and 64 characters long and can only contain letters, numbers, underscores(_), periods(.), and hyphens(-).",
+			),
+		},
+
+		"network_manager_id": commonschema.ResourceIDReferenceRequiredForceNew(&ipampools.NetworkManagerId{}),
+
+		"location": commonschema.Location(),
+
+		"display_name": {
+			Type:     pluginsdk.TypeString,
+			Required: true,
+			ValidateFunc: validation.StringMatch(
+				regexp.MustCompile(`^[a-zA-Z0-9\_\.\-]{1,64}$`),
+				"`display_name` must be between 1 and 64 characters long and can only contain letters, numbers, underscores(_), periods(.), and hyphens(-).",
+			),
+		},
+
+		"address_prefixes": {
+			Type:     pluginsdk.TypeList,
+			Required: true,
+			ForceNew: true,
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: validation.IsCIDR,
+			},
+		},
+
+		"parent_pool_name": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ForceNew: true,
+			ValidateFunc: validation.StringMatch(
+				regexp.MustCompile(`^[a-zA-Z0-9\_\.\-]{1,64}$`),
+				"`parent_pool_name` must be between 1 and 64 characters long and can only contain letters, numbers, underscores(_), periods(.), and hyphens(-).",
+			),
+		},
+
+		"description": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+		},
+
+		"tags": commonschema.Tags(),
+	}
+}

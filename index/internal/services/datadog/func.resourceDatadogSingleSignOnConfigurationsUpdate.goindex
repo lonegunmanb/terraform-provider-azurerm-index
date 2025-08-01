@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datadog/2021-03-01/singlesignon"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datadog/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -28,9 +29,14 @@ func resourceDatadogSingleSignOnConfigurationsUpdate(d *pluginsdk.ResourceData, 
 
 	payload := singlesignon.DatadogSingleSignOnResource{
 		Properties: &singlesignon.DatadogSingleSignOnProperties{
-			SingleSignOnState: pointer.To(singlesignon.SingleSignOnStates(d.Get("single_sign_on_enabled").(string))),
-			EnterpriseAppId:   utils.String(d.Get("enterprise_application_id").(string)),
+			EnterpriseAppId: pointer.To(d.Get("enterprise_application_id").(string)),
 		},
+	}
+
+	if v, ok := d.GetOk("single_sign_on"); ok && d.HasChange("single_sign_on") {
+		payload.Properties.SingleSignOnState = pointer.To(singlesignon.SingleSignOnStates(v.(string)))
+	} else if !features.FivePointOh() {
+		payload.Properties.SingleSignOnState = pointer.To(singlesignon.SingleSignOnStates(d.Get("single_sign_on_enabled").(string)))
 	}
 
 	if err := client.ConfigurationsCreateOrUpdateThenPoll(ctx, *id, payload); err != nil {

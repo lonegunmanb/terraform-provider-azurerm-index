@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/ipampools"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ManagerIpamPoolResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Network.IPamPools
+
+			id, err := ipampools.ParseIPamPoolID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var model ManagerIpamPoolResourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			parameters := ipampools.IPamPoolUpdate{
+				Properties: &ipampools.IPamPoolUpdateProperties{},
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				parameters.Tags = pointer.To(model.Tags)
+			}
+
+			if metadata.ResourceData.HasChange("description") {
+				parameters.Properties.Description = pointer.To(model.Description)
+			}
+
+			if metadata.ResourceData.HasChange("display_name") {
+				parameters.Properties.DisplayName = pointer.To(model.DisplayName)
+			}
+
+			if _, err := client.Update(ctx, *id, parameters); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+			return nil
+		},
+	}
+}
