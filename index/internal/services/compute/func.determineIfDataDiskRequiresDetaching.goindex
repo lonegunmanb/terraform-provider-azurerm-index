@@ -1,0 +1,29 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2021-07-01/skus"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+)
+func determineIfDataDiskRequiresDetaching(disk *disks.Disk, oldSizeGb, newSizeGb int) bool {
+	if disk == nil || disk.Sku == nil {
+		return false
+	}
+
+	// This limitation doesn't apply to Premium SSD v2 or Ultra Disks:
+	// If a disk is 4 TiB or less, you can't expand it beyond 4 TiB without deallocating the VM.
+	// If a disk is already greater than 4 TiB, you can expand it without deallocating the VM.
+	diskTypeIsSupported := strings.EqualFold(string(*disk.Sku.Name), string(disks.DiskStorageAccountTypesPremiumVTwoLRS)) || strings.EqualFold(string(*disk.Sku.Name), string(disks.DiskStorageAccountTypesUltraSSDLRS))
+	if !diskTypeIsSupported && oldSizeGb < 4096 && newSizeGb >= 4096 {
+		return true
+	}
+
+	return false
+}

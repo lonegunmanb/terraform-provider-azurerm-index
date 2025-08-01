@@ -16,23 +16,43 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func flattenRecoveryGroups(input []replicationrecoveryplans.RecoveryPlanGroup) []RecoveryGroupModel {
-	output := make([]RecoveryGroupModel, 0)
+func flattenRecoveryGroups(input []replicationrecoveryplans.RecoveryPlanGroup) (shutdown []GenericRecoveryGroupModel, failover []GenericRecoveryGroupModel, boot []BootRecoveryGroupModel) {
+	shutdown = make([]GenericRecoveryGroupModel, 0)
+	failover = make([]GenericRecoveryGroupModel, 0)
+	boot = make([]BootRecoveryGroupModel, 0)
 	for _, groupItem := range input {
-		recoveryGroupOutput := RecoveryGroupModel{}
-		recoveryGroupOutput.GroupType = string(groupItem.GroupType)
-		if groupItem.ReplicationProtectedItems != nil {
-			recoveryGroupOutput.ReplicatedProtectedItems = flattenRecoveryPlanProtectedItems(groupItem.ReplicationProtectedItems)
+		switch groupItem.GroupType {
+		case replicationrecoveryplans.RecoveryPlanGroupTypeShutdown:
+			o := GenericRecoveryGroupModel{}
+			if groupItem.StartGroupActions != nil {
+				o.PreAction = flattenRecoveryPlanActions(groupItem.StartGroupActions)
+			}
+			if groupItem.EndGroupActions != nil {
+				o.PostAction = flattenRecoveryPlanActions(groupItem.EndGroupActions)
+			}
+			shutdown = append(shutdown, o)
+		case replicationrecoveryplans.RecoveryPlanGroupTypeFailover:
+			o := GenericRecoveryGroupModel{}
+			if groupItem.StartGroupActions != nil {
+				o.PreAction = flattenRecoveryPlanActions(groupItem.StartGroupActions)
+			}
+			if groupItem.EndGroupActions != nil {
+				o.PostAction = flattenRecoveryPlanActions(groupItem.EndGroupActions)
+			}
+			failover = append(failover, o)
+		case replicationrecoveryplans.RecoveryPlanGroupTypeBoot:
+			o := BootRecoveryGroupModel{}
+			o.ReplicatedProtectedItems = flattenRecoveryPlanProtectedItems(groupItem.ReplicationProtectedItems)
+			if groupItem.StartGroupActions != nil {
+				o.PreAction = flattenRecoveryPlanActions(groupItem.StartGroupActions)
+			}
+			if groupItem.EndGroupActions != nil {
+				o.PostAction = flattenRecoveryPlanActions(groupItem.EndGroupActions)
+			}
+			boot = append(boot, o)
 		}
-		if groupItem.StartGroupActions != nil {
-			recoveryGroupOutput.PreAction = flattenRecoveryPlanActions(groupItem.StartGroupActions)
-		}
-		if groupItem.EndGroupActions != nil {
-			recoveryGroupOutput.PostAction = flattenRecoveryPlanActions(groupItem.EndGroupActions)
-		}
-		output = append(output, recoveryGroupOutput)
 	}
-	return output
+
+	return shutdown, failover, boot
 }

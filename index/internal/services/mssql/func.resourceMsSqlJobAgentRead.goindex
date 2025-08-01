@@ -7,14 +7,17 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/jobagents"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceMsSqlJobAgentRead(d *pluginsdk.ResourceData, meta interface{}) error {
@@ -33,7 +36,7 @@ func resourceMsSqlJobAgentRead(d *pluginsdk.ResourceData, meta interface{}) erro
 			d.SetId("")
 			return nil
 		}
-		return fmt.Errorf("reading %s: %s", *id, err)
+		return fmt.Errorf("retrieving %s: %s", *id, err)
 	}
 
 	d.Set("name", id.JobAgentName)
@@ -41,9 +44,20 @@ func resourceMsSqlJobAgentRead(d *pluginsdk.ResourceData, meta interface{}) erro
 	if model := resp.Model; model != nil {
 		d.Set("location", location.Normalize(model.Location))
 
-		if props := resp.Model.Properties; props != nil {
+		if props := model.Properties; props != nil {
 			d.Set("database_id", props.DatabaseId)
 		}
+
+		flattenedIdentity, err := identity.FlattenUserAssignedMap(model.Identity)
+		if err != nil {
+			return fmt.Errorf("flattening `identity`: %+v", err)
+		}
+		d.Set("identity", flattenedIdentity)
+
+		if sku := model.Sku; sku != nil {
+			d.Set("sku", sku.Name)
+		}
+
 		return tags.FlattenAndSet(d, model.Tags)
 	}
 	return nil

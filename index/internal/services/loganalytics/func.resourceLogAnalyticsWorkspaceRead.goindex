@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -9,12 +10,13 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2023-03-11/datacollectionrules"
 	sharedKeyWorkspaces "github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/workspaces"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics/migration"
@@ -23,13 +25,13 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceLogAnalyticsWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}) error {
 	sharedKeyClient := meta.(*clients.Client).LogAnalytics.SharedKeyWorkspacesClient
 	client := meta.(*clients.Client).LogAnalytics.WorkspaceClient
 	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
 	defer cancel()
+
 	id, err := workspaces.ParseWorkspaceID(d.Id())
 	if err != nil {
 		return err
@@ -41,7 +43,7 @@ func resourceLogAnalyticsWorkspaceRead(d *pluginsdk.ResourceData, meta interface
 			d.SetId("")
 			return nil
 		}
-		return fmt.Errorf("making Read request on AzureRM Log Analytics workspaces '%s': %+v", id.WorkspaceName, err)
+		return fmt.Errorf("retrieving %s: %+v", *id, err)
 	}
 
 	d.Set("name", id.WorkspaceName)
@@ -49,11 +51,11 @@ func resourceLogAnalyticsWorkspaceRead(d *pluginsdk.ResourceData, meta interface
 
 	if model := resp.Model; model != nil {
 		if model.Identity != nil {
-			flattenIdentity, err := identity.FlattenSystemOrUserAssignedMap(model.Identity)
+			flattenedIdentity, err := identity.FlattenSystemOrUserAssignedMap(model.Identity)
 			if err != nil {
-				return fmt.Errorf("flattening identity: %+v", err)
+				return fmt.Errorf("flattening `identity`: %+v", err)
 			}
-			d.Set("identity", flattenIdentity)
+			d.Set("identity", flattenedIdentity)
 		}
 
 		if props := model.Properties; props != nil {
@@ -69,46 +71,27 @@ func resourceLogAnalyticsWorkspaceRead(d *pluginsdk.ResourceData, meta interface
 			}
 			d.Set("internet_query_enabled", internetQueryEnabled)
 
-			customerId := ""
-			if props.CustomerId != nil {
-				customerId = *props.CustomerId
-			}
-			d.Set("workspace_id", customerId)
+			d.Set("workspace_id", pointer.From(props.CustomerId))
 
-			skuName := ""
-			if props.Sku != nil {
-				sku := *props.Sku
-				for _, v := range workspaces.PossibleValuesForWorkspaceSkuNameEnum() {
-					if strings.EqualFold(v, string(sku.Name)) {
-						skuName = v
-					}
-				}
+			var skuName string
+			if sku := props.Sku; sku != nil {
+				skuName = string(sku.Name)
+				d.Set("sku", skuName)
+
 				if capacityReservationLevel := sku.CapacityReservationLevel; capacityReservationLevel != nil {
 					d.Set("reservation_capacity_in_gb_per_day", int64(pointer.From(capacityReservationLevel)))
 				}
 			}
-			d.Set("sku", skuName)
 
-			forceCmkForQuery := false
-			if props.ForceCmkForQuery != nil {
-				forceCmkForQuery = *props.ForceCmkForQuery
-			}
-			d.Set("cmk_for_query_forced", forceCmkForQuery)
+			d.Set("cmk_for_query_forced", pointer.From(props.ForceCmkForQuery))
 
-			var retentionInDays int64
-			if props.RetentionInDays != nil {
-				retentionInDays = *props.RetentionInDays
-			}
-			d.Set("retention_in_days", retentionInDays)
+			d.Set("retention_in_days", pointer.From(props.RetentionInDays))
 
 			switch {
-			case strings.EqualFold(skuName, string(workspaces.WorkspaceSkuNameEnumFree)):
-				// Special case for "Free" tier
-				d.Set("daily_quota_gb", utils.Float(0.5))
 			case props.WorkspaceCapping != nil && props.WorkspaceCapping.DailyQuotaGb != nil:
 				d.Set("daily_quota_gb", props.WorkspaceCapping.DailyQuotaGb)
 			default:
-				d.Set("daily_quota_gb", utils.Float(-1))
+				d.Set("daily_quota_gb", pointer.To(-1))
 			}
 
 			allowResourceOnlyPermissions := true
@@ -140,22 +123,13 @@ func resourceLogAnalyticsWorkspaceRead(d *pluginsdk.ResourceData, meta interface
 				log.Printf("[ERROR] Unable to List Shared keys for Log Analytics workspaces %s: %+v", id.WorkspaceName, err)
 			} else {
 				if sharedKeysModel := sharedKeysResp.Model; sharedKeysModel != nil {
-					primarySharedKey := ""
-					if sharedKeysModel.PrimarySharedKey != nil {
-						primarySharedKey = *sharedKeysModel.PrimarySharedKey
-					}
-					d.Set("primary_shared_key", primarySharedKey)
-
-					secondarySharedKey := ""
-					if sharedKeysModel.SecondarySharedKey != nil {
-						secondarySharedKey = *sharedKeysModel.SecondarySharedKey
-					}
-					d.Set("secondary_shared_key", secondarySharedKey)
+					d.Set("primary_shared_key", pointer.From(sharedKeysModel.PrimarySharedKey))
+					d.Set("secondary_shared_key", pointer.From(sharedKeysModel.SecondarySharedKey))
 				}
 			}
 		}
 
-		d.Set("location", azure.NormalizeLocation(model.Location))
+		d.Set("location", location.Normalize(model.Location))
 
 		if err = tags.FlattenAndSet(d, flattenTags(model.Tags)); err != nil {
 			return err

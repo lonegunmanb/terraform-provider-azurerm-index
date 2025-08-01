@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	eventhubValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -29,24 +30,24 @@ func expandMonitorDiagnosticsSettingsMetrics(input []interface{}) []diagnosticse
 	for _, raw := range input {
 		v := raw.(map[string]interface{})
 
-		category := v["category"].(string)
-		enabled := v["enabled"].(bool)
-
-		policiesRaw := v["retention_policy"].([]interface{})
-		var retentionPolicy *diagnosticsettings.RetentionPolicy
-		if len(policiesRaw) > 0 && policiesRaw[0] != nil {
-			policyRaw := policiesRaw[0].(map[string]interface{})
-			retentionDays := policyRaw["days"].(int)
-			retentionEnabled := policyRaw["enabled"].(bool)
-			retentionPolicy = &diagnosticsettings.RetentionPolicy{
-				Days:    int64(retentionDays),
-				Enabled: retentionEnabled,
-			}
-		}
 		output := diagnosticsettings.MetricSettings{
-			Category:        utils.String(category),
-			Enabled:         enabled,
-			RetentionPolicy: retentionPolicy,
+			Category: pointer.To(v["category"].(string)),
+			Enabled:  v["enabled"].(bool),
+		}
+
+		if !features.FivePointOh() {
+			policiesRaw := v["retention_policy"].([]interface{})
+			var retentionPolicy *diagnosticsettings.RetentionPolicy
+			if len(policiesRaw) > 0 && policiesRaw[0] != nil {
+				policyRaw := policiesRaw[0].(map[string]interface{})
+				retentionDays := policyRaw["days"].(int)
+				retentionEnabled := policyRaw["enabled"].(bool)
+				retentionPolicy = &diagnosticsettings.RetentionPolicy{
+					Days:    int64(retentionDays),
+					Enabled: retentionEnabled,
+				}
+			}
+			output.RetentionPolicy = retentionPolicy
 		}
 
 		results = append(results, output)

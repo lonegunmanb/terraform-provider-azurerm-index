@@ -16,19 +16,49 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func expandRecoveryGroup(input []RecoveryGroupModel) ([]replicationrecoveryplans.RecoveryPlanGroup, error) {
+func expandRecoveryGroup(shutdown []GenericRecoveryGroupModel, failover []GenericRecoveryGroupModel, boot []BootRecoveryGroupModel) ([]replicationrecoveryplans.RecoveryPlanGroup, error) {
 	output := make([]replicationrecoveryplans.RecoveryPlanGroup, 0)
-	if pass, err := validateRecoveryGroup(input); !pass {
-		return output, err
+
+	for _, group := range shutdown {
+		preActions, err := expandAction(group.PreAction)
+		if err != nil {
+			return output, err
+		}
+		postActions, err := expandAction(group.PostAction)
+		if err != nil {
+			return output, err
+		}
+
+		output = append(output, replicationrecoveryplans.RecoveryPlanGroup{
+			GroupType:         replicationrecoveryplans.RecoveryPlanGroupTypeShutdown,
+			StartGroupActions: &preActions,
+			EndGroupActions:   &postActions,
+		})
 	}
 
-	for _, group := range input {
+	for _, group := range failover {
+		preActions, err := expandAction(group.PreAction)
+		if err != nil {
+			return output, err
+		}
+		postActions, err := expandAction(group.PostAction)
+		if err != nil {
+			return output, err
+		}
+
+		output = append(output, replicationrecoveryplans.RecoveryPlanGroup{
+			GroupType:         replicationrecoveryplans.RecoveryPlanGroupTypeFailover,
+			StartGroupActions: &preActions,
+			EndGroupActions:   &postActions,
+		})
+	}
+
+	for _, group := range boot {
 		protectedItems := make([]replicationrecoveryplans.RecoveryPlanProtectedItem, 0)
 		for _, protectedItem := range group.ReplicatedProtectedItems {
 			protectedItems = append(protectedItems, replicationrecoveryplans.RecoveryPlanProtectedItem{
-				Id: utils.String(protectedItem),
+				Id: pointer.To(protectedItem),
 			})
 		}
 
@@ -42,11 +72,12 @@ func expandRecoveryGroup(input []RecoveryGroupModel) ([]replicationrecoveryplans
 		}
 
 		output = append(output, replicationrecoveryplans.RecoveryPlanGroup{
-			GroupType:                 replicationrecoveryplans.RecoveryPlanGroupType(group.GroupType),
+			GroupType:                 replicationrecoveryplans.RecoveryPlanGroupTypeBoot,
 			ReplicationProtectedItems: &protectedItems,
 			StartGroupActions:         &preActions,
 			EndGroupActions:           &postActions,
 		})
 	}
+
 	return output, nil
 }
