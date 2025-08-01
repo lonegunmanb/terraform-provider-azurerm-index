@@ -14,7 +14,7 @@ type ServiceRegistration struct {
 	SupportedDataSources map[string]string                       `json:"supported_data_sources"` // Legacy map-based data sources
 	Resources            []string                                `json:"resources"`              // Modern slice-based resources
 	DataSources          []string                                `json:"data_sources"`           // Modern slice-based data sources
-	EphemeralResources   []string                                `json:"ephemeral_resources"`    // Function-based ephemeral resources
+	EphemeralFunctions   []string                                `json:"ephemeral_functions"`    // Function-based ephemeral resources
 	ResourceCRUDMethods  map[string]*LegacyResourceCRUDFunctions `json:"resource_crud_methods"`  // CRUD methods for legacy resources
 	DataSourceMethods    map[string]*LegacyDataSourceMethods     `json:"data_source_methods"`    // Methods for legacy data sources
 	// New mappings between Terraform types and struct types
@@ -32,7 +32,7 @@ func newServiceRegistration(packageInfo *gophon.PackageInfo, entry os.DirEntry) 
 		SupportedDataSources:     make(map[string]string),
 		Resources:                []string{},
 		DataSources:              []string{},
-		EphemeralResources:       []string{},
+		EphemeralFunctions:       []string{},
 		ResourceCRUDMethods:      make(map[string]*LegacyResourceCRUDFunctions),
 		DataSourceMethods:        make(map[string]*LegacyDataSourceMethods),
 		ResourceTerraformTypes:   make(map[string]string),

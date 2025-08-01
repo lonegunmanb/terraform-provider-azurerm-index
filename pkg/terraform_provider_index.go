@@ -3,6 +3,8 @@ package pkg
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/token"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -99,20 +101,23 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string, progr
 					supportedDataSources := extractSupportedDataSourcesMappings(fileInfo.File)
 					resources := extractResourcesStructTypes(fileInfo.File)
 					dataSources := extractDataSourcesStructTypes(fileInfo.File)
-					ephemeralResources := extractEphemeralResourcesFunctions(fileInfo.File)
+					ephemeralFunctions := extractEphemeralResourcesFunctions(fileInfo.File)
 
 					// Merge results into service registration
 					serviceReg.SupportedResources = mergeMap(serviceReg.SupportedResources, supportedResources)
 					serviceReg.SupportedDataSources = mergeMap(serviceReg.SupportedDataSources, supportedDataSources)
 					serviceReg.Resources = append(serviceReg.Resources, resources...)
 					serviceReg.DataSources = append(serviceReg.DataSources, dataSources...)
-					serviceReg.EphemeralResources = append(serviceReg.EphemeralResources, ephemeralResources...)
+					serviceReg.EphemeralFunctions = append(serviceReg.EphemeralFunctions, ephemeralFunctions...)
 				}
 
 				// After processing all files, extract Terraform types for modern resources and data sources
 				serviceReg.ResourceTerraformTypes = extractResourceTerraformTypes(packageInfo, serviceReg.Resources)
 				serviceReg.DataSourceTerraformTypes = extractDataSourceTerraformTypes(packageInfo, serviceReg.DataSources)
-				serviceReg.EphemeralTerraformTypes = extractEphemeralTerraformTypes(packageInfo, serviceReg.EphemeralResources)
+
+				// Convert ephemeral function names to struct names for Terraform type extraction
+				ephemeralStructs := convertFunctionNamesToStructNames(serviceReg.EphemeralFunctions, packageInfo)
+				serviceReg.EphemeralTerraformTypes = extractEphemeralTerraformTypes(packageInfo, ephemeralStructs)
 
 				// Extract CRUD methods for legacy resources using gophon function data
 				for terraformType, registrationMethod := range serviceReg.SupportedResources {
@@ -130,7 +135,7 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string, progr
 
 				// Only include services that have at least one registration method
 				if len(serviceReg.SupportedResources) > 0 || len(serviceReg.SupportedDataSources) > 0 ||
-					len(serviceReg.Resources) > 0 || len(serviceReg.DataSources) > 0 || len(serviceReg.EphemeralResources) > 0 {
+					len(serviceReg.Resources) > 0 || len(serviceReg.DataSources) > 0 || len(serviceReg.EphemeralFunctions) > 0 {
 					resultChan <- serviceReg
 				}
 			}
@@ -162,7 +167,7 @@ func ScanTerraformProviderServices(dir, basePkgUrl string, version string, progr
 		stats.TotalDataSources += len(serviceReg.SupportedDataSources)
 		stats.ModernResources += len(serviceReg.Resources)
 		stats.TotalDataSources += len(serviceReg.DataSources)
-		stats.EphemeralResources += len(serviceReg.EphemeralResources)
+		stats.EphemeralResources += len(serviceReg.EphemeralFunctions)
 	}
 
 	stats.TotalResources = stats.LegacyResources + stats.ModernResources + stats.EphemeralResources
@@ -187,7 +192,7 @@ func (index *TerraformProviderIndex) WriteIndexFiles(outputDir string, progressC
 		totalFiles += len(service.Resources)            // modern resources
 		totalFiles += len(service.SupportedDataSources) // legacy data sources
 		totalFiles += len(service.DataSources)          // modern data sources
-		totalFiles += len(service.EphemeralResources)   // ephemeral resources
+		totalFiles += len(service.EphemeralFunctions)   // ephemeral resources
 	}
 
 	// Create progress tracker
@@ -404,7 +409,7 @@ func (index *TerraformProviderIndex) WriteEphemeralFiles(outputDir string, progr
 	var tasks []func() error
 
 	for _, service := range index.Services {
-		for _, structType := range service.EphemeralResources {
+		for _, structType := range service.EphemeralFunctions {
 			// Capture variables for closure
 			structT := structType
 			svc := service
@@ -472,4 +477,75 @@ func (index *TerraformProviderIndex) WriteJSONFile(filePath string, data interfa
 	}
 
 	return nil
+}
+
+// convertFunctionNamesToStructNames converts ephemeral resource function names to struct names
+// by looking up the function declarations in PackageInfo and parsing their return statements
+// For example: "NewKeyVaultSecretEphemeralResource" -> "KeyVaultSecretEphemeralResource"
+func convertFunctionNamesToStructNames(functionNames []string, packageInfo *gophon.PackageInfo) []string {
+	if packageInfo == nil || packageInfo.Functions == nil {
+		return functionNames // Return as-is if no package info available
+	}
+
+	structNames := make([]string, 0, len(functionNames))
+
+	for _, funcName := range functionNames {
+		// Find the function in the gophon function data
+		structName := ""
+		for _, funcInfo := range packageInfo.Functions {
+			if funcInfo.Name == funcName && funcInfo.FuncDecl != nil {
+				// Extract struct type from the function's return statement
+				if extracted := extractStructTypeFromEphemeralFunction(funcInfo.FuncDecl); extracted != "" {
+					structName = extracted
+					break
+				}
+			}
+		}
+
+		// If we couldn't extract from AST, fall back to string manipulation
+		if structName == "" {
+			if len(funcName) > 3 && funcName[:3] == "New" {
+				structName = funcName[3:] // Remove "New" prefix
+			} else {
+				structName = funcName // Use as-is
+			}
+		}
+
+		structNames = append(structNames, structName)
+	}
+
+	return structNames
+}
+
+// extractStructTypeFromEphemeralFunction extracts the struct type name from an ephemeral resource function
+// For example, from: func NewKeyVaultSecretEphemeralResource() ephemeral.EphemeralResource { return &KeyVaultSecretEphemeralResource{} }
+// It extracts: "KeyVaultSecretEphemeralResource"
+func extractStructTypeFromEphemeralFunction(funcDecl *ast.FuncDecl) string {
+	if funcDecl == nil || funcDecl.Body == nil {
+		return ""
+	}
+
+	// Look for return statements in the function body
+	for _, stmt := range funcDecl.Body.List {
+		if returnStmt, ok := stmt.(*ast.ReturnStmt); ok {
+			for _, result := range returnStmt.Results {
+				// Handle &StructName{} pattern
+				if unaryExpr, ok := result.(*ast.UnaryExpr); ok && unaryExpr.Op == token.AND {
+					if compLit, ok := unaryExpr.X.(*ast.CompositeLit); ok {
+						if ident, ok := compLit.Type.(*ast.Ident); ok {
+							return ident.Name
+						}
+					}
+				}
+				// Handle StructName{} pattern (without &)
+				if compLit, ok := result.(*ast.CompositeLit); ok {
+					if ident, ok := compLit.Type.(*ast.Ident); ok {
+						return ident.Name
+					}
+				}
+			}
+		}
+	}
+
+	return ""
 }

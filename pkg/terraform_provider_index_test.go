@@ -2,6 +2,10 @@ package pkg
 
 import (
 	"encoding/json"
+	gophon "github.com/lonegunmanb/gophon/pkg"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"testing"
 
@@ -29,7 +33,7 @@ func createTestTerraformProviderIndex() *TerraformProviderIndex {
 				},
 				Resources:          []string{"KeyVaultResource", "KeyVaultCertificateResource"},
 				DataSources:        []string{"KeyVaultDataSource"},
-				EphemeralResources: []string{"NewKeyVaultCertificateEphemeralResource"},
+				EphemeralFunctions: []string{"NewKeyVaultCertificateEphemeralResource"},
 				ResourceTerraformTypes: map[string]string{
 					"KeyVaultResource":            "azurerm_key_vault_modern",
 					"KeyVaultCertificateResource": "azurerm_key_vault_certificate_modern",
@@ -439,4 +443,134 @@ func TestTerraformProviderIndex_WriteResourceFiles_NoResources(t *testing.T) {
 	exists, err := afero.DirExists(fs, resourcesDir)
 	require.NoError(t, err)
 	assert.True(t, exists)
+}
+
+func TestExtractStructTypeFromEphemeralFunction(t *testing.T) {
+	tests := []struct {
+		name     string
+		funcCode string
+		expected string
+	}{
+		{
+			name: "Standard ephemeral function with &StructName{} pattern",
+			funcCode: `
+package test
+func NewKeyVaultSecretEphemeralResource() ephemeral.EphemeralResource {
+	return &KeyVaultSecretEphemeralResource{}
+}`,
+			expected: "KeyVaultSecretEphemeralResource",
+		},
+		{
+			name: "Ephemeral function with StructName{} pattern (no pointer)",
+			funcCode: `
+package test
+func NewKeyVaultCertificateEphemeralResource() ephemeral.EphemeralResource {
+	return KeyVaultCertificateEphemeralResource{}
+}`,
+			expected: "KeyVaultCertificateEphemeralResource",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Parse the function code
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "test.go", tt.funcCode, parser.ParseComments)
+			require.NoError(t, err)
+
+			// Find the function declaration
+			var funcDecl *ast.FuncDecl
+			ast.Inspect(file, func(n ast.Node) bool {
+				if fn, ok := n.(*ast.FuncDecl); ok {
+					funcDecl = fn
+					return false // Stop after finding the first function
+				}
+				return true
+			})
+
+			require.NotNil(t, funcDecl, "Function declaration not found")
+
+			// Test the extraction
+			result := extractStructTypeFromEphemeralFunction(funcDecl)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestConvertFunctionNamesToStructNames(t *testing.T) {
+	tests := []struct {
+		name          string
+		functionNames []string
+		packageCode   string
+		expected      []string
+	}{
+		{
+			name:          "Standard ephemeral functions",
+			functionNames: []string{"NewKeyVaultSecretEphemeralResource", "NewKeyVaultCertificateEphemeralResource"},
+			packageCode: `
+package test
+func NewKeyVaultSecretEphemeralResource() ephemeral.EphemeralResource {
+	return &KeyVaultSecretEphemeralResource{}
+}
+func NewKeyVaultCertificateEphemeralResource() ephemeral.EphemeralResource {
+	return &KeyVaultCertificateEphemeralResource{}
+}`,
+			expected: []string{"KeyVaultSecretEphemeralResource", "KeyVaultCertificateEphemeralResource"},
+		},
+		{
+			name:          "Mixed patterns - some functions found, some not",
+			functionNames: []string{"NewFoundFunction", "NewNotFoundFunction"},
+			packageCode: `
+package test
+func NewFoundFunction() ephemeral.EphemeralResource {
+	return &FoundEphemeralResource{}
+}`,
+			expected: []string{"FoundEphemeralResource", "NotFoundFunction"}, // Not found falls back to string manipulation
+		},
+		{
+			name:          "Function without New prefix",
+			functionNames: []string{"CreateSomething"},
+			packageCode: `
+package test
+func CreateSomething() ephemeral.EphemeralResource {
+	return &SomethingEphemeralResource{}
+}`,
+			expected: []string{"SomethingEphemeralResource"}, // Should extract from AST
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create mock PackageInfo with the test functions
+			packageInfo := createMockPackageInfoWithFunctions(t, tt.packageCode)
+
+			// Test the conversion
+			result := convertFunctionNamesToStructNames(tt.functionNames, packageInfo)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// Helper function to create a mock PackageInfo with functions parsed from code
+func createMockPackageInfoWithFunctions(t *testing.T, packageCode string) *gophon.PackageInfo {
+	// Parse the package code
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "test.go", packageCode, parser.ParseComments)
+	require.NoError(t, err)
+
+	// Extract all function declarations
+	var functions []*gophon.FunctionInfo
+	ast.Inspect(file, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok {
+			functions = append(functions, &gophon.FunctionInfo{
+				Name:     fn.Name.Name,
+				FuncDecl: fn,
+			})
+		}
+		return true
+	})
+
+	return &gophon.PackageInfo{
+		Functions: functions,
+	}
 }
