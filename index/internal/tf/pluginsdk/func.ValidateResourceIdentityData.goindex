@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/iancoleman/strcase"
+)
+func ValidateResourceIdentityData(d *schema.ResourceData, id resourceids.ResourceId, idType ...ResourceTypeForIdentity) error {
+	identity, err := d.Identity()
+	if err != nil {
+		return fmt.Errorf("getting identity: %+v", err)
+	}
+
+	identityString := "/"
+	segments := id.Segments()
+	numSegments := len(segments)
+	for idx, segment := range segments {
+		if segment.Type == resourceids.StaticSegmentType || segment.Type == resourceids.ResourceProviderSegmentType {
+			identityString += pointer.From(segment.FixedValue) + "/"
+		}
+		if segmentTypeSupported(segment.Type) {
+			name := segmentName(segment, identityType(idType), numSegments, idx)
+
+			field, ok := identity.GetOk(name)
+			if !ok {
+				return fmt.Errorf("getting %q in resource identity", name)
+			}
+
+			value, ok := field.(string)
+			if !ok {
+				return fmt.Errorf("converting %q to string", name)
+			}
+
+			if value == "" {
+				return fmt.Errorf("%q cannot be empty", name)
+			}
+
+			err := identity.Set(name, value)
+			if err != nil {
+				return fmt.Errorf("error setting id: %+v", err)
+			}
+
+			identityString += value + "/"
+		}
+	}
+
+	identityString = strings.TrimRight(identityString, "/")
+
+	// TODO it might be good practice then parse constructed ID string to ensure validity?
+
+	d.SetId(identityString)
+
+	return nil
+}

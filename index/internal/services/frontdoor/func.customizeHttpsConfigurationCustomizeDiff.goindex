@@ -10,6 +10,16 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 )
 func customizeHttpsConfigurationCustomizeDiff(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+	if IsFrontDoorFullyRetired() {
+		return fmt.Errorf("%s", FullyRetiredMessage)
+	}
+
+	// New resources are not supported, and since this is a ForceNew field, we also need to block changing the field as
+	// the re-create would fail with the create error from the service API...
+	if IsFrontDoorDeprecatedForCreation() && d.HasChange("frontend_endpoint_id") {
+		return fmt.Errorf("%s", CreateDeprecationMessage)
+	}
+
 	if v, ok := d.GetOk("frontend_endpoint_id"); ok && v.(string) != "" {
 		id, err := parse.FrontendEndpointID(v.(string))
 		if err != nil {

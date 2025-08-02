@@ -1,20 +1,21 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
-	"strconv"
+	"net/http"
+	"regexp"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/preview/resources/mgmt/2021-06-01-preview/policy" // nolint: staticcheck
-	"github.com/Azure/go-autorest/autorest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2025-01-01/policysetdefinitions"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	mgmtGrpParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -22,26 +23,26 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func expandAzureRMPolicySetDefinitionPolicyGroups(input []interface{}) *[]policy.DefinitionGroup {
-	result := make([]policy.DefinitionGroup, 0)
+func expandAzureRMPolicySetDefinitionPolicyGroups(input []interface{}) *[]policysetdefinitions.PolicyDefinitionGroup {
+	result := make([]policysetdefinitions.PolicyDefinitionGroup, 0)
 
 	for _, item := range input {
 		v := item.(map[string]interface{})
-		group := policy.DefinitionGroup{}
+		group := policysetdefinitions.PolicyDefinitionGroup{}
 		if name := v["name"].(string); name != "" {
-			group.Name = utils.String(name)
+			group.Name = name
 		}
 		if displayName := v["display_name"].(string); displayName != "" {
-			group.DisplayName = utils.String(displayName)
+			group.DisplayName = pointer.To(displayName)
 		}
 		if category := v["category"].(string); category != "" {
-			group.Category = utils.String(category)
+			group.Category = pointer.To(category)
 		}
 		if description := v["description"].(string); description != "" {
-			group.Description = utils.String(description)
+			group.Description = pointer.To(description)
 		}
 		if metadataID := v["additional_metadata_resource_id"].(string); metadataID != "" {
-			group.AdditionalMetadataID = utils.String(metadataID)
+			group.AdditionalMetadataId = pointer.To(metadataID)
 		}
 		result = append(result, group)
 	}

@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/iancoleman/strcase"
+)
+func resourceIdentityData(identity *schema.IdentityData, id resourceids.ResourceId, idType ResourceTypeForIdentity) error {
+	parser := resourceids.NewParserFromResourceIdType(id)
+	parsed, err := parser.Parse(id.ID(), true)
+	if err != nil {
+		return fmt.Errorf("parsing resource ID: %s", err)
+	}
+
+	segments := id.Segments()
+	numSegments := len(segments)
+	for idx, segment := range segments {
+		if segmentTypeSupported(segment.Type) {
+			name := segmentName(segment, idType, numSegments, idx)
+
+			field, ok := parsed.Parsed[segment.Name]
+			if !ok {
+				return fmt.Errorf("field `%s` was not found in the parsed resource ID %s", name, id)
+			}
+
+			if err = identity.Set(name, field); err != nil {
+				return fmt.Errorf("setting `%s` in resource identity: %+v", name, err)
+			}
+		}
+	}
+
+	return nil
+}

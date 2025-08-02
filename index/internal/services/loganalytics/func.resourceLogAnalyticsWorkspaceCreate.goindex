@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/workspaces"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
@@ -92,7 +93,6 @@ func resourceLogAnalyticsWorkspaceCreate(d *pluginsdk.ResourceData, meta interfa
 	}
 
 	allowResourceOnlyPermission := d.Get("allow_resource_only_permissions").(bool)
-	disableLocalAuth := d.Get("local_authentication_disabled").(bool)
 
 	parameters := workspaces.Workspace{
 		Name:     &name,
@@ -105,9 +105,15 @@ func resourceLogAnalyticsWorkspaceCreate(d *pluginsdk.ResourceData, meta interfa
 			RetentionInDays:                 pointer.To(int64(d.Get("retention_in_days").(int))),
 			Features: &workspaces.WorkspaceFeatures{
 				EnableLogAccessUsingOnlyResourcePermissions: pointer.To(allowResourceOnlyPermission),
-				DisableLocalAuth: pointer.To(disableLocalAuth),
+				DisableLocalAuth: pointer.To(!d.Get("local_authentication_enabled").(bool)),
 			},
 		},
+	}
+
+	if !features.FivePointOh() {
+		if v, ok := d.GetOk("local_authentication_disabled"); ok {
+			parameters.Properties.Features.DisableLocalAuth = pointer.To(v.(bool))
+		}
 	}
 
 	// nolint : staticcheck

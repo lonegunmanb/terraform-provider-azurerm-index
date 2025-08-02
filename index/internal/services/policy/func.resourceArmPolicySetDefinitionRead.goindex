@@ -1,20 +1,21 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
-	"strconv"
+	"net/http"
+	"regexp"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/preview/resources/mgmt/2021-06-01-preview/policy" // nolint: staticcheck
-	"github.com/Azure/go-autorest/autorest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2025-01-01/policysetdefinitions"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	mgmtGrpParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -23,74 +24,79 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceArmPolicySetDefinitionRead(d *pluginsdk.ResourceData, meta interface{}) error {
-	client := meta.(*clients.Client).Policy.SetDefinitionsClient
+	client := meta.(*clients.Client).Policy.PolicySetDefinitionsClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	id, err := parse.PolicySetDefinitionID(d.Id())
+	resourceId, err := parse.PolicySetDefinitionID(d.Id())
 	if err != nil {
 		return err
 	}
 
 	managementGroupName := ""
 	var managementGroupId mgmtGrpParse.ManagementGroupId
-	switch scopeId := id.PolicyScopeId.(type) { // nolint gocritic
-	case parse.ScopeAtManagementGroup:
+	if scopeId, ok := resourceId.PolicyScopeId.(parse.ScopeAtManagementGroup); ok {
 		managementGroupId = mgmtGrpParse.NewManagementGroupId(scopeId.ManagementGroupName)
 		managementGroupName = managementGroupId.Name
 	}
 
-	resp, err := getPolicySetDefinitionByName(ctx, client, id.Name, managementGroupName)
+	if managementGroupName != "" {
+		return readForManagementGroup(ctx, client, d, managementGroupId.ID())
+	}
+
+	id := policysetdefinitions.NewProviderPolicySetDefinitionID(subscriptionId, resourceId.Name)
+
+	resp, model, err := getPolicySetDefinitionByID(ctx, client, id)
 	if err != nil {
-		if utils.ResponseWasNotFound(resp.Response) {
+		if response.WasNotFound(resp) {
 			log.Printf("[INFO] Error reading Policy Set Definition %q - removing from state", d.Id())
 			d.SetId("")
 			return nil
 		}
 
-		return fmt.Errorf("reading Policy Set Definition %+v", err)
+		return fmt.Errorf("retrieving %s: %+v", id, err)
 	}
 
-	d.Set("name", resp.Name)
-	d.Set("management_group_id", managementGroupName)
-	if managementGroupName != "" {
-		d.Set("management_group_id", managementGroupId.ID())
-	}
+	if model != nil {
+		d.Set("name", model.Name)
 
-	if props := resp.SetDefinitionProperties; props != nil {
-		d.Set("policy_type", string(props.PolicyType))
-		d.Set("display_name", props.DisplayName)
-		d.Set("description", props.Description)
+		if props := model.Properties; props != nil {
+			d.Set("policy_type", string(pointer.From(props.PolicyType)))
+			d.Set("display_name", props.DisplayName)
+			d.Set("description", props.Description)
 
-		if metadata := props.Metadata; metadata != nil {
-			metadataVal := metadata.(map[string]interface{})
-			metadataStr, err := pluginsdk.FlattenJsonToString(metadataVal)
-			if err != nil {
-				return fmt.Errorf("flattening JSON for `metadata`: %+v", err)
+			if iMetadata := props.Metadata; iMetadata != nil {
+				metadata := *iMetadata
+				if v, ok := metadata.(map[string]interface{}); ok {
+					metadataStr, err := pluginsdk.FlattenJsonToString(v)
+					if err != nil {
+						return fmt.Errorf("flattening `metadata`: %+v", err)
+					}
+					d.Set("metadata", metadataStr)
+				}
 			}
 
-			d.Set("metadata", metadataStr)
-		}
+			if parameters := props.Parameters; parameters != nil {
+				parametersStr, err := flattenParameterDefinitionsValue(parameters)
+				if err != nil {
+					return fmt.Errorf("flattening `parameters`: %+v", err)
+				}
 
-		if parameters := props.Parameters; parameters != nil {
-			parametersStr, err := flattenParameterDefinitionsValueToString(parameters)
-			if err != nil {
-				return fmt.Errorf("flattening JSON for `parameters`: %+v", err)
+				d.Set("parameters", parametersStr)
 			}
 
-			d.Set("parameters", parametersStr)
-		}
+			references, err := flattenAzureRMPolicySetDefinitionPolicyDefinitions(props.PolicyDefinitions)
+			if err != nil {
+				return fmt.Errorf("flattening `policy_definition_reference`: %+v", err)
+			}
+			if err := d.Set("policy_definition_reference", references); err != nil {
+				return fmt.Errorf("setting `policy_definition_reference`: %+v", err)
+			}
 
-		references, err := flattenAzureRMPolicySetDefinitionPolicyDefinitions(props.PolicyDefinitions)
-		if err != nil {
-			return fmt.Errorf("flattening `policy_definition_reference`: %+v", err)
-		}
-		if err := d.Set("policy_definition_reference", references); err != nil {
-			return fmt.Errorf("setting `policy_definition_reference`: %+v", err)
-		}
-
-		if err := d.Set("policy_definition_group", flattenAzureRMPolicySetDefinitionPolicyGroups(props.PolicyDefinitionGroups)); err != nil {
-			return fmt.Errorf("setting `policy_definition_group`: %+v", err)
+			if err := d.Set("policy_definition_group", flattenAzureRMPolicySetDefinitionPolicyGroups(props.PolicyDefinitionGroups)); err != nil {
+				return fmt.Errorf("setting `policy_definition_group`: %+v", err)
+			}
 		}
 	}
 

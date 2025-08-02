@@ -1,20 +1,21 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
-	"strconv"
+	"net/http"
+	"regexp"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/preview/resources/mgmt/2021-06-01-preview/policy" // nolint: staticcheck
-	"github.com/Azure/go-autorest/autorest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2025-01-01/policysetdefinitions"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	mgmtGrpParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -22,38 +23,34 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func expandAzureRMPolicySetDefinitionPolicyDefinitions(input []interface{}) (*[]policy.DefinitionReference, error) {
-	result := make([]policy.DefinitionReference, 0)
+func expandAzureRMPolicySetDefinitionPolicyDefinitions(input []interface{}) ([]policysetdefinitions.PolicyDefinitionReference, error) {
+	result := make([]policysetdefinitions.PolicyDefinitionReference, 0)
 
 	for _, item := range input {
 		v := item.(map[string]interface{})
 
-		var parameters map[string]*policy.ParameterValuesValue
+		var parameters map[string]policysetdefinitions.ParameterValuesValue
 		if p, ok := v["parameter_values"].(string); ok && p != "" {
-			parameters = make(map[string]*policy.ParameterValuesValue)
+			parameters = make(map[string]policysetdefinitions.ParameterValuesValue)
 			if err := json.Unmarshal([]byte(p), &parameters); err != nil {
 				return nil, fmt.Errorf("unmarshalling `parameter_values`: %+v", err)
 			}
 		}
-		if p, ok := v["parameters"].(map[string]interface{}); ok {
-			if len(parameters) > 0 && len(p) > 0 {
-				return nil, fmt.Errorf("cannot set both `parameters` and `parameter_values`")
-			}
-			parameters = make(map[string]*policy.ParameterValuesValue)
-			for k, value := range p {
-				parameters[k] = &policy.ParameterValuesValue{
-					Value: value,
-				}
-			}
+
+		reference := policysetdefinitions.PolicyDefinitionReference{
+			PolicyDefinitionId:          v["policy_definition_id"].(string),
+			Parameters:                  pointer.To(parameters),
+			PolicyDefinitionReferenceId: pointer.To(v["reference_id"].(string)),
+			GroupNames:                  utils.ExpandStringSlice(v["policy_group_names"].(*pluginsdk.Set).List()),
 		}
 
-		result = append(result, policy.DefinitionReference{
-			PolicyDefinitionID:          utils.String(v["policy_definition_id"].(string)),
-			Parameters:                  parameters,
-			PolicyDefinitionReferenceID: utils.String(v["reference_id"].(string)),
-			GroupNames:                  utils.ExpandStringSlice(v["policy_group_names"].(*pluginsdk.Set).List()),
-		})
+		// The API returns an error if we send an empty string
+		if version := v["version"].(string); version != "" {
+			reference.DefinitionVersion = pointer.To(v["version"].(string))
+		}
+
+		result = append(result, reference)
 	}
 
-	return &result, nil
+	return result, nil
 }

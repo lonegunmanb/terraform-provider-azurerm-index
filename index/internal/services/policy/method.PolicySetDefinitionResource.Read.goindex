@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2025-01-01/policysetdefinitions"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	mgmtGrpParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func (r PolicySetDefinitionResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Policy.PolicySetDefinitionsClient
+
+			id, err := policysetdefinitions.ParseProviderPolicySetDefinitionID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, model, err := getPolicySetDefinition(ctx, client, *id)
+			if err != nil {
+				if response.WasNotFound(resp) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			state := PolicySetDefinitionResourceModel{
+				Name: id.PolicySetDefinitionName,
+			}
+
+			if model != nil {
+				if props := model.Properties; props != nil {
+					state.Description = pointer.From(props.Description)
+					state.DisplayName = pointer.From(props.DisplayName)
+					state.PolicyType = string(pointer.From(props.PolicyType))
+
+					if v, ok := pointer.From(props.Metadata).(map[string]interface{}); ok {
+						flattenedMetadata, err := pluginsdk.FlattenJsonToString(v)
+						if err != nil {
+							return fmt.Errorf("flattening `metadata`: %+v", err)
+						}
+						state.Metadata = flattenedMetadata
+					}
+
+					flattenedParameters, err := flattenParameterDefinitionsValue(props.Parameters)
+					if err != nil {
+						return fmt.Errorf("flattening `parameters`: %+v", err)
+					}
+					state.Parameters = flattenedParameters
+
+					flattenedDefinitions, err := flattenPolicyDefinitionReference(props.PolicyDefinitions)
+					if err != nil {
+						return fmt.Errorf("flattening `policy_definition_reference`: %+v", err)
+					}
+					state.PolicyDefinitionReference = flattenedDefinitions
+
+					state.PolicyDefinitionGroup = flattenPolicyDefinitionGroup(props.PolicyDefinitionGroups)
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

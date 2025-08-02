@@ -4,31 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"net/http"
 	"reflect"
+	"regexp"
 	"strconv"
-	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/preview/resources/mgmt/2021-06-01-preview/policy" // nolint: staticcheck
-	"github.com/Azure/go-autorest/autorest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	mgmtGrpParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/parse"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2025-01-01/policysetdefinitions"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func policySetDefinitionRefreshFunc(ctx context.Context, client *policy.SetDefinitionsClient, name, managementGroupId string) pluginsdk.StateRefreshFunc {
+func policySetDefinitionRefreshFunc(ctx context.Context, client *policysetdefinitions.PolicySetDefinitionsClient, id any) pluginsdk.StateRefreshFunc {
+	// TODO: Remove post 5.0
 	return func() (interface{}, string, error) {
-		res, err := getPolicySetDefinitionByName(ctx, client, name, managementGroupId)
-		if err != nil {
-			return nil, strconv.Itoa(res.StatusCode), fmt.Errorf("issuing read request in policySetDefinitionRefreshFunc for Policy Set Definition %q: %+v", name, err)
+		resp, _, err := getPolicySetDefinitionByID(ctx, client, id)
+		if err != nil && !response.WasNotFound(resp) {
+			return nil, strconv.Itoa(resp.StatusCode), fmt.Errorf("retrieving %s: %+v", id, err)
 		}
 
-		return res, strconv.Itoa(res.StatusCode), nil
+		return resp, strconv.Itoa(resp.StatusCode), nil
 	}
 }

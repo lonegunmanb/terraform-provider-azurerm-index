@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"reflect"
+	"regexp"
+	"strconv"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2025-01-01/policysetdefinitions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandPolicyDefinitionReference(input []PolicyDefinitionReferenceModel) ([]policysetdefinitions.PolicyDefinitionReference, error) {
+	result := make([]policysetdefinitions.PolicyDefinitionReference, 0)
+
+	for _, v := range input {
+		expandedParameters, err := expandPolicyDefinitionReferenceParameterValues(v.ParameterValues)
+		if err != nil {
+			return nil, fmt.Errorf("expanding `parameter_values`: %+v", err)
+		}
+
+		reference := policysetdefinitions.PolicyDefinitionReference{
+			GroupNames:                  pointer.To(v.PolicyGroupNames),
+			Parameters:                  expandedParameters,
+			PolicyDefinitionId:          v.PolicyDefinitionID,
+			PolicyDefinitionReferenceId: pointer.To(v.ReferenceID),
+		}
+
+		// The API returns an error if we send an empty string
+		if v.Version != "" {
+			reference.DefinitionVersion = pointer.To(v.Version)
+		}
+		result = append(result, reference)
+	}
+
+	return result, nil
+}

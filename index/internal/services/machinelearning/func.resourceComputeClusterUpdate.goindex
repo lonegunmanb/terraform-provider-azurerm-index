@@ -36,11 +36,26 @@ func resourceComputeClusterUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 	if payload == nil {
 		return fmt.Errorf("retrieving %s: `model` was nil", *id)
 	}
-	identity, err := expandIdentity(d.Get("identity").([]interface{}))
-	if err != nil {
-		return fmt.Errorf("expanding `identity`: %+v", err)
+	if d.HasChange("identity") {
+		identity, err := expandIdentity(d.Get("identity").([]interface{}))
+		if err != nil {
+			return fmt.Errorf("expanding `identity`: %+v", err)
+		}
+		payload.Identity = identity
 	}
-	payload.Identity = identity
+
+	if d.HasChange("scale_settings") {
+		computeClusterProperties, ok := payload.Properties.(machinelearningcomputes.AmlCompute)
+		if !ok {
+			return fmt.Errorf("retrieving %s: `properties` was not of type AmlCompute", *id)
+		}
+		computeClusterProperties.Properties.ScaleSettings = expandScaleSettings(d.Get("scale_settings").([]interface{}))
+	}
+
+	if d.HasChange("tags") {
+		payload.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+	}
+
 	if err := client.ComputeCreateOrUpdateThenPoll(ctx, *id, *payload); err != nil {
 		return fmt.Errorf("updating %s: %+v", id, err)
 	}

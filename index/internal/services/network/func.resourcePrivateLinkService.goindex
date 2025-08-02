@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/privatelinkservices"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
@@ -24,14 +25,15 @@ import (
 )
 func resourcePrivateLinkService() *pluginsdk.Resource {
 	return &pluginsdk.Resource{
-		Create: resourcePrivateLinkServiceCreate,
-		Read:   resourcePrivateLinkServiceRead,
-		Update: resourcePrivateLinkServiceUpdate,
-		Delete: resourcePrivateLinkServiceDelete,
-		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
-			_, err := privatelinkservices.ParsePrivateLinkServiceID(id)
-			return err
-		}),
+		Create:   resourcePrivateLinkServiceCreate,
+		Read:     resourcePrivateLinkServiceRead,
+		Update:   resourcePrivateLinkServiceUpdate,
+		Delete:   resourcePrivateLinkServiceDelete,
+		Importer: pluginsdk.ImporterValidatingIdentity(&privatelinkservices.PrivateLinkServiceId{}),
+
+		Identity: &schema.ResourceIdentity{
+			SchemaFunc: pluginsdk.GenerateIdentitySchema(&privatelinkservices.PrivateLinkServiceId{}),
+		},
 
 		Timeouts: &pluginsdk.ResourceTimeout{
 			Create: pluginsdk.DefaultTimeout(60 * time.Minute),
@@ -60,6 +62,13 @@ func resourcePrivateLinkService() *pluginsdk.Resource {
 					ValidateFunc: validation.IsUUID,
 				},
 				Set: pluginsdk.HashString,
+			},
+
+			"destination_ip_address": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.IsIPv4Address,
+				ExactlyOneOf: []string{"load_balancer_frontend_ip_configuration_ids", "destination_ip_address"},
 			},
 
 			// TODO 4.0: change this from enable_* to *_enabled
@@ -131,16 +140,16 @@ func resourcePrivateLinkService() *pluginsdk.Resource {
 				},
 			},
 
-			// Required by the API you can't create the resource without at least one load balancer id
 			"load_balancer_frontend_ip_configuration_ids": {
 				Type:     pluginsdk.TypeSet,
-				Required: true,
+				Optional: true,
 				ForceNew: true,
 				Elem: &pluginsdk.Schema{
 					Type:         pluginsdk.TypeString,
 					ValidateFunc: azure.ValidateResourceID,
 				},
-				Set: pluginsdk.HashString,
+				Set:          pluginsdk.HashString,
+				ExactlyOneOf: []string{"load_balancer_frontend_ip_configuration_ids", "destination_ip_address"},
 			},
 
 			"alias": {

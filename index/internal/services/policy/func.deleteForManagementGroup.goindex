@@ -1,20 +1,21 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
-	"strconv"
+	"net/http"
+	"regexp"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/preview/resources/mgmt/2021-06-01-preview/policy" // nolint: staticcheck
-	"github.com/Azure/go-autorest/autorest"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2025-01-01/policysetdefinitions"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	mgmtGrpParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -22,9 +23,15 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-type DefinitionReferenceInOldApiVersion struct {
-	// PolicyDefinitionID - The ID of the policy definition or policy set definition.
-	PolicyDefinitionID *string `json:"policyDefinitionId,omitempty"`
-	// Parameters - The parameter values for the referenced policy rule. The keys are the parameter names.
-	Parameters map[string]*policy.ParameterValuesValue `json:"parameters"`
+func deleteForManagementGroup(ctx context.Context, client *policysetdefinitions.PolicySetDefinitionsClient, managementGroupIdString string) error {
+	id, err := policysetdefinitions.ParseProviders2PolicySetDefinitionID(managementGroupIdString)
+	if err != nil {
+		return err
+	}
+
+	if _, err = client.DeleteAtManagementGroup(ctx, *id); err != nil {
+		return fmt.Errorf("deleting %s: %+v", *id, err)
+	}
+
+	return nil
 }

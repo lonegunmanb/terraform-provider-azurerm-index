@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"reflect"
+	"regexp"
+	"strconv"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2025-01-01/policysetdefinitions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func policyDefinitionReferenceSchema() *pluginsdk.Schema {
+	return &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Required: true,
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"policy_definition_id": {
+					Type:         pluginsdk.TypeString,
+					Required:     true,
+					ValidateFunc: validate.PolicyDefinitionID,
+				},
+
+				"parameter_values": {
+					Type:             pluginsdk.TypeString,
+					Optional:         true,
+					ValidateFunc:     validation.StringIsJSON,
+					DiffSuppressFunc: pluginsdk.SuppressJsonDiff,
+				},
+
+				"reference_id": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true,
+				},
+
+				"policy_group_names": {
+					Type:     pluginsdk.TypeSet,
+					Optional: true,
+					Elem: &pluginsdk.Schema{
+						Type:         pluginsdk.TypeString,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+				},
+
+				"version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					// Note: O+C because Azure returns a version if not sent in the request.
+					Computed: true,
+					ValidateFunc: validation.StringMatch(
+						regexp.MustCompile(`^([1-9]\d*)\.(\d+|\*)(\.\*(-preview)?)?$`),
+						"version must match `{major}.{minor}[.*][-preview]` where each segment is a number or an asterisk. The major version number must be greater than zero and `-preview` is optional.",
+					),
+				},
+			},
+		},
+	}
+}
