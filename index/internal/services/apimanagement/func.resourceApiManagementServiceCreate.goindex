@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +18,6 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/api"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/apimanagementservice"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/delegationsettings"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/deletedservice"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/policy"
@@ -25,12 +25,15 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signinsettings"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signupsettings"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2024-05-01/apimanagementservice"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
 	apimValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -47,7 +50,6 @@ func resourceApiManagementServiceCreate(d *pluginsdk.ResourceData, meta interfac
 	defer cancel()
 
 	sku := expandAzureRmApiManagementSkuName(d.Get("sku_name").(string))
-
 	log.Printf("[INFO] preparing arguments for API Management Service creation.")
 
 	id := apimanagementservice.NewServiceID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
@@ -268,10 +270,11 @@ func resourceApiManagementServiceCreate(d *pluginsdk.ResourceData, meta interfac
 	}
 
 	signInSettingsRaw := d.Get("sign_in").([]interface{})
-	if sku.Name == apimanagementservice.SkuTypeConsumption && len(signInSettingsRaw) > 0 {
-		return errors.New("`sign_in` is not supported for sku tier `Consumption`")
+	if (sku.Name == apimanagementservice.SkuTypeConsumption || strings.Contains(string(sku.Name), "V2")) && len(signInSettingsRaw) > 0 {
+		return errors.New("`sign_in` is not supported for sku tiers `Consumption` and `V2`")
 	}
-	if sku.Name != apimanagementservice.SkuTypeConsumption {
+
+	if sku.Name != apimanagementservice.SkuTypeConsumption && !strings.Contains(string(sku.Name), "V2") {
 		signInSettingServiceId := signinsettings.NewServiceID(subscriptionId, id.ResourceGroupName, id.ServiceName)
 		signInSettings := expandApiManagementSignInSettings(signInSettingsRaw)
 		signInClient := meta.(*clients.Client).ApiManagement.SignInClient
@@ -281,10 +284,10 @@ func resourceApiManagementServiceCreate(d *pluginsdk.ResourceData, meta interfac
 	}
 
 	signUpSettingsRaw := d.Get("sign_up").([]interface{})
-	if sku.Name == apimanagementservice.SkuTypeConsumption && len(signUpSettingsRaw) > 0 {
-		return fmt.Errorf("`sign_up` is not supported for sku tier `Consumption`")
+	if (sku.Name == apimanagementservice.SkuTypeConsumption || strings.Contains(string(sku.Name), "V2")) && len(signUpSettingsRaw) > 0 {
+		return fmt.Errorf("`sign_up` is not supported for sku tiers `Consumption` and `V2`")
 	}
-	if sku.Name != apimanagementservice.SkuTypeConsumption {
+	if sku.Name != apimanagementservice.SkuTypeConsumption && !strings.Contains(string(sku.Name), "V2") {
 		signUpSettingServiceId := signupsettings.NewServiceID(subscriptionId, id.ResourceGroupName, id.ServiceName)
 		signUpSettings := expandApiManagementSignUpSettings(signUpSettingsRaw)
 		signUpClient := meta.(*clients.Client).ApiManagement.SignUpClient
@@ -294,10 +297,10 @@ func resourceApiManagementServiceCreate(d *pluginsdk.ResourceData, meta interfac
 	}
 
 	delegationSettingsRaw := d.Get("delegation").([]interface{})
-	if sku.Name == apimanagementservice.SkuTypeConsumption && len(delegationSettingsRaw) > 0 {
-		return fmt.Errorf("`delegation` is not supported for sku tier `Consumption`")
+	if (sku.Name == apimanagementservice.SkuTypeConsumption || strings.Contains(string(sku.Name), "V2")) && len(delegationSettingsRaw) > 0 {
+		return fmt.Errorf("`delegation` is not supported for sku tiers `Consumption` and `V2`")
 	}
-	if sku.Name != apimanagementservice.SkuTypeConsumption && len(delegationSettingsRaw) > 0 {
+	if sku.Name != apimanagementservice.SkuTypeConsumption && !strings.Contains(string(sku.Name), "V2") && len(delegationSettingsRaw) > 0 {
 		delegationSettingServiceId := delegationsettings.NewServiceID(subscriptionId, id.ResourceGroupName, id.ServiceName)
 		delegationSettings := expandApiManagementDelegationSettings(delegationSettingsRaw)
 		delegationClient := meta.(*clients.Client).ApiManagement.DelegationSettingsClient
@@ -307,10 +310,10 @@ func resourceApiManagementServiceCreate(d *pluginsdk.ResourceData, meta interfac
 	}
 
 	tenantAccessRaw := d.Get("tenant_access").([]interface{})
-	if sku.Name == apimanagementservice.SkuTypeConsumption && len(tenantAccessRaw) > 0 {
-		return fmt.Errorf("`tenant_access` is not supported for sku tier `Consumption`")
+	if (sku.Name == apimanagementservice.SkuTypeConsumption || strings.Contains(string(sku.Name), "V2")) && len(tenantAccessRaw) > 0 {
+		return fmt.Errorf("`tenant_access` is not supported for sku tiers `Consumption` and `V2`")
 	}
-	if sku.Name != apimanagementservice.SkuTypeConsumption && d.HasChange("tenant_access") {
+	if sku.Name != apimanagementservice.SkuTypeConsumption && !strings.Contains(string(sku.Name), "V2") && d.HasChange("tenant_access") {
 		tenantAccessServiceId := tenantaccess.NewAccessID(subscriptionId, id.ResourceGroupName, id.ServiceName, "access")
 		tenantAccessInformationParametersRaw := d.Get("tenant_access").([]interface{})
 		tenantAccessInformationParameters := expandApiManagementTenantAccessSettings(tenantAccessInformationParametersRaw)

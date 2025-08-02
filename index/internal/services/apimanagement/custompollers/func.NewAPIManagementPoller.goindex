@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/custompollers
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2024-05-01/apimanagementservice"
+	"github.com/hashicorp/go-azure-sdk/sdk/client"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+)
+func NewAPIManagementPoller(cli *apimanagementservice.ApiManagementServiceClient, response *http.Response) (*apiManagementPoller, error) {
+	pollingUrl := response.Header.Get("Azure-AsyncOperation")
+	if pollingUrl == "" {
+		pollingUrl = response.Header.Get("Location")
+	}
+
+	if pollingUrl == "" {
+		return nil, fmt.Errorf("no polling URL found in response")
+	}
+
+	url, err := url.Parse(pollingUrl)
+	if err != nil {
+		return nil, fmt.Errorf("invalid polling URL %q in response: %v", pollingUrl, err)
+	}
+	if !url.IsAbs() {
+		return nil, fmt.Errorf("invalid polling URL %q in response: URL was not absolute", pollingUrl)
+	}
+
+	return &apiManagementPoller{
+		client:     cli,
+		pollingUrl: url,
+	}, nil
+}

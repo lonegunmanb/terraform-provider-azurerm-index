@@ -27,6 +27,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
 	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
@@ -87,7 +88,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 		clientSecret := servicePrincipalRaw["client_secret"].(string)
 		params := managedclusters.ManagedClusterServicePrincipalProfile{
 			ClientId: clientId,
-			Secret:   utils.String(clientSecret),
+			Secret:   pointer.To(clientSecret),
 		}
 
 		err = clusterClient.ResetServicePrincipalProfileThenPoll(ctx, *id, params)
@@ -119,7 +120,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 		// changing rbacEnabled must still force cluster recreation
 		if *props.EnableRBAC == rbacEnabled {
-			props.EnableRBAC = utils.Bool(rbacEnabled)
+			props.EnableRBAC = pointer.To(rbacEnabled)
 		} else {
 			updateCluster = true
 		}
@@ -154,7 +155,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 		existing.Model.Properties.AddonProfiles = addonProfiles
 	}
 
-	if d.HasChange("api_server_authorized_ip_ranges") || d.HasChange("run_command_enabled") || d.HasChange("private_cluster_public_fqdn_enabled") || d.HasChange("api_server_access_profile") {
+	if d.HasChange("run_command_enabled") || d.HasChange("private_cluster_public_fqdn_enabled") || d.HasChange("api_server_access_profile") {
 		updateCluster = true
 
 		apiServerProfile := expandKubernetesClusterAPIAccessProfile(d)
@@ -186,7 +187,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 	if d.HasChange("local_account_disabled") {
 		updateCluster = true
-		existing.Model.Properties.DisableLocalAccounts = utils.Bool(d.Get("local_account_disabled").(bool))
+		existing.Model.Properties.DisableLocalAccounts = pointer.To(d.Get("local_account_disabled").(bool))
 	}
 
 	if d.HasChange("cost_analysis_enabled") {
@@ -222,13 +223,13 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 			if key := "network_profile.0.load_balancer_profile.0.idle_timeout_in_minutes"; d.HasChange(key) {
 				idleTimeoutInMinutes := d.Get(key).(int)
-				loadBalancerProfile.IdleTimeoutInMinutes = utils.Int64(int64(idleTimeoutInMinutes))
+				loadBalancerProfile.IdleTimeoutInMinutes = pointer.To(int64(idleTimeoutInMinutes))
 			}
 
 			if key := "network_profile.0.load_balancer_profile.0.managed_outbound_ip_count"; d.HasChange(key) {
 				managedOutboundIPCount := d.Get(key).(int)
 				loadBalancerProfile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{
-					Count: utils.Int64(int64(managedOutboundIPCount)),
+					Count: pointer.To(int64(managedOutboundIPCount)),
 				}
 
 				// fixes: Load balancer profile must specify one of ManagedOutboundIPs, OutboundIPPrefixes and OutboundIPs.
@@ -241,7 +242,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 				if loadBalancerProfile.ManagedOutboundIPs == nil {
 					loadBalancerProfile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{}
 				}
-				loadBalancerProfile.ManagedOutboundIPs.CountIPv6 = utils.Int64(int64(managedOutboundIPV6Count))
+				loadBalancerProfile.ManagedOutboundIPs.CountIPv6 = pointer.To(int64(managedOutboundIPV6Count))
 
 				// fixes: Load balancer profile must specify one of ManagedOutboundIPs, OutboundIPPrefixes and OutboundIPs.
 				loadBalancerProfile.OutboundIPs = nil
@@ -254,7 +255,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 					// sending [] to unset `outbound_ip_address_ids` results in 400 / Bad Request
 					// instead we default back to AKS managed outbound which is the default of the AKS API when nothing is provided
 					loadBalancerProfile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{
-						Count: utils.Int64(1),
+						Count: pointer.To(int64(1)),
 					}
 					loadBalancerProfile.OutboundIPs = nil
 					loadBalancerProfile.OutboundIPPrefixes = nil
@@ -276,7 +277,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 					// sending [] to unset `outbound_ip_address_ids` results in 400 / Bad Request
 					// instead we default back to AKS managed outbound which is the default of the AKS API when nothing is specified
 					loadBalancerProfile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{
-						Count: utils.Int64(1),
+						Count: pointer.To(int64(1)),
 					}
 					loadBalancerProfile.OutboundIPs = nil
 					loadBalancerProfile.OutboundIPPrefixes = nil
@@ -294,7 +295,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 			if key := "network_profile.0.load_balancer_profile.0.outbound_ports_allocated"; d.HasChange(key) {
 				allocatedOutboundPorts := d.Get(key).(int)
-				loadBalancerProfile.AllocatedOutboundPorts = utils.Int64(int64(allocatedOutboundPorts))
+				loadBalancerProfile.AllocatedOutboundPorts = pointer.To(int64(allocatedOutboundPorts))
 			}
 
 			if key := "network_profile.0.load_balancer_profile.0.backend_pool_type"; d.HasChange(key) {
@@ -310,13 +311,13 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 			if key := "network_profile.0.nat_gateway_profile.0.idle_timeout_in_minutes"; d.HasChange(key) {
 				idleTimeoutInMinutes := d.Get(key).(int)
-				natGatewayProfile.IdleTimeoutInMinutes = utils.Int64(int64(idleTimeoutInMinutes))
+				natGatewayProfile.IdleTimeoutInMinutes = pointer.To(int64(idleTimeoutInMinutes))
 			}
 
 			if key := "network_profile.0.nat_gateway_profile.0.managed_outbound_ip_count"; d.HasChange(key) {
 				managedOutboundIPCount := d.Get(key).(int)
 				natGatewayProfile.ManagedOutboundIPProfile = &managedclusters.ManagedClusterManagedOutboundIPProfile{
-					Count: utils.Int64(int64(managedOutboundIPCount)),
+					Count: pointer.To(int64(managedOutboundIPCount)),
 				}
 				natGatewayProfile.EffectiveOutboundIPs = nil
 			}
@@ -435,6 +436,15 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 		existing.Model.Properties.SecurityProfile.AzureKeyVaultKms = azureKeyVaultKms
 	}
 
+	if d.HasChanges("custom_ca_trust_certificates_base64") {
+		updateCluster = true
+		customCaTrustCertListRaw := d.Get("custom_ca_trust_certificates_base64").([]interface{})
+		if existing.Model.Properties.SecurityProfile == nil {
+			existing.Model.Properties.SecurityProfile = &managedclusters.ManagedClusterSecurityProfile{}
+		}
+		existing.Model.Properties.SecurityProfile.CustomCATrustCertificates = utils.ExpandStringSlice(customCaTrustCertListRaw)
+	}
+
 	if d.HasChanges("microsoft_defender") {
 		updateCluster = true
 		microsoftDefenderRaw := d.Get("microsoft_defender").([]interface{})
@@ -484,8 +494,8 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 			existing.Model.Properties.SecurityProfile = &managedclusters.ManagedClusterSecurityProfile{}
 		}
 		existing.Model.Properties.SecurityProfile.ImageCleaner = &managedclusters.ManagedClusterSecurityProfileImageCleaner{
-			Enabled:       utils.Bool(d.Get("image_cleaner_enabled").(bool)),
-			IntervalHours: utils.Int64(int64(d.Get("image_cleaner_interval_hours").(int))),
+			Enabled:       pointer.To(d.Get("image_cleaner_enabled").(bool)),
+			IntervalHours: pointer.To(int64(d.Get("image_cleaner_interval_hours").(int))),
 		}
 	}
 
@@ -542,7 +552,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 		kubernetesVersion := d.Get("kubernetes_version").(string)
 		log.Printf("[DEBUG] Upgrading the version of Kubernetes to %q..", kubernetesVersion)
-		existing.Model.Properties.KubernetesVersion = utils.String(kubernetesVersion)
+		existing.Model.Properties.KubernetesVersion = pointer.To(kubernetesVersion)
 
 		err = clusterClient.CreateOrUpdateThenPoll(ctx, *id, *existing.Model, managedclusters.DefaultCreateOrUpdateOperationOptions())
 		if err != nil {

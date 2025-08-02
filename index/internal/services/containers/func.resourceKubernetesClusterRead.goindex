@@ -27,6 +27,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
 	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
@@ -62,10 +63,10 @@ func resourceKubernetesClusterRead(d *pluginsdk.ResourceData, meta interface{}) 
 
 	credentials, err := client.ListClusterUserCredentials(ctx, *id, managedclusters.ListClusterUserCredentialsOperationOptions{})
 	if err != nil {
-		return fmt.Errorf("retrieving User Credentials for %s: %+v", id, err)
+		return fmt.Errorf("retrieving User Credentials for %s: %+v", id, err)
 	}
 	if credentials.Model == nil {
-		return fmt.Errorf("retrieving User Credentials for %s: payload is empty", id)
+		return fmt.Errorf("retrieving User Credentials for %s: payload is empty", id)
 	}
 
 	d.Set("name", id.ManagedClusterName)
@@ -114,6 +115,14 @@ func resourceKubernetesClusterRead(d *pluginsdk.ResourceData, meta interface{}) 
 
 			d.Set("automatic_upgrade_channel", upgradeChannel)
 			d.Set("node_os_upgrade_channel", nodeOSUpgradeChannel)
+
+			customCaTrustCertList := make([]interface{}, 0)
+			if props.SecurityProfile != nil {
+				customCaTrustCertList = utils.FlattenStringSlice(props.SecurityProfile.CustomCATrustCertificates)
+			}
+			if err := d.Set("custom_ca_trust_certificates_base64", customCaTrustCertList); err != nil {
+				return fmt.Errorf("setting `custom_ca_trust_certificates_base64`: %+v", err)
+			}
 
 			enablePrivateCluster := false
 			enablePrivateClusterPublicFQDN := false

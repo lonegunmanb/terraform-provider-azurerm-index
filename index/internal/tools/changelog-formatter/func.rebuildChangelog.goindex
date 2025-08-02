@@ -1,0 +1,89 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"fmt"
+	"os"
+	"regexp"
+	"slices"
+	"strings"
+)
+func rebuildChangelog(changeLog *changelog) []string {
+	newContent := make([]string, 0)
+	newContent = append(newContent, changeLog.pre...)
+
+	sort := func(s []string) {
+		slices.SortFunc(s, func(a, b string) int {
+			resourceName := func(s string) string {
+				start := strings.Index(s, "`")
+				if start == -1 {
+					return s
+				}
+
+				end := strings.Index(s[start+1:], "`")
+				if end == -1 {
+					return s[start+1:]
+				}
+
+				return s[start+1 : start+1+end]
+			}
+
+			return strings.Compare(resourceName(a), resourceName(b))
+		})
+	}
+
+	if len(changeLog.breaking) > 0 {
+		fmt.Println("changelog contains breaking changes, please sort the entries manually")
+		newContent = append(newContent, formatSection(changeLog.breaking, sectionTypeBreakingChanges)...)
+	}
+
+	tmpContent := make([]string, 0)
+	if len(changeLog.features.dataSources) > 0 {
+		sort(changeLog.features.dataSources)
+		tmpContent = append(tmpContent, changeLog.features.dataSources...)
+	}
+
+	if len(changeLog.features.general) > 0 {
+		sort(changeLog.features.general)
+		tmpContent = append(tmpContent, changeLog.features.general...)
+	}
+
+	if len(tmpContent) > 0 {
+		newContent = append(newContent, formatSection(tmpContent, sectionTypeFeatures)...)
+	}
+
+	tmpContent = make([]string, 0)
+	if len(changeLog.enhancements.dependencies) > 0 {
+		sort(changeLog.enhancements.dependencies)
+		tmpContent = append(tmpContent, changeLog.enhancements.dependencies...)
+	}
+
+	if len(changeLog.enhancements.dataSources) > 0 {
+		sort(changeLog.enhancements.dataSources)
+		tmpContent = append(tmpContent, changeLog.enhancements.dataSources...)
+	}
+
+	if len(changeLog.enhancements.general) > 0 {
+		sort(changeLog.enhancements.general)
+		tmpContent = append(tmpContent, changeLog.enhancements.general...)
+	}
+
+	if len(tmpContent) > 0 {
+		newContent = append(newContent, formatSection(tmpContent, sectionTypeEnhancements)...)
+	}
+
+	tmpContent = make([]string, 0)
+	if len(changeLog.bugs.dataSources) > 0 {
+		sort(changeLog.bugs.dataSources)
+		tmpContent = append(tmpContent, changeLog.bugs.dataSources...)
+	}
+
+	if len(changeLog.bugs.general) > 0 {
+		sort(changeLog.bugs.general)
+		tmpContent = append(tmpContent, changeLog.bugs.general...)
+	}
+
+	if len(tmpContent) > 0 {
+		newContent = append(newContent, formatSection(tmpContent, sectionTypeBugs)...)
+	}
+
+	return append(newContent, changeLog.post...)
+}

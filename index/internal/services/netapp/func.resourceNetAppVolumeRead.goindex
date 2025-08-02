@@ -80,6 +80,19 @@ func resourceNetAppVolumeRead(d *pluginsdk.ResourceData, meta interface{}) error
 		d.Set("key_vault_private_endpoint_id", props.KeyVaultPrivateEndpointResourceId)
 		d.Set("large_volume_enabled", props.IsLargeVolume)
 
+		if pointer.From(props.CoolAccess) {
+			// enums returned from the API are inconsistent so normalize them here
+			// https://github.com/Azure/azure-rest-api-specs/issues/35371
+			coolAccess := map[string]interface{}{
+				"retrieval_policy":        normalizeCoolAccessRetrievalPolicy(pointer.From(props.CoolAccessRetrievalPolicy)),
+				"tiering_policy":          normalizeCoolAccessTieringPolicy(pointer.From(props.CoolAccessTieringPolicy)),
+				"coolness_period_in_days": pointer.From(props.CoolnessPeriod),
+			}
+			d.Set("cool_access", []interface{}{coolAccess})
+		} else {
+			d.Set("cool_access", []interface{}{})
+		}
+
 		smbNonBrowsable := false
 		if props.SmbNonBrowsable != nil {
 			smbNonBrowsable = strings.EqualFold(string(*props.SmbNonBrowsable), string(volumes.SmbNonBrowsableEnabled))

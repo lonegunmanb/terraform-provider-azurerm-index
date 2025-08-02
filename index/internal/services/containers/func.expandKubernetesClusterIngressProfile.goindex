@@ -27,6 +27,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
 	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
@@ -43,7 +44,7 @@ func expandKubernetesClusterIngressProfile(d *pluginsdk.ResourceData, input []in
 	if len(input) == 0 && d.HasChange("web_app_routing") {
 		return &managedclusters.ManagedClusterIngressProfile{
 			WebAppRouting: &managedclusters.ManagedClusterIngressProfileWebAppRouting{
-				Enabled: utils.Bool(false),
+				Enabled: pointer.To(false),
 			},
 		}
 	} else if len(input) == 0 {
@@ -52,7 +53,7 @@ func expandKubernetesClusterIngressProfile(d *pluginsdk.ResourceData, input []in
 
 	out := managedclusters.ManagedClusterIngressProfile{
 		WebAppRouting: &managedclusters.ManagedClusterIngressProfileWebAppRouting{
-			Enabled: utils.Bool(true),
+			Enabled: pointer.To(true),
 		},
 	}
 	if input[0] != nil {
@@ -60,6 +61,11 @@ func expandKubernetesClusterIngressProfile(d *pluginsdk.ResourceData, input []in
 		if v := config["dns_zone_ids"]; v != nil {
 			if dnsZoneResourceIds, ok := v.([]interface{}); ok && len(dnsZoneResourceIds) > 0 {
 				out.WebAppRouting.DnsZoneResourceIds = utils.ExpandStringSlice(dnsZoneResourceIds)
+			}
+		}
+		if v := config["default_nginx_controller"]; v != nil {
+			out.WebAppRouting.Nginx = &managedclusters.ManagedClusterIngressProfileNginx{
+				DefaultIngressControllerType: pointer.To(managedclusters.NginxIngressControllerType(v.(string))),
 			}
 		}
 	}

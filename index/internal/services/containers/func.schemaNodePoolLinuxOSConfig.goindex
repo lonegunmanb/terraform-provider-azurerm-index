@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/applicationsecuritygroups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/publicipprefixes"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -25,7 +26,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func schemaNodePoolLinuxOSConfig() *pluginsdk.Schema {
-	return &pluginsdk.Schema{
+	s := &pluginsdk.Schema{
 		Type:     pluginsdk.TypeList,
 		Optional: true,
 		MaxItems: 1,
@@ -33,7 +34,7 @@ func schemaNodePoolLinuxOSConfig() *pluginsdk.Schema {
 			Schema: map[string]*pluginsdk.Schema{
 				"sysctl_config": schemaNodePoolSysctlConfig(),
 
-				"transparent_huge_page_enabled": {
+				"transparent_huge_page": {
 					Type:     pluginsdk.TypeString,
 					Optional: true,
 					ValidateFunc: validation.StringInSlice([]string{
@@ -62,4 +63,30 @@ func schemaNodePoolLinuxOSConfig() *pluginsdk.Schema {
 			},
 		},
 	}
+
+	if !features.FivePointOh() {
+		s.Elem.(*pluginsdk.Resource).Schema["transparent_huge_page_enabled"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			Computed: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				"always",
+				"madvise",
+				"never",
+			}, false),
+		}
+		s.Elem.(*pluginsdk.Resource).Schema["transparent_huge_page"] = &pluginsdk.Schema{
+			Type:       pluginsdk.TypeString,
+			Optional:   true,
+			Computed:   true,
+			Deprecated: "This field is deprecated in favour of `transparent_huge_page` and will be removed in version 5.0 of the provider",
+			ValidateFunc: validation.StringInSlice([]string{
+				"always",
+				"madvise",
+				"never",
+			}, false),
+		}
+	}
+
+	return s
 }

@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cosmosdb/2024-08-15/cosmosdb"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/reachabilityanalysisintent"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/reachabilityanalysisintents"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ManagerVerifierWorkspaceReachabilityAnalysisIntentResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Network.ReachabilityAnalysisIntents
+
+			id, err := reachabilityanalysisintents.ParseReachabilityAnalysisIntentID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			workspaceId := reachabilityanalysisintents.NewVerifierWorkspaceID(id.SubscriptionId, id.ResourceGroupName, id.NetworkManagerName, id.VerifierWorkspaceName).ID()
+			schema := ManagerVerifierWorkspaceReachabilityAnalysisIntentResourceModel{
+				Name:                id.VerifierWorkspaceName,
+				VerifierWorkspaceId: workspaceId,
+			}
+
+			if model := resp.Model; model != nil {
+				props := model.Properties
+				schema.Description = pointer.From(props.Description)
+				schema.DestinationResourceId = props.DestinationResourceId
+				schema.SourceResourceId = props.SourceResourceId
+				schema.IpTraffic = flattenReachabilityAnalysisIntentIPTraffic(props.IPTraffic)
+			}
+
+			return metadata.Encode(&schema)
+		},
+	}
+}

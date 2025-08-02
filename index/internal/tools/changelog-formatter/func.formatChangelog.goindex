@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"fmt"
+	"os"
+	"regexp"
+	"slices"
+	"strings"
+)
+func formatChangelog(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	content := strings.Split(string(bytes), "\n")
+
+	changeLog := &changelog{}
+	st := sectionTypeUnknown
+	parsingNewEntries := false
+	for idx, line := range content {
+		// Once we hit a released version's changelog heading, add the remaining content to `changelog.post`.
+		// We won't format any of the lines added here.
+		if versionHeadingRegex.MatchString(line) {
+			changeLog.post = content[idx:]
+			break
+		}
+
+		if sectionHeadingRegex.MatchString(line) {
+			parsingNewEntries = true
+
+			st = determineSectionType(line)
+			continue
+		}
+
+		if line != "" && parsingNewEntries {
+			addChangelogEntry(changeLog, st, line)
+		}
+
+		if !parsingNewEntries {
+			// If we're not currently parsing new changelog entries, i.e we haven't encountered a `BREAKING CHANGES`, `FEATURES`, `ENHANCEMENTS`, or `BUG FIXES` heading
+			// track it in `changelog.pre`. We won't format any of the lines added here.
+			changeLog.pre = append(changeLog.pre, line)
+		}
+	}
+	newContent := rebuildChangelog(changeLog)
+
+	if err := os.WriteFile(path, []byte(strings.Join(newContent, "\n")), 0o644); err != nil {
+		return fmt.Errorf("writing to `%s`", path)
+	}
+
+	return nil
+}

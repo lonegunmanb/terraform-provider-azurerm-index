@@ -22,6 +22,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/parse"
@@ -125,7 +126,7 @@ func resourceKubernetesClusterNodePoolCreate(d *pluginsdk.ResourceData, meta int
 		WindowsProfile:         expandAgentPoolWindowsProfile(d.Get("windows_profile").([]interface{})),
 
 		// this must always be sent during creation, but is optional for auto-scaled clusters during update
-		Count: utils.Int64(int64(count)),
+		Count: pointer.To(int64(count)),
 	}
 
 	if gpuInstanceProfile := d.Get("gpu_instance").(string); gpuInstanceProfile != "" {
@@ -146,7 +147,7 @@ func resourceKubernetesClusterNodePoolCreate(d *pluginsdk.ResourceData, meta int
 
 	if priority == string(managedclusters.ScaleSetPrioritySpot) {
 		profile.ScaleSetEvictionPolicy = pointer.To(agentpools.ScaleSetEvictionPolicy(evictionPolicy))
-		profile.SpotMaxPrice = utils.Float(spotMaxPrice)
+		profile.SpotMaxPrice = pointer.To(spotMaxPrice)
 	} else {
 		if evictionPolicy != "" {
 			return fmt.Errorf("`eviction_policy` can only be set when `priority` is set to `Spot`")
@@ -163,7 +164,7 @@ func resourceKubernetesClusterNodePoolCreate(d *pluginsdk.ResourceData, meta int
 			return err
 		}
 
-		profile.OrchestratorVersion = utils.String(orchestratorVersion)
+		profile.OrchestratorVersion = pointer.To(orchestratorVersion)
 	}
 
 	zones := zones.ExpandUntyped(d.Get("zones").(*schema.Set).List())
@@ -172,7 +173,7 @@ func resourceKubernetesClusterNodePoolCreate(d *pluginsdk.ResourceData, meta int
 	}
 
 	if maxPods := int64(d.Get("max_pods").(int)); maxPods > 0 {
-		profile.MaxPods = utils.Int64(maxPods)
+		profile.MaxPods = pointer.To(maxPods)
 	}
 
 	nodeLabelsRaw := d.Get("node_labels").(map[string]interface{})
@@ -181,7 +182,7 @@ func resourceKubernetesClusterNodePoolCreate(d *pluginsdk.ResourceData, meta int
 	}
 
 	if nodePublicIPPrefixID := d.Get("node_public_ip_prefix_id").(string); nodePublicIPPrefixID != "" {
-		profile.NodePublicIPPrefixID = utils.String(nodePublicIPPrefixID)
+		profile.NodePublicIPPrefixID = pointer.To(nodePublicIPPrefixID)
 	}
 
 	nodeTaintsRaw := d.Get("node_taints").([]interface{})
@@ -190,7 +191,7 @@ func resourceKubernetesClusterNodePoolCreate(d *pluginsdk.ResourceData, meta int
 	}
 
 	if osDiskSizeGB := d.Get("os_disk_size_gb").(int); osDiskSizeGB > 0 {
-		profile.OsDiskSizeGB = utils.Int64(int64(osDiskSizeGB))
+		profile.OsDiskSizeGB = pointer.To(int64(osDiskSizeGB))
 	}
 
 	proximityPlacementGroupId := d.Get("proximity_placement_group_id").(string)
@@ -203,19 +204,19 @@ func resourceKubernetesClusterNodePoolCreate(d *pluginsdk.ResourceData, meta int
 	}
 
 	if podSubnetID := d.Get("pod_subnet_id").(string); podSubnetID != "" {
-		profile.PodSubnetID = utils.String(podSubnetID)
+		profile.PodSubnetID = pointer.To(podSubnetID)
 	}
 
 	if subnetID != nil {
-		profile.VnetSubnetID = utils.String(subnetID.ID())
+		profile.VnetSubnetID = pointer.To(subnetID.ID())
 	}
 
 	if hostGroupID := d.Get("host_group_id").(string); hostGroupID != "" {
-		profile.HostGroupID = utils.String(hostGroupID)
+		profile.HostGroupID = pointer.To(hostGroupID)
 	}
 
 	if capacityReservationGroupId := d.Get("capacity_reservation_group_id").(string); capacityReservationGroupId != "" {
-		profile.CapacityReservationGroupID = utils.String(capacityReservationGroupId)
+		profile.CapacityReservationGroupID = pointer.To(capacityReservationGroupId)
 	}
 
 	maxCount := d.Get("max_count").(int)
@@ -224,17 +225,17 @@ func resourceKubernetesClusterNodePoolCreate(d *pluginsdk.ResourceData, meta int
 	if enableAutoScaling {
 		// handle count being optional
 		if count == 0 {
-			profile.Count = utils.Int64(int64(minCount))
+			profile.Count = pointer.To(int64(minCount))
 		}
 
 		if maxCount >= 0 {
-			profile.MaxCount = utils.Int64(int64(maxCount))
+			profile.MaxCount = pointer.To(int64(maxCount))
 		} else {
 			return fmt.Errorf("`max_count` must be configured when `auto_scaling_enabled` is set to `true`")
 		}
 
 		if minCount >= 0 {
-			profile.MinCount = utils.Int64(int64(minCount))
+			profile.MinCount = pointer.To(int64(minCount))
 		} else {
 			return fmt.Errorf("`min_count` must be configured when `auto_scaling_enabled` is set to `true`")
 		}
@@ -267,12 +268,12 @@ func resourceKubernetesClusterNodePoolCreate(d *pluginsdk.ResourceData, meta int
 
 	if snapshotId := d.Get("snapshot_id").(string); snapshotId != "" {
 		profile.CreationData = &agentpools.CreationData{
-			SourceResourceId: utils.String(snapshotId),
+			SourceResourceId: pointer.To(snapshotId),
 		}
 	}
 
 	parameters := agentpools.AgentPool{
-		Name:       utils.String(id.AgentPoolName),
+		Name:       pointer.To(id.AgentPoolName),
 		Properties: &profile,
 	}
 

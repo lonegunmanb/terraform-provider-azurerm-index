@@ -27,6 +27,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
 	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
@@ -172,8 +173,8 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 
 	if d.Get("image_cleaner_enabled").(bool) {
 		securityProfile.ImageCleaner = &managedclusters.ManagedClusterSecurityProfileImageCleaner{
-			Enabled:       utils.Bool(d.Get("image_cleaner_enabled").(bool)),
-			IntervalHours: utils.Int64(int64(d.Get("image_cleaner_interval_hours").(int))),
+			Enabled:       pointer.To(d.Get("image_cleaner_enabled").(bool)),
+			IntervalHours: pointer.To(int64(d.Get("image_cleaner_interval_hours").(int))),
 		}
 	}
 
@@ -205,6 +206,10 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 		autoUpgradeProfile.NodeOSUpgradeChannel = pointer.To(managedclusters.NodeOSUpgradeChannel(nodeOsChannelUpgrade))
 	}
 
+	if customCaTrustCertListRaw := d.Get("custom_ca_trust_certificates_base64").([]interface{}); len(customCaTrustCertListRaw) > 0 {
+		securityProfile.CustomCATrustCertificates = utils.ExpandStringSlice(customCaTrustCertListRaw)
+	}
+
 	parameters := managedclusters.ManagedCluster{
 		ExtendedLocation: expandEdgeZone(d.Get("edge_zone").(string)),
 		Location:         location,
@@ -220,15 +225,15 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 			AutoScalerProfile:         autoScalerProfile,
 			AutoUpgradeProfile:        autoUpgradeProfile,
 			AzureMonitorProfile:       azureMonitorProfile,
-			DnsPrefix:                 utils.String(dnsPrefix),
-			EnableRBAC:                utils.Bool(d.Get("role_based_access_control_enabled").(bool)),
-			KubernetesVersion:         utils.String(kubernetesVersion),
+			DnsPrefix:                 pointer.To(dnsPrefix),
+			EnableRBAC:                pointer.To(d.Get("role_based_access_control_enabled").(bool)),
+			KubernetesVersion:         pointer.To(kubernetesVersion),
 			LinuxProfile:              linuxProfile,
 			WindowsProfile:            windowsProfile,
 			MetricsProfile:            metricsProfile,
 			NetworkProfile:            networkProfile,
-			NodeResourceGroup:         utils.String(nodeResourceGroup),
-			DisableLocalAccounts:      utils.Bool(d.Get("local_account_disabled").(bool)),
+			NodeResourceGroup:         pointer.To(nodeResourceGroup),
+			DisableLocalAccounts:      pointer.To(d.Get("local_account_disabled").(bool)),
 			HTTPProxyConfig:           httpProxyConfig,
 			OidcIssuerProfile:         oidcIssuerProfile,
 			SecurityProfile:           securityProfile,
@@ -265,7 +270,7 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 		servicePrincipalProfileVal := servicePrincipalProfileRaw[0].(map[string]interface{})
 		parameters.Properties.ServicePrincipalProfile = &managedclusters.ManagedClusterServicePrincipalProfile{
 			ClientId: servicePrincipalProfileVal["client_id"].(string),
-			Secret:   utils.String(servicePrincipalProfileVal["client_secret"].(string)),
+			Secret:   pointer.To(servicePrincipalProfileVal["client_secret"].(string)),
 		}
 		servicePrincipalSet = true
 	}
@@ -274,18 +279,18 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 		if (parameters.Identity == nil && !servicePrincipalSet) || (v.(string) != "System" && v.(string) != "None" && (!servicePrincipalSet && parameters.Identity.Type != identity.TypeUserAssigned)) {
 			return fmt.Errorf("a user assigned identity or a service principal must be used when using a custom private dns zone")
 		}
-		apiAccessProfile.PrivateDNSZone = utils.String(v.(string))
+		apiAccessProfile.PrivateDNSZone = pointer.To(v.(string))
 	}
 
 	if v, ok := d.GetOk("dns_prefix_private_cluster"); ok {
 		if !(*apiAccessProfile.EnablePrivateCluster) || apiAccessProfile.PrivateDNSZone == nil || *apiAccessProfile.PrivateDNSZone == "System" || *apiAccessProfile.PrivateDNSZone == "None" {
 			return fmt.Errorf("`dns_prefix_private_cluster` should only be set for private cluster with custom private dns zone")
 		}
-		parameters.Properties.FqdnSubdomain = utils.String(v.(string))
+		parameters.Properties.FqdnSubdomain = pointer.To(v.(string))
 	}
 
 	if v, ok := d.GetOk("disk_encryption_set_id"); ok && v.(string) != "" {
-		parameters.Properties.DiskEncryptionSetID = utils.String(v.(string))
+		parameters.Properties.DiskEncryptionSetID = pointer.To(v.(string))
 	}
 
 	if v := d.Get("support_plan").(string); v != "" {
