@@ -2,11 +2,14 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/services/comput
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-02/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
@@ -57,6 +60,7 @@ func (r VirtualMachineImplicitDataDiskFromSourceResource) Update() sdk.ResourceF
 								return fmt.Errorf("unable to retrieve the data disk %s ", *id)
 							}
 
+							needToUpdate := false
 							expandedDisk := &disks[existingIndex]
 							if metadata.ResourceData.HasChange("caching") {
 								caching := string(virtualmachines.CachingTypesNone)
@@ -65,27 +69,35 @@ func (r VirtualMachineImplicitDataDiskFromSourceResource) Update() sdk.ResourceF
 								}
 
 								expandedDisk.Caching = pointer.To(virtualmachines.CachingTypes(caching))
-							}
-
-							if metadata.ResourceData.HasChange("disk_size_gb") {
-								expandedDisk.DiskSizeGB = pointer.To(config.DiskSizeGb)
+								needToUpdate = true
 							}
 
 							if metadata.ResourceData.HasChange("write_accelerator_enabled") {
 								expandedDisk.WriteAcceleratorEnabled = pointer.To(config.WriteAcceleratorEnabled)
+								needToUpdate = true
 							}
 
-							profile.DataDisks = &disks
-							// fixes #24145
-							model.Properties.ApplicationProfile = nil
-							// fixes #2485
-							model.Identity = nil
-							// fixes #1600
-							model.Resources = nil
+							if needToUpdate {
+								profile.DataDisks = &disks
+								// fixes #24145
+								model.Properties.ApplicationProfile = nil
+								// fixes #2485
+								model.Identity = nil
+								// fixes #1600
+								model.Resources = nil
 
-							err = client.CreateOrUpdateThenPoll(ctx, virtualMachineId, *model, virtualmachines.DefaultCreateOrUpdateOperationOptions())
-							if err != nil {
-								return fmt.Errorf("updating %s: %+v", id, err)
+								err = client.CreateOrUpdateThenPoll(ctx, virtualMachineId, *model, virtualmachines.DefaultCreateOrUpdateOperationOptions())
+								if err != nil {
+									return fmt.Errorf("updating %s: %+v", id, err)
+								}
+							}
+
+							// VirtualMachineClient does not support expanding implicit data disk size, need to use DisksClient
+							if metadata.ResourceData.HasChange("disk_size_gb") {
+								err = resizeImplicitDataDisk(ctx, metadata, id)
+								if err != nil {
+									return err
+								}
 							}
 						}
 					}

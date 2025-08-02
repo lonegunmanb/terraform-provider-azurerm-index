@@ -1,0 +1,31 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/custompollers
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+	"time"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/api"
+	"github.com/hashicorp/go-azure-sdk/sdk/client"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/go-azure-sdk/sdk/odata"
+)
+func NewAPIManagementAPIPoller(cli *api.ApiClient, id api.ApiId, response *http.Response) *apiManagementAPIPoller {
+	urlStr := response.Header.Get("location")
+	var asyncId string
+	if u, err := url.Parse(urlStr); err == nil {
+		asyncId = u.Query().Get("asyncId")
+	}
+
+	// sometimes the poller is not required as the API directly return 200
+	if asyncId == "" {
+		return nil
+	}
+
+	return &apiManagementAPIPoller{
+		client:  cli,
+		id:      id,
+		asyncID: asyncId,
+	}
+}
