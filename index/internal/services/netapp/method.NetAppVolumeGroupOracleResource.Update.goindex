@@ -2,6 +2,7 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -94,6 +95,17 @@ func (r NetAppVolumeGroupOracleResource) Update() sdk.ResourceFunc {
 						}
 
 						if metadata.ResourceData.HasChange(fmt.Sprintf("%v.data_protection_snapshot_policy", volumeItem)) {
+							// Validating that snapshot policies are not being created in a data protection volume
+							dataProtectionReplicationRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.data_protection_replication", volumeItem)).([]interface{})
+							dataProtectionReplication := expandNetAppVolumeDataProtectionReplication(dataProtectionReplicationRaw)
+
+							if dataProtectionReplication != nil &&
+								dataProtectionReplication.Replication != nil &&
+								dataProtectionReplication.Replication.EndpointType != nil &&
+								strings.EqualFold(string(pointer.From(dataProtectionReplication.Replication.EndpointType)), string(volumegroups.EndpointTypeDst)) {
+								return fmt.Errorf("snapshot policy cannot be enabled on a data protection volume, %s", volumeId)
+							}
+
 							dataProtectionSnapshotPolicyRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.data_protection_snapshot_policy", volumeItem)).([]interface{})
 							dataProtectionSnapshotPolicy := expandNetAppVolumeDataProtectionSnapshotPolicyPatch(dataProtectionSnapshotPolicyRaw)
 							update.Properties.DataProtection = dataProtectionSnapshotPolicy

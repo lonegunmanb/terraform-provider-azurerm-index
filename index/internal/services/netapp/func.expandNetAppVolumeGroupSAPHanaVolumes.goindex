@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-01-01/backups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-01-01/capacitypools"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-01-01/volumegroups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-01-01/volumes"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-01-01/volumesreplication"
@@ -39,6 +40,14 @@ func expandNetAppVolumeGroupSAPHanaVolumes(input []netAppModels.NetAppVolumeGrou
 		dataProtectionReplication := expandNetAppVolumeGroupDataProtectionReplication(item.DataProtectionReplication)
 		dataProtectionSnapshotPolicy := expandNetAppVolumeGroupDataProtectionSnapshotPolicy(item.DataProtectionSnapshotPolicy)
 
+		dataProtection := &volumegroups.VolumePropertiesDataProtection{}
+		if dataProtectionReplication != nil && dataProtectionReplication.Replication != nil {
+			dataProtection.Replication = dataProtectionReplication.Replication
+		}
+		if dataProtectionSnapshotPolicy != nil && dataProtectionSnapshotPolicy.Snapshot != nil {
+			dataProtection.Snapshot = dataProtectionSnapshotPolicy.Snapshot
+		}
+
 		volumeProperties := &volumegroups.VolumeGroupVolumeProperties{
 			Name: utils.String(name),
 			Properties: volumegroups.VolumeProperties{
@@ -53,16 +62,20 @@ func expandNetAppVolumeGroupSAPHanaVolumes(input []netAppModels.NetAppVolumeGrou
 				SnapshotDirectoryVisible: utils.Bool(snapshotDirectoryVisible),
 				ThroughputMibps:          utils.Float(item.ThroughputInMibps),
 				VolumeSpecName:           utils.String(item.VolumeSpecName),
-				DataProtection: &volumegroups.VolumePropertiesDataProtection{
-					Replication: dataProtectionReplication.Replication,
-					Snapshot:    dataProtectionSnapshotPolicy.Snapshot,
-				},
+				DataProtection:           dataProtection,
 			},
 			Tags: &item.Tags,
 		}
 
 		if v := item.ProximityPlacementGroupId; v != "" {
 			volumeProperties.Properties.ProximityPlacementGroup = pointer.To(pointer.From(pointer.To(v)))
+		}
+
+		if dataProtectionReplication != nil &&
+			dataProtectionReplication.Replication != nil &&
+			dataProtectionReplication.Replication.EndpointType != nil &&
+			strings.EqualFold(string(pointer.From(dataProtectionReplication.Replication.EndpointType)), string(volumegroups.EndpointTypeDst)) {
+			volumeProperties.Properties.VolumeType = utils.String("DataProtection")
 		}
 
 		results = append(results, *volumeProperties)
