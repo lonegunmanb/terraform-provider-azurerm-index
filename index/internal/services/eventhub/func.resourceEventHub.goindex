@@ -4,11 +4,13 @@ import (
 	"log"
 	"time"
 
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2024-01-01/eventhubs"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2024-01-01/namespaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
@@ -60,8 +62,40 @@ func resourceEventHub() *pluginsdk.Resource {
 
 			"message_retention": {
 				Type:         pluginsdk.TypeInt,
-				Required:     true,
+				Optional:     true,
 				ValidateFunc: validate.ValidateEventHubMessageRetentionCount,
+				ExactlyOneOf: []string{"retention_description", "message_retention"},
+			},
+
+			"retention_description": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*schema.Schema{
+						"cleanup_policy": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ForceNew: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(eventhubs.CleanupPolicyRetentionDescriptionDelete),
+								string(eventhubs.CleanupPolicyRetentionDescriptionCompact),
+							}, false),
+						},
+
+						"retention_time_in_hours": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							ExactlyOneOf: []string{"retention_description.0.tombstone_retention_time_in_hours", "retention_description.0.retention_time_in_hours"},
+						},
+
+						"tombstone_retention_time_in_hours": {
+							Type:         pluginsdk.TypeInt,
+							Optional:     true,
+							ExactlyOneOf: []string{"retention_description.0.retention_time_in_hours", "retention_description.0.tombstone_retention_time_in_hours"},
+						},
+					},
+				},
 			},
 
 			"capture_description": {

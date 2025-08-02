@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2024-01-01/eventhubs"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2024-01-01/namespaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenEventHubRetentionDescription(description *eventhubs.RetentionDescription) []interface{} {
+	results := make([]interface{}, 0)
+
+	if description != nil {
+		output := make(map[string]interface{})
+
+		if cleanupPolicy := description.CleanupPolicy; cleanupPolicy != nil {
+			output["cleanup_policy"] = pointer.FromEnum(cleanupPolicy)
+		}
+
+		if retentionTimeInHours := description.RetentionTimeInHours; retentionTimeInHours != nil && output["cleanup_policy"] == "Delete" {
+			output["retention_time_in_hours"] = pointer.From(retentionTimeInHours)
+		}
+
+		if tombstoneRetentionTimeInHours := description.TombstoneRetentionTimeInHours; tombstoneRetentionTimeInHours != nil && output["cleanup_policy"] == "Compact" {
+			output["tombstone_retention_time_in_hours"] = pointer.From(tombstoneRetentionTimeInHours)
+		}
+
+		results = append(results, output)
+	}
+
+	return results
+}

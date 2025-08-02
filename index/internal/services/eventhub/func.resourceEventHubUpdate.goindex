@@ -4,11 +4,13 @@ import (
 	"log"
 	"time"
 
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2024-01-01/eventhubs"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/eventhub/2024-01-01/namespaces"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
@@ -53,15 +55,22 @@ func resourceEventHubUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	eventhubStatus := eventhubs.EntityStatus(d.Get("status").(string))
 	parameters := eventhubs.Eventhub{
 		Properties: &eventhubs.EventhubProperties{
-			PartitionCount:         utils.Int64(int64(d.Get("partition_count").(int))),
-			MessageRetentionInDays: utils.Int64(int64(d.Get("message_retention").(int))),
-			Status:                 &eventhubStatus,
-			CaptureDescription:     expandEventHubCaptureDescription(d),
+			PartitionCount:     utils.Int64(int64(d.Get("partition_count").(int))),
+			Status:             &eventhubStatus,
+			CaptureDescription: expandEventHubCaptureDescription(d),
 		},
+	}
+
+	if d.HasChange("message_retention") {
+		parameters.Properties.MessageRetentionInDays = pointer.To(int64(d.Get("message_retention").(int)))
 	}
 
 	if d.HasChange("capture_description") {
 		parameters.Properties.CaptureDescription = expandEventHubCaptureDescription(d)
+	}
+
+	if d.HasChange("retention_description") {
+		parameters.Properties.RetentionDescription = expandEventHubRetentionDescription(d)
 	}
 
 	if _, err := client.CreateOrUpdate(ctx, *id, parameters); err != nil {

@@ -69,6 +69,7 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 
 	accountKind := storageaccounts.Kind(d.Get("account_kind").(string))
 	accountTier := storageaccounts.SkuTier(d.Get("account_tier").(string))
+	provisionedBillingModelVersion := d.Get("provisioned_billing_model_version").(string)
 	replicationType := d.Get("account_replication_type").(string)
 
 	publicNetworkAccess := storageaccounts.PublicNetworkAccessDisabled
@@ -111,7 +112,7 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 			SasPolicy:                    expandAccountSASPolicy(d.Get("sas_policy").([]interface{})),
 		},
 		Sku: storageaccounts.Sku{
-			Name: storageaccounts.SkuName(fmt.Sprintf("%s_%s", string(accountTier), replicationType)),
+			Name: storageaccounts.SkuName(fmt.Sprintf("%s%s_%s", string(accountTier), provisionedBillingModelVersion, replicationType)),
 			Tier: pointer.To(accountTier),
 		},
 		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
@@ -170,11 +171,6 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 		if !isPremiumTierAndBlockBlobStorageKind && !isStandardTierAndStorageV2Kind {
 			return fmt.Errorf("`nfsv3_enabled` can only be used with account tier `Standard` and account kind `StorageV2`, or account tier `Premium` and account kind `BlockBlobStorage`")
 		}
-	}
-
-	// AccountTier must be Premium for FileStorage
-	if accountKind == storageaccounts.KindFileStorage && accountTier != storageaccounts.SkuTierPremium {
-		return fmt.Errorf("`account_tier` must be `Premium` for File Storage accounts")
 	}
 
 	// nolint staticcheck

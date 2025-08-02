@@ -321,18 +321,20 @@ func resourceOrchestratedVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData,
 			}
 		}
 
-		if d.HasChange("network_interface") {
+		if d.HasChange("network_api_version") || d.HasChange("network_interface") {
+			if updateProps.VirtualMachineProfile.NetworkProfile == nil {
+				updateProps.VirtualMachineProfile.NetworkProfile = &virtualmachinescalesets.VirtualMachineScaleSetUpdateNetworkProfile{}
+			}
+
+			updateProps.VirtualMachineProfile.NetworkProfile.NetworkApiVersion = pointer.To(virtualmachinescalesets.NetworkApiVersion(d.Get("network_api_version").(string)))
+
 			networkInterfacesRaw := d.Get("network_interface").([]interface{})
 			networkInterfaces, err := ExpandOrchestratedVirtualMachineScaleSetNetworkInterfaceUpdate(networkInterfacesRaw)
 			if err != nil {
 				return fmt.Errorf("expanding `network_interface`: %w", err)
 			}
 
-			updateProps.VirtualMachineProfile.NetworkProfile = &virtualmachinescalesets.VirtualMachineScaleSetUpdateNetworkProfile{
-				NetworkInterfaceConfigurations: networkInterfaces,
-				// 2020-11-01 is the only valid value for this value and is only valid for VMSS in Orchestration Mode flex
-				NetworkApiVersion: pointer.To(virtualmachinescalesets.NetworkApiVersionTwoZeroTwoZeroNegativeOneOneNegativeZeroOne),
-			}
+			updateProps.VirtualMachineProfile.NetworkProfile.NetworkInterfaceConfigurations = networkInterfaces
 		}
 
 		if d.HasChange("boot_diagnostics") {

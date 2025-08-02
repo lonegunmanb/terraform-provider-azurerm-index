@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
@@ -42,13 +43,18 @@ func (r ContainerAppEnvironmentResource) Read() sdk.ResourceFunc {
 
 			var state ContainerAppEnvironmentModel
 
-			consumptionDefined := consumptionIsExplicitlyDefined(metadata)
-
 			if model := existing.Model; model != nil {
 				state.Name = id.ManagedEnvironmentName
 				state.ResourceGroup = id.ResourceGroupName
 				state.Location = location.Normalize(model.Location)
 				state.Tags = tags.Flatten(model.Tags)
+				if model.Identity != nil {
+					ident, err := identity.FlattenLegacySystemAndUserAssignedMapToModel(model.Identity)
+					if err != nil {
+						return fmt.Errorf("flattening identity: %+v", err)
+					}
+					state.Identity = ident
+				}
 
 				if props := model.Properties; props != nil {
 					if vnet := props.VnetConfiguration; vnet != nil {
@@ -79,7 +85,7 @@ func (r ContainerAppEnvironmentResource) Read() sdk.ResourceFunc {
 					state.ZoneRedundant = pointer.From(props.ZoneRedundant)
 					state.StaticIP = pointer.From(props.StaticIP)
 					state.DefaultDomain = pointer.From(props.DefaultDomain)
-					state.WorkloadProfiles = helpers.FlattenWorkloadProfiles(props.WorkloadProfiles, consumptionDefined)
+					state.WorkloadProfiles = helpers.FlattenWorkloadProfiles(props.WorkloadProfiles)
 					state.InfrastructureResourceGroup = pointer.From(props.InfrastructureResourceGroup)
 					state.Mtls = pointer.From(props.PeerAuthentication.Mtls.Enabled)
 				}
