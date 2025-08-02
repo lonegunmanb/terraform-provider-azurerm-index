@@ -6,12 +6,14 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
-	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/kusto/2024-04-13/clusters"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/migration"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -52,44 +54,62 @@ func resourceKustoClusterCustomerManagedKeyCreateUpdate(d *pluginsdk.ResourceDat
 		}
 	}
 
-	keyVaultIDRaw := d.Get("key_vault_id").(string)
-	keyVaultID, err := commonids.ParseKeyVaultID(keyVaultIDRaw)
-	if err != nil {
-		return err
-	}
+	keyName := ""
+	keyVersion := ""
+	keyVaultURI := ""
 
-	keyVault, err := vaultsClient.Get(ctx, *keyVaultID)
-	if err != nil {
-		return fmt.Errorf("retrieving %s: %+v", *keyVaultID, err)
-	}
-
-	softDeleteEnabled := false
-	purgeProtectionEnabled := false
-	if model := keyVault.Model; model != nil {
-		if esd := model.Properties.EnableSoftDelete; esd != nil {
-			softDeleteEnabled = *esd
+	if _, ok := d.GetOk("key_vault_id"); ok {
+		keyVaultID, err := commonids.ParseKeyVaultID(d.Get("key_vault_id").(string))
+		if err != nil {
+			return err
 		}
-		if epp := model.Properties.EnablePurgeProtection; epp != nil {
-			purgeProtectionEnabled = *epp
+
+		keyVault, err := vaultsClient.Get(ctx, *keyVaultID)
+		if err != nil {
+			return fmt.Errorf("retrieving %s: %+v", *keyVaultID, err)
+		}
+
+		softDeleteEnabled := false
+		purgeProtectionEnabled := false
+		if model := keyVault.Model; model != nil {
+			if esd := model.Properties.EnableSoftDelete; esd != nil {
+				softDeleteEnabled = *esd
+			}
+			if epp := model.Properties.EnablePurgeProtection; epp != nil {
+				purgeProtectionEnabled = *epp
+			}
+		}
+		if !softDeleteEnabled || !purgeProtectionEnabled {
+			return fmt.Errorf("%s must be configured for both Purge Protection and Soft Delete", *keyVaultID)
+		}
+
+		keyVaultBaseURL, err := keyVaultsClient.BaseUriForKeyVault(ctx, *keyVaultID)
+		if err != nil {
+			return fmt.Errorf("looking up Key Vault URI from %s: %+v", *keyVaultID, err)
+		}
+		keyName = d.Get("key_name").(string)
+		keyVersion = d.Get("key_version").(string)
+		keyVaultURI = *keyVaultBaseURL
+	} else if managedHSMKeyId, ok := d.GetOk("managed_hsm_key_id"); ok {
+		if keyId, err := parse.ManagedHSMDataPlaneVersionedKeyID(managedHSMKeyId.(string), nil); err == nil {
+			keyName = keyId.KeyName
+			keyVersion = keyId.KeyVersion
+			keyVaultURI = keyId.BaseUri()
+		} else if keyId, err := parse.ManagedHSMDataPlaneVersionlessKeyID(managedHSMKeyId.(string), nil); err == nil {
+			keyName = keyId.KeyName
+			keyVersion = ""
+			keyVaultURI = keyId.BaseUri()
+		} else {
+			return fmt.Errorf("Failed to parse '%s' as HSM key ID", managedHSMKeyId)
 		}
 	}
-	if !softDeleteEnabled || !purgeProtectionEnabled {
-		return fmt.Errorf("%s must be configured for both Purge Protection and Soft Delete", *keyVaultID)
-	}
 
-	keyVaultBaseURL, err := keyVaultsClient.BaseUriForKeyVault(ctx, *keyVaultID)
-	if err != nil {
-		return fmt.Errorf("looking up Key Vault URI from %s: %+v", *keyVaultID, err)
-	}
-
-	keyName := d.Get("key_name").(string)
-	keyVersion := d.Get("key_version").(string)
 	props := clusters.ClusterUpdate{
 		Properties: &clusters.ClusterProperties{
 			KeyVaultProperties: &clusters.KeyVaultProperties{
 				KeyName:     utils.String(keyName),
 				KeyVersion:  utils.String(keyVersion),
-				KeyVaultUri: utils.String(*keyVaultBaseURL),
+				KeyVaultUri: utils.String(keyVaultURI),
 			},
 		},
 	}
