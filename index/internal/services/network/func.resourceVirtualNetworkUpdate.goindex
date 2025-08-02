@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/routetables"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/serviceendpointpolicies"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/subnets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/ipampools"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworks"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -53,11 +55,39 @@ func resourceVirtualNetworkUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 	payload := existing.Model
 
 	if d.HasChange("address_space") {
-		if payload.Properties.AddressSpace == nil {
-			payload.Properties.AddressSpace = &virtualnetworks.AddressSpace{}
+		if v := d.Get("address_space").(*pluginsdk.Set).List(); len(v) > 0 {
+			if payload.Properties.AddressSpace == nil {
+				payload.Properties.AddressSpace = &virtualnetworks.AddressSpace{}
+			}
+			payload.Properties.AddressSpace.AddressPrefixes = utils.ExpandStringSlice(v)
+		} else {
+			payload.Properties.AddressSpace.AddressPrefixes = nil
 		}
+	}
 
-		payload.Properties.AddressSpace.AddressPrefixes = utils.ExpandStringSlice(d.Get("address_space").(*pluginsdk.Set).List())
+	if d.HasChange("ip_address_pool") {
+		if v := d.Get("ip_address_pool").([]interface{}); len(v) > 0 {
+			if payload.Properties.AddressSpace == nil {
+				payload.Properties.AddressSpace = &virtualnetworks.AddressSpace{}
+			}
+
+			expandedIPAddressPool := expandVirtualNetworkIPAddressPool(v)
+
+			if payload.Properties.AddressSpace.IPamPoolPrefixAllocations != nil {
+				for _, existingAllocation := range *payload.Properties.AddressSpace.IPamPoolPrefixAllocations {
+					for _, expandedAllocation := range *expandedIPAddressPool {
+						if existingAllocation.Pool != nil && expandedAllocation.Pool != nil && strings.EqualFold(pointer.From(existingAllocation.Pool.Id), pointer.From(expandedAllocation.Pool.Id)) &&
+							existingAllocation.NumberOfIPAddresses != nil && expandedAllocation.NumberOfIPAddresses != nil && *existingAllocation.NumberOfIPAddresses > *expandedAllocation.NumberOfIPAddresses {
+							return fmt.Errorf("`number_of_ip_addresses` cannot be decreased from %v to %v on pool: %v", *existingAllocation.NumberOfIPAddresses, *expandedAllocation.NumberOfIPAddresses, *expandedAllocation.Pool.Id)
+						}
+					}
+				}
+			}
+
+			payload.Properties.AddressSpace.IPamPoolPrefixAllocations = expandedIPAddressPool
+		} else {
+			payload.Properties.AddressSpace.IPamPoolPrefixAllocations = nil
+		}
 	}
 
 	if d.HasChange("bgp_community") {

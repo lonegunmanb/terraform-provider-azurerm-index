@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/routetables"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/serviceendpointpolicies"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/subnets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/ipampools"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworks"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -42,16 +44,16 @@ func resourceVirtualNetworkSchema() map[string]*pluginsdk.Schema {
 		"location": commonschema.Location(),
 
 		"address_space": {
-			Type:     pluginsdk.TypeSet,
-			Required: true,
-			MinItems: 1,
+			Type:         pluginsdk.TypeSet,
+			Optional:     true,
+			ExactlyOneOf: []string{"address_space", "ip_address_pool"},
+			MinItems:     1,
 			Elem: &pluginsdk.Schema{
 				Type:         pluginsdk.TypeString,
 				ValidateFunc: validation.StringIsNotEmpty,
 			},
 		},
 
-		// Optional
 		"bgp_community": {
 			Type:         pluginsdk.TypeString,
 			Optional:     true,
@@ -112,6 +114,39 @@ func resourceVirtualNetworkSchema() map[string]*pluginsdk.Schema {
 			Type:         pluginsdk.TypeInt,
 			Optional:     true,
 			ValidateFunc: validation.IntBetween(4, 30),
+		},
+
+		"ip_address_pool": {
+			Type:         pluginsdk.TypeList,
+			Optional:     true,
+			MaxItems:     2,
+			ExactlyOneOf: []string{"address_space", "ip_address_pool"},
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: ipampools.ValidateIPamPoolID,
+					},
+
+					"number_of_ip_addresses": {
+						Type:     pluginsdk.TypeString,
+						Required: true,
+						ValidateFunc: validation.StringMatch(
+							regexp.MustCompile(`^[1-9]\d*$`),
+							"`number_of_ip_addresses` must be a string that represents a positive number",
+						),
+					},
+
+					"allocated_ip_address_prefixes": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Schema{
+							Type: pluginsdk.TypeString,
+						},
+					},
+				},
+			},
 		},
 
 		"guid": {

@@ -5,64 +5,69 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/integrationruntimes"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/migration"
 	sqlValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
 )
-func expandDataFactoryIntegrationRuntimeAzureSsisExpressCustomSetUp(input []interface{}) *[]datafactory.BasicCustomSetupBase {
+func expandDataFactoryIntegrationRuntimeAzureSsisExpressCustomSetUp(input []interface{}) *[]integrationruntimes.CustomSetupBase {
 	if len(input) == 0 || input[0] == nil {
 		return nil
 	}
 	raw := input[0].(map[string]interface{})
 
-	result := make([]datafactory.BasicCustomSetupBase, 0)
+	result := make([]integrationruntimes.CustomSetupBase, 0)
 	if env := raw["environment"].(map[string]interface{}); len(env) > 0 {
 		for k, v := range env {
-			result = append(result, &datafactory.EnvironmentVariableSetup{
-				Type: datafactory.TypeBasicCustomSetupBaseTypeEnvironmentVariableSetup,
-				EnvironmentVariableSetupTypeProperties: &datafactory.EnvironmentVariableSetupTypeProperties{
-					VariableName:  utils.String(k),
-					VariableValue: utils.String(v.(string)),
+			result = append(result, &integrationruntimes.EnvironmentVariableSetup{
+				Type: string(helper.CustomSetupTypeEnvironmentVariableSetup),
+				TypeProperties: integrationruntimes.EnvironmentVariableSetupTypeProperties{
+					VariableName:  k,
+					VariableValue: v.(string),
 				},
 			})
 		}
 	}
+
 	if powershellVersion := raw["powershell_version"].(string); powershellVersion != "" {
-		result = append(result, &datafactory.AzPowerShellSetup{
-			Type: datafactory.TypeBasicCustomSetupBaseTypeAzPowerShellSetup,
-			AzPowerShellSetupTypeProperties: &datafactory.AzPowerShellSetupTypeProperties{
-				Version: utils.String(powershellVersion),
+		result = append(result, &integrationruntimes.AzPowerShellSetup{
+			Type: string(helper.CustomSetupTypeAzPowerShellSetup),
+			TypeProperties: integrationruntimes.AzPowerShellSetupTypeProperties{
+				Version: powershellVersion,
 			},
 		})
 	}
+
 	if components := raw["component"].([]interface{}); len(components) > 0 {
 		for _, item := range components {
 			raw := item.(map[string]interface{})
 
-			var license datafactory.BasicSecretBase
+			var license integrationruntimes.SecretBase
 			if v := raw["license"].(string); v != "" {
-				license = &datafactory.SecureString{
-					Type:  datafactory.TypeSecureString,
-					Value: utils.String(v),
+				license = &integrationruntimes.SecureString{
+					Type:  string(helper.SecretTypeSecureString),
+					Value: v,
 				}
 			} else {
 				license = expandDataFactoryIntegrationRuntimeAzureSsisKeyVaultSecretReference(raw["key_vault_license"].([]interface{}))
 			}
 
-			result = append(result, &datafactory.ComponentSetup{
-				Type: datafactory.TypeBasicCustomSetupBaseTypeComponentSetup,
-				LicensedComponentSetupTypeProperties: &datafactory.LicensedComponentSetupTypeProperties{
-					ComponentName: utils.String(raw["name"].(string)),
+			result = append(result, &integrationruntimes.ComponentSetup{
+				Type: string(helper.CustomSetupTypeComponentSetup),
+				TypeProperties: integrationruntimes.LicensedComponentSetupTypeProperties{
+					ComponentName: raw["name"].(string),
 					LicenseKey:    license,
 				},
 			})
@@ -72,21 +77,21 @@ func expandDataFactoryIntegrationRuntimeAzureSsisExpressCustomSetUp(input []inte
 		for _, item := range cmdKeys {
 			raw := item.(map[string]interface{})
 
-			var password datafactory.BasicSecretBase
+			var password integrationruntimes.SecretBase
 			if v := raw["password"].(string); v != "" {
-				password = &datafactory.SecureString{
-					Type:  datafactory.TypeSecureString,
-					Value: utils.String(v),
+				password = &integrationruntimes.SecureString{
+					Type:  string(helper.SecretTypeSecureString),
+					Value: v,
 				}
 			} else {
 				password = expandDataFactoryIntegrationRuntimeAzureSsisKeyVaultSecretReference(raw["key_vault_password"].([]interface{}))
 			}
 
-			result = append(result, &datafactory.CmdkeySetup{
-				Type: datafactory.TypeBasicCustomSetupBaseTypeCmdkeySetup,
-				CmdkeySetupTypeProperties: &datafactory.CmdkeySetupTypeProperties{
-					TargetName: utils.String(raw["target_name"].(string)),
-					UserName:   utils.String(raw["user_name"].(string)),
+			result = append(result, &integrationruntimes.CmdkeySetup{
+				Type: string(helper.CustomSetupTypeCmdkeySetup),
+				TypeProperties: integrationruntimes.CmdkeySetupTypeProperties{
+					TargetName: pointer.To(raw["target_name"].(string)),
+					UserName:   pointer.To(raw["user_name"].(string)),
 					Password:   password,
 				},
 			})

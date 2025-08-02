@@ -5,40 +5,34 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/integrationruntimes"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/migration"
 	sqlValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
 )
-func flattenDataFactoryIntegrationRuntimeAzureSsisCatalogInfo(ssisProperties *datafactory.IntegrationRuntimeSsisCatalogInfo, d *pluginsdk.ResourceData) []interface{} {
+func flattenDataFactoryIntegrationRuntimeAzureSsisCatalogInfo(ssisProperties *integrationruntimes.IntegrationRuntimeSsisCatalogInfo, d *pluginsdk.ResourceData) []interface{} {
 	if ssisProperties == nil {
 		return []interface{}{}
 	}
 
-	var serverEndpoint, catalogAdminUserName, administratorPassword, dualStandbyPairName string
-	if ssisProperties.CatalogServerEndpoint != nil {
-		serverEndpoint = *ssisProperties.CatalogServerEndpoint
-	}
-	if ssisProperties.CatalogAdminUserName != nil {
-		catalogAdminUserName = *ssisProperties.CatalogAdminUserName
-	}
-	if ssisProperties.DualStandbyPairName != nil {
-		dualStandbyPairName = *ssisProperties.DualStandbyPairName
-	}
+	var administratorPassword string
 
 	var pricingTier, elasticPoolName string
-	elasticPoolName, elasticPoolNameMatched := parseDataFactoryIntegrationRuntimeElasticPool(string(ssisProperties.CatalogPricingTier))
+	elasticPoolName, elasticPoolNameMatched := parseDataFactoryIntegrationRuntimeElasticPool(string(pointer.From(ssisProperties.CatalogPricingTier)))
 	if !elasticPoolNameMatched {
-		pricingTier = string(ssisProperties.CatalogPricingTier)
+		pricingTier = string(pointer.From(ssisProperties.CatalogPricingTier))
 	}
 
 	// read back
@@ -48,12 +42,12 @@ func flattenDataFactoryIntegrationRuntimeAzureSsisCatalogInfo(ssisProperties *da
 
 	return []interface{}{
 		map[string]interface{}{
-			"server_endpoint":        serverEndpoint,
+			"server_endpoint":        pointer.From(ssisProperties.CatalogServerEndpoint),
 			"pricing_tier":           pricingTier,
 			"elastic_pool_name":      elasticPoolName,
-			"administrator_login":    catalogAdminUserName,
+			"administrator_login":    pointer.From(ssisProperties.CatalogAdminUserName),
 			"administrator_password": administratorPassword,
-			"dual_standby_pair_name": dualStandbyPairName,
+			"dual_standby_pair_name": pointer.From(ssisProperties.DualStandbyPairName),
 		},
 	}
 }

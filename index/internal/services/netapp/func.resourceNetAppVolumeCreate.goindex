@@ -117,7 +117,7 @@ func resourceNetAppVolumeCreate(d *pluginsdk.ResourceData, meta interface{}) err
 	// Validate applicability of backup policies
 	if dataProtectionReplication != nil && dataProtectionReplication.Backup != nil {
 		// Validate that backup policies are not being enforced in a data protection replication destination volume
-		if strings.EqualFold(volumeType, "dst") && dataProtectionReplication.Backup.PolicyEnforced == utils.Bool(true) {
+		if strings.EqualFold(volumeType, "dst") && dataProtectionReplication.Backup.PolicyEnforced == pointer.To(true) {
 			return fmt.Errorf("backup policy cannot be enforced on a data protection destination volume, NetApp Volume %q (Resource Group %q)", id.VolumeName, id.ResourceGroupName)
 		}
 	}
@@ -178,11 +178,8 @@ func resourceNetAppVolumeCreate(d *pluginsdk.ResourceData, meta interface{}) err
 			if !strings.EqualFold(sourceVolumeId.NetAppAccountName, id.NetAppAccountName) {
 				propertyMismatch = append(propertyMismatch, "account_name")
 			}
-			if !strings.EqualFold(sourceVolumeId.CapacityPoolName, id.CapacityPoolName) {
-				propertyMismatch = append(propertyMismatch, "pool_name")
-			}
 			if len(propertyMismatch) > 0 {
-				return fmt.Errorf("following NetApp Volume properties on new Volume from Snapshot does not match Snapshot's source %s: %s", id, strings.Join(propertyMismatch, ", "))
+				return fmt.Errorf("the following properties to create a new NetApp Volume from a Snapshot do not match:\n%s\n", strings.Join(propertyMismatch, "\n"))
 			}
 		}
 	}
@@ -208,22 +205,23 @@ func resourceNetAppVolumeCreate(d *pluginsdk.ResourceData, meta interface{}) err
 			SecurityStyle:             &securityStyle,
 			UsageThreshold:            storageQuotaInGB,
 			ExportPolicy:              exportPolicyRule,
-			VolumeType:                utils.String(volumeType),
-			SnapshotId:                utils.String(snapshotID),
+			VolumeType:                pointer.To(volumeType),
+			SnapshotId:                pointer.To(snapshotID),
 			DataProtection: &volumes.VolumePropertiesDataProtection{
 				Replication: dataProtectionReplication.Replication,
 				Snapshot:    dataProtectionSnapshotPolicy.Snapshot,
 				Backup:      dataProtectionBackupPolicy.Backup,
 			},
 			AvsDataStore:             &avsDataStoreEnabled,
-			SnapshotDirectoryVisible: utils.Bool(snapshotDirectoryVisible),
+			SnapshotDirectoryVisible: pointer.To(snapshotDirectoryVisible),
+			IsLargeVolume:            pointer.To(d.Get("large_volume_enabled").(bool)),
 		},
 		Tags:  tags.Expand(d.Get("tags").(map[string]interface{})),
 		Zones: zones,
 	}
 
 	if throughputMibps, ok := d.GetOk("throughput_in_mibps"); ok {
-		parameters.Properties.ThroughputMibps = utils.Float(throughputMibps.(float64))
+		parameters.Properties.ThroughputMibps = pointer.To(throughputMibps.(float64))
 	}
 
 	if encryptionKeySource, ok := d.GetOk("encryption_key_source"); ok {
@@ -257,7 +255,7 @@ func resourceNetAppVolumeCreate(d *pluginsdk.ResourceData, meta interface{}) err
 		}
 
 		if err = replicationClient.VolumesAuthorizeReplicationThenPoll(ctx, *replVolID, volumesreplication.AuthorizeRequest{
-			RemoteVolumeResourceId: utils.String(id.ID()),
+			RemoteVolumeResourceId: pointer.To(id.ID()),
 		},
 		); err != nil {
 			return fmt.Errorf("cannot authorize volume replication: %v", err)

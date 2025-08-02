@@ -5,33 +5,36 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/integrationruntimes"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/helper"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/migration"
 	sqlValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
 )
-func expandDataFactoryIntegrationRuntimeAzureSsisProperties(d *pluginsdk.ResourceData) *datafactory.IntegrationRuntimeSsisProperties {
-	ssisProperties := &datafactory.IntegrationRuntimeSsisProperties{
-		LicenseType:                  datafactory.IntegrationRuntimeLicenseType(d.Get("license_type").(string)),
+func expandDataFactoryIntegrationRuntimeAzureSsisProperties(d *pluginsdk.ResourceData) *integrationruntimes.IntegrationRuntimeSsisProperties {
+	ssisProperties := &integrationruntimes.IntegrationRuntimeSsisProperties{
+		LicenseType:                  pointer.To(integrationruntimes.IntegrationRuntimeLicenseType(d.Get("license_type").(string))),
 		DataProxyProperties:          expandDataFactoryIntegrationRuntimeAzureSsisProxy(d.Get("proxy").([]interface{})),
-		Edition:                      datafactory.IntegrationRuntimeEdition(d.Get("edition").(string)),
+		Edition:                      pointer.To(integrationruntimes.IntegrationRuntimeEdition(d.Get("edition").(string))),
 		ExpressCustomSetupProperties: expandDataFactoryIntegrationRuntimeAzureSsisExpressCustomSetUp(d.Get("express_custom_setup").([]interface{})),
 		PackageStores:                expandDataFactoryIntegrationRuntimeAzureSsisPackageStore(d.Get("package_store").([]interface{})),
 	}
 
 	if credentialName := d.Get("credential_name"); credentialName.(string) != "" {
-		ssisProperties.Credential = &datafactory.CredentialReference{
-			ReferenceName: utils.String(credentialName.(string)),
-			Type:          utils.String("CredentialReference"),
+		ssisProperties.Credential = &integrationruntimes.CredentialReference{
+			ReferenceName: credentialName.(string),
+			Type:          integrationruntimes.CredentialReferenceTypeCredentialReference,
 		}
 	}
 
@@ -39,44 +42,44 @@ func expandDataFactoryIntegrationRuntimeAzureSsisProperties(d *pluginsdk.Resourc
 		catalogInfo := catalogInfos.([]interface{})[0].(map[string]interface{})
 
 		// the property `elastic_pool_name` and `pricing_tier` share the same prop `CatalogPricingTier` in request and response.
-		var pricingTier datafactory.IntegrationRuntimeSsisCatalogPricingTier
+		var pricingTier integrationruntimes.IntegrationRuntimeSsisCatalogPricingTier
 		if elasticPoolName := catalogInfo["elastic_pool_name"]; elasticPoolName != nil && elasticPoolName.(string) != "" {
-			pricingTier = datafactory.IntegrationRuntimeSsisCatalogPricingTier(formatDataFactoryIntegrationRuntimeElasticPool(elasticPoolName.(string)))
+			pricingTier = integrationruntimes.IntegrationRuntimeSsisCatalogPricingTier(formatDataFactoryIntegrationRuntimeElasticPool(elasticPoolName.(string)))
 		} else {
-			pricingTier = datafactory.IntegrationRuntimeSsisCatalogPricingTier(catalogInfo["pricing_tier"].(string))
+			pricingTier = integrationruntimes.IntegrationRuntimeSsisCatalogPricingTier(catalogInfo["pricing_tier"].(string))
 		}
 
-		ssisProperties.CatalogInfo = &datafactory.IntegrationRuntimeSsisCatalogInfo{
-			CatalogServerEndpoint: utils.String(catalogInfo["server_endpoint"].(string)),
-			CatalogPricingTier:    pricingTier,
+		ssisProperties.CatalogInfo = &integrationruntimes.IntegrationRuntimeSsisCatalogInfo{
+			CatalogServerEndpoint: pointer.To(catalogInfo["server_endpoint"].(string)),
+			CatalogPricingTier:    pointer.To(pricingTier),
 		}
 
 		if adminUserName := catalogInfo["administrator_login"]; adminUserName.(string) != "" {
-			ssisProperties.CatalogInfo.CatalogAdminUserName = utils.String(adminUserName.(string))
+			ssisProperties.CatalogInfo.CatalogAdminUserName = pointer.To(adminUserName.(string))
 		}
 
 		if adminPassword := catalogInfo["administrator_password"]; adminPassword.(string) != "" {
-			ssisProperties.CatalogInfo.CatalogAdminPassword = &datafactory.SecureString{
-				Value: utils.String(adminPassword.(string)),
-				Type:  datafactory.TypeSecureString,
+			ssisProperties.CatalogInfo.CatalogAdminPassword = &integrationruntimes.SecureString{
+				Value: adminPassword.(string),
+				Type:  string(helper.SecretTypeSecureString),
 			}
 		}
 
 		if dualStandbyPairName := catalogInfo["dual_standby_pair_name"].(string); dualStandbyPairName != "" {
-			ssisProperties.CatalogInfo.DualStandbyPairName = utils.String(dualStandbyPairName)
+			ssisProperties.CatalogInfo.DualStandbyPairName = pointer.To(dualStandbyPairName)
 		}
 	}
 
 	if customSetupScripts, ok := d.GetOk("custom_setup_script"); ok && len(customSetupScripts.([]interface{})) > 0 {
 		customSetupScript := customSetupScripts.([]interface{})[0].(map[string]interface{})
 
-		sasToken := &datafactory.SecureString{
-			Value: utils.String(customSetupScript["sas_token"].(string)),
-			Type:  datafactory.TypeSecureString,
+		sasToken := &integrationruntimes.SecureString{
+			Value: customSetupScript["sas_token"].(string),
+			Type:  string(helper.SecretTypeSecureString),
 		}
 
-		ssisProperties.CustomSetupScriptProperties = &datafactory.IntegrationRuntimeCustomSetupScriptProperties{
-			BlobContainerURI: utils.String(customSetupScript["blob_container_uri"].(string)),
+		ssisProperties.CustomSetupScriptProperties = &integrationruntimes.IntegrationRuntimeCustomSetupScriptProperties{
+			BlobContainerUri: pointer.To(customSetupScript["blob_container_uri"].(string)),
 			SasToken:         sasToken,
 		}
 	}
