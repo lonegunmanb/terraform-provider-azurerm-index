@@ -22,7 +22,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceMonitorDiagnosticSettingCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Monitor.DiagnosticSettingsClient
@@ -44,9 +43,6 @@ func resourceMonitorDiagnosticSettingCreate(d *pluginsdk.ResourceData, meta inte
 		return tf.ImportAsExistsError("azurerm_monitor_diagnostic_setting", resourceId)
 	}
 
-	metricsRaw := d.Get("metric").(*pluginsdk.Set).List()
-	metrics := expandMonitorDiagnosticsSettingsMetrics(metricsRaw)
-
 	var logs []diagnosticsettings.LogSettings
 	hasEnabledLogs := false
 	if enabledLogs, ok := d.GetOk("enabled_log"); ok {
@@ -62,13 +58,24 @@ func resourceMonitorDiagnosticSettingCreate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	// if no logs/metrics are enabled the API "creates" but 404's on Read
+	var metrics []diagnosticsettings.MetricSettings
 	hasEnabledMetrics := false
-	if !hasEnabledLogs {
+
+	if !features.FivePointOh() {
+		metrics = expandMonitorDiagnosticsSettingsMetrics(d.Get("metric").(*pluginsdk.Set).List())
 		for _, v := range metrics {
 			if v.Enabled {
 				hasEnabledMetrics = true
 				break
 			}
+		}
+	}
+
+	if enabledMetrics, ok := d.GetOk("enabled_metric"); ok {
+		enabledMetricsList := enabledMetrics.(*pluginsdk.Set).List()
+		if len(enabledMetricsList) > 0 {
+			metrics = expandMonitorDiagnosticsSettingsEnabledMetrics(enabledMetricsList)
+			hasEnabledMetrics = true
 		}
 	}
 
@@ -86,23 +93,23 @@ func resourceMonitorDiagnosticSettingCreate(d *pluginsdk.ResourceData, meta inte
 	eventHubAuthorizationRuleId := d.Get("eventhub_authorization_rule_id").(string)
 	eventHubName := d.Get("eventhub_name").(string)
 	if eventHubAuthorizationRuleId != "" {
-		parameters.Properties.EventHubAuthorizationRuleId = utils.String(eventHubAuthorizationRuleId)
-		parameters.Properties.EventHubName = utils.String(eventHubName)
+		parameters.Properties.EventHubAuthorizationRuleId = pointer.To(eventHubAuthorizationRuleId)
+		parameters.Properties.EventHubName = pointer.To(eventHubName)
 	}
 
 	workspaceId := d.Get("log_analytics_workspace_id").(string)
 	if workspaceId != "" {
-		parameters.Properties.WorkspaceId = utils.String(workspaceId)
+		parameters.Properties.WorkspaceId = pointer.To(workspaceId)
 	}
 
 	storageAccountId := d.Get("storage_account_id").(string)
 	if storageAccountId != "" {
-		parameters.Properties.StorageAccountId = utils.String(storageAccountId)
+		parameters.Properties.StorageAccountId = pointer.To(storageAccountId)
 	}
 
 	partnerSolutionId := d.Get("partner_solution_id").(string)
 	if partnerSolutionId != "" {
-		parameters.Properties.MarketplacePartnerId = utils.String(partnerSolutionId)
+		parameters.Properties.MarketplacePartnerId = pointer.To(partnerSolutionId)
 	}
 
 	if v := d.Get("log_analytics_destination_type").(string); v != "" {

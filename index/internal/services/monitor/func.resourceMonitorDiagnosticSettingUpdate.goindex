@@ -22,7 +22,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceMonitorDiagnosticSettingUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Monitor.DiagnosticSettingsClient
@@ -42,9 +41,6 @@ func resourceMonitorDiagnosticSettingUpdate(d *pluginsdk.ResourceData, meta inte
 	if existing.Model == nil || existing.Model.Properties == nil {
 		return fmt.Errorf("unexpected null model of Monitor Diagnostics Setting %q for Resource %q", id.DiagnosticSettingName, id.ResourceUri)
 	}
-
-	metricsRaw := d.Get("metric").(*pluginsdk.Set).List()
-	metrics := expandMonitorDiagnosticsSettingsMetrics(metricsRaw)
 
 	var logs []diagnosticsettings.LogSettings
 	hasEnabledLogs := false
@@ -76,17 +72,45 @@ func resourceMonitorDiagnosticSettingUpdate(d *pluginsdk.ResourceData, meta inte
 		}
 	}
 
-	// if no logs/metrics are enabled the API "creates" but 404's on Read
+	var metrics []diagnosticsettings.MetricSettings
 	hasEnabledMetrics := false
-	if !hasEnabledLogs {
+
+	if d.HasChange("enabled_metric") {
+		enabledMetrics := d.Get("enabled_metric").(*pluginsdk.Set).List()
+		if len(enabledMetrics) > 0 {
+			expandEnabledMetrics := expandMonitorDiagnosticsSettingsEnabledMetrics(enabledMetrics)
+			metrics = expandEnabledMetrics
+			hasEnabledMetrics = true
+		} else if existing.Model != nil && existing.Model.Properties != nil && existing.Model.Properties.Metrics != nil {
+			// if the enabled_metric is updated to empty, we disable the metric explicitly
+			for _, v := range *existing.Model.Properties.Metrics {
+				disabledMetric := v
+				disabledMetric.Enabled = false
+				metrics = append(metrics, disabledMetric)
+			}
+		}
+	} else if existing.Model != nil && existing.Model.Properties != nil && existing.Model.Properties.Metrics != nil {
+		metrics = *existing.Model.Properties.Metrics
 		for _, v := range metrics {
 			if v.Enabled {
 				hasEnabledMetrics = true
-				break
 			}
 		}
 	}
 
+	if !features.FivePointOh() {
+		if d.HasChange("metric") {
+			metrics = expandMonitorDiagnosticsSettingsMetrics(d.Get("metric").(*pluginsdk.Set).List())
+			for _, v := range metrics {
+				if v.Enabled {
+					hasEnabledMetrics = true
+					break
+				}
+			}
+		}
+	}
+
+	// if no logs/metrics are enabled the API "creates" but 404's on Read
 	if !hasEnabledMetrics && !hasEnabledLogs {
 		return fmt.Errorf("at least one type of Log or Metric must be enabled")
 	}
@@ -101,23 +125,23 @@ func resourceMonitorDiagnosticSettingUpdate(d *pluginsdk.ResourceData, meta inte
 	eventHubAuthorizationRuleId := d.Get("eventhub_authorization_rule_id").(string)
 	eventHubName := d.Get("eventhub_name").(string)
 	if eventHubAuthorizationRuleId != "" {
-		parameters.Properties.EventHubAuthorizationRuleId = utils.String(eventHubAuthorizationRuleId)
-		parameters.Properties.EventHubName = utils.String(eventHubName)
+		parameters.Properties.EventHubAuthorizationRuleId = pointer.To(eventHubAuthorizationRuleId)
+		parameters.Properties.EventHubName = pointer.To(eventHubName)
 	}
 
 	workspaceId := d.Get("log_analytics_workspace_id").(string)
 	if workspaceId != "" {
-		parameters.Properties.WorkspaceId = utils.String(workspaceId)
+		parameters.Properties.WorkspaceId = pointer.To(workspaceId)
 	}
 
 	storageAccountId := d.Get("storage_account_id").(string)
 	if storageAccountId != "" {
-		parameters.Properties.StorageAccountId = utils.String(storageAccountId)
+		parameters.Properties.StorageAccountId = pointer.To(storageAccountId)
 	}
 
 	partnerSolutionId := d.Get("partner_solution_id").(string)
 	if partnerSolutionId != "" {
-		parameters.Properties.MarketplacePartnerId = utils.String(partnerSolutionId)
+		parameters.Properties.MarketplacePartnerId = pointer.To(partnerSolutionId)
 	}
 
 	if v := d.Get("log_analytics_destination_type").(string); v != "" {

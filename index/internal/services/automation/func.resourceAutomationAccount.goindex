@@ -16,16 +16,16 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/automation/validate"
 	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
 	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceAutomationAccount() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	r := &pluginsdk.Resource{
 		Create: resourceAutomationAccountCreate,
 		Read:   resourceAutomationAccountRead,
 		Update: resourceAutomationAccountUpdate,
@@ -71,19 +71,6 @@ func resourceAutomationAccount() *pluginsdk.Resource {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							ValidateFunc: commonids.ValidateUserAssignedIdentityID,
-						},
-
-						"key_source": {
-							Type:       pluginsdk.TypeString,
-							Optional:   true,
-							Deprecated: "This field is now ignored and will be removed in the next major version of the Azure Provider, the `encryption` block can be omitted to disable encryption",
-							ValidateFunc: validation.StringInSlice(
-								[]string{
-									string(automationaccount.EncryptionKeySourceTypeMicrosoftPointAutomation),
-									string(automationaccount.EncryptionKeySourceTypeMicrosoftPointKeyvault),
-								},
-								false,
-							),
 						},
 
 						"key_vault_key_id": {
@@ -150,4 +137,21 @@ func resourceAutomationAccount() *pluginsdk.Resource {
 			},
 		},
 	}
+
+	if !features.FivePointOh() {
+		r.Schema["encryption"].Elem.(*schema.Resource).Schema["key_source"] = &pluginsdk.Schema{
+			Type:       pluginsdk.TypeString,
+			Optional:   true,
+			Deprecated: "`encryption.key_source` has been deprecated and will be removed in v5.0 of the AzureRM Provider. To disable encryption, omit the `encryption` block",
+			ValidateFunc: validation.StringInSlice(
+				[]string{
+					string(automationaccount.EncryptionKeySourceTypeMicrosoftPointAutomation),
+					string(automationaccount.EncryptionKeySourceTypeMicrosoftPointKeyvault),
+				},
+				false,
+			),
+		}
+	}
+
+	return r
 }

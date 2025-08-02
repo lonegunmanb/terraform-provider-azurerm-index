@@ -22,7 +22,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceMonitorDiagnosticSetting() *pluginsdk.Resource {
 	resource := &pluginsdk.Resource{
@@ -106,7 +105,7 @@ func resourceMonitorDiagnosticSetting() *pluginsdk.Resource {
 			"enabled_log": {
 				Type:         pluginsdk.TypeSet,
 				Optional:     true,
-				AtLeastOneOf: []string{"enabled_log", "metric"},
+				AtLeastOneOf: []string{"enabled_log", "enabled_metric"},
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
 						"category": {
@@ -146,22 +145,16 @@ func resourceMonitorDiagnosticSetting() *pluginsdk.Resource {
 				Set: resourceMonitorDiagnosticLogSettingHash,
 			},
 
-			"metric": {
+			"enabled_metric": {
 				Type:         pluginsdk.TypeSet,
 				Optional:     true,
-				AtLeastOneOf: []string{"enabled_log", "metric"},
+				AtLeastOneOf: []string{"enabled_log", "enabled_metric"},
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
 						"category": {
 							Type:         pluginsdk.TypeString,
 							Required:     true,
 							ValidateFunc: validation.StringIsNotEmpty,
-						},
-
-						"enabled": {
-							Type:     pluginsdk.TypeBool,
-							Optional: true,
-							Default:  true,
 						},
 					},
 				},
@@ -170,27 +163,57 @@ func resourceMonitorDiagnosticSetting() *pluginsdk.Resource {
 	}
 
 	if !features.FivePointOh() {
-		resource.Schema["metric"].Elem.(*pluginsdk.Resource).Schema["retention_policy"] = &pluginsdk.Schema{
-			Type:       pluginsdk.TypeList,
-			Optional:   true,
-			MaxItems:   1,
-			Deprecated: "`retention_policy` has been deprecated in favor of the `azurerm_storage_management_policy` resource and will be removed in v5.0 of the AzureRM provider - to learn more go to https://aka.ms/diagnostic_settings_log_retention",
+		resource.Schema["enabled_log"].AtLeastOneOf = []string{"enabled_log", "enabled_metric", "metric"}
+
+		resource.Schema["enabled_metric"].AtLeastOneOf = []string{"enabled_log", "enabled_metric", "metric"}
+		resource.Schema["enabled_metric"].Computed = true
+		resource.Schema["enabled_metric"].ConflictsWith = []string{"metric"}
+
+		resource.Schema["metric"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeSet,
+			Optional:      true,
+			Computed:      true,
+			Deprecated:    "`metric` has been deprecated in favor of the `enabled_metric` property and will be removed in v5.0 of the AzureRM provider",
+			AtLeastOneOf:  []string{"enabled_log", "enabled_metric", "metric"},
+			ConflictsWith: []string{"enabled_metric"},
+			Set:           resourceMonitorDiagnosticMetricsSettingHash,
 			Elem: &pluginsdk.Resource{
 				Schema: map[string]*pluginsdk.Schema{
-					"enabled": {
-						Type:     pluginsdk.TypeBool,
-						Required: true,
+					"category": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
 					},
 
-					"days": {
-						Type:         pluginsdk.TypeInt,
-						Optional:     true,
-						ValidateFunc: validation.IntAtLeast(0),
+					"enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						Default:  true,
+					},
+
+					"retention_policy": {
+						Type:       pluginsdk.TypeList,
+						Optional:   true,
+						MaxItems:   1,
+						Deprecated: "`retention_policy` has been deprecated in favor of the `azurerm_storage_management_policy` resource and will be removed in v5.0 of the AzureRM provider - to learn more go to https://aka.ms/diagnostic_settings_log_retention",
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"enabled": {
+									Type:     pluginsdk.TypeBool,
+									Required: true,
+								},
+
+								"days": {
+									Type:         pluginsdk.TypeInt,
+									Optional:     true,
+									ValidateFunc: validation.IntAtLeast(0),
+								},
+							},
+						},
 					},
 				},
 			},
 		}
-		resource.Schema["metric"].Set = resourceMonitorDiagnosticMetricsSettingHash
 	}
 
 	return resource

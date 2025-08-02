@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2025-02-01/devcenters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (DevCenterDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DevCenter.V20250201.DevCenters
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var state DevCenterDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := devcenters.NewDevCenterID(subscriptionId, state.ResourceGroupName, state.Name)
+
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			if model := resp.Model; model != nil {
+				state.Name = id.DevCenterName
+				state.ResourceGroupName = id.ResourceGroupName
+
+				if err := mapDevCenterToDevCenterResourceSchema(*model, &state); err != nil {
+					return fmt.Errorf("flattening model: %+v", err)
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}
