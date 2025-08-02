@@ -3,6 +3,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/serviceendpointpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/ipampools"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
@@ -59,7 +61,9 @@ func resourceSubnetUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 		addressPrefixesRaw := d.Get("address_prefixes").([]interface{})
 		switch len(addressPrefixesRaw) {
 		case 0:
-			// Will never happen as the "MinItem: 1" constraint is set on "address_prefixes"
+			// this is the case IPAddressPool is used, so we shall clear the `AddressPrefix` and `AddressPrefixes`.
+			props.AddressPrefix = nil
+			props.AddressPrefixes = nil
 		case 1:
 			// N->1: we shall insist on using the `AddressPrefix` and clear the `AddressPrefixes`.
 			props.AddressPrefix = utils.String(addressPrefixesRaw[0].(string))
@@ -69,6 +73,31 @@ func resourceSubnetUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 			// return the `AddressPrefix` in response.
 			props.AddressPrefixes = utils.ExpandStringSlice(addressPrefixesRaw)
 			props.AddressPrefix = nil
+		}
+	}
+
+	if d.HasChange("ip_address_pool") {
+		if v := d.Get("ip_address_pool").([]interface{}); len(v) > 0 {
+			expandedIPAddressPool := expandSubnetIPAddressPool(d.Get("ip_address_pool").([]interface{}))
+
+			if props.IPamPoolPrefixAllocations != nil {
+				for _, existingAllocation := range *props.IPamPoolPrefixAllocations {
+					for _, expandedAllocation := range *expandedIPAddressPool {
+						if existingAllocation.Pool != nil && expandedAllocation.Pool != nil && strings.EqualFold(pointer.From(existingAllocation.Pool.Id), pointer.From(expandedAllocation.Pool.Id)) &&
+							existingAllocation.NumberOfIPAddresses != nil && expandedAllocation.NumberOfIPAddresses != nil && *existingAllocation.NumberOfIPAddresses > *expandedAllocation.NumberOfIPAddresses {
+							return fmt.Errorf("`number_of_ip_addresses` cannot be decreased from %v to %v on pool: %v", *existingAllocation.NumberOfIPAddresses, *expandedAllocation.NumberOfIPAddresses, *expandedAllocation.Pool.Id)
+						}
+					}
+				}
+			}
+
+			props.IPamPoolPrefixAllocations = expandedIPAddressPool
+
+			// Set nil for AddressPrefixes when changing from `AddressPrefixes` to `IPAddressPool` but the change for `AddressPrefix` is not detected due to the diffSuppressFunc.
+			props.AddressPrefix = nil
+			props.AddressPrefixes = nil
+		} else {
+			props.IPamPoolPrefixAllocations = nil
 		}
 	}
 

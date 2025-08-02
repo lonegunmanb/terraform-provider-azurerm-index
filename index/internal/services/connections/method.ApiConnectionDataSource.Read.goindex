@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/connections
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2016-06-01/connections"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ApiConnectionDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Connections.ConnectionsClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var state ApiConnectionDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := connections.NewConnectionID(subscriptionId, state.ResourceGroupName, state.Name)
+
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			state.Name = id.ConnectionName
+			state.ResourceGroupName = id.ResourceGroupName
+
+			if model := resp.Model; model != nil {
+				state.Location = location.NormalizeNilable(model.Location)
+
+				if props := model.Properties; props != nil {
+					state.DisplayName = pointer.From(props.DisplayName)
+
+					if props.Api != nil {
+						state.ManagedApiId = pointer.From(props.Api.Id)
+					}
+
+					// In version 2016-06-01 the API doesn't return `ParameterValues`.
+					// The non-secret parameters are returned in `NonSecretParameterValues` instead.
+					state.ParameterValues = flattenParameterValues(pointer.From(props.NonSecretParameterValues))
+				}
+
+				state.Tags = pointer.From(model.Tags)
+			}
+
+			metadata.SetID(id)
+			return metadata.Encode(&state)
+		},
+	}
+}

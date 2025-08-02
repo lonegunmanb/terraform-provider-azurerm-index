@@ -17,13 +17,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceKustoClusterCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Kusto.ClustersClient
@@ -59,10 +59,10 @@ func resourceKustoClusterCreate(d *pluginsdk.ResourceData, meta interface{}) err
 		}
 		// Ensure that requested Capcity is always between min and max to support updating to not overlapping autoscale ranges
 		if *sku.Capacity < optimizedAutoScale.Minimum {
-			sku.Capacity = utils.Int64(optimizedAutoScale.Minimum)
+			sku.Capacity = pointer.To(optimizedAutoScale.Minimum)
 		}
 		if *sku.Capacity > optimizedAutoScale.Maximum {
-			sku.Capacity = utils.Int64(optimizedAutoScale.Maximum)
+			sku.Capacity = pointer.To(optimizedAutoScale.Maximum)
 		}
 		if optimizedAutoScale.Minimum > optimizedAutoScale.Maximum {
 			return fmt.Errorf("`optimized_auto_scaling.maximum_instances` must be >= `optimized_auto_scaling.minimum_instances`")
@@ -78,21 +78,22 @@ func resourceKustoClusterCreate(d *pluginsdk.ResourceData, meta interface{}) err
 
 	clusterProperties := clusters.ClusterProperties{
 		OptimizedAutoscale:     optimizedAutoScale,
-		EnableAutoStop:         utils.Bool(d.Get("auto_stop_enabled").(bool)),
-		EnableDiskEncryption:   utils.Bool(d.Get("disk_encryption_enabled").(bool)),
-		EnableDoubleEncryption: utils.Bool(d.Get("double_encryption_enabled").(bool)),
-		EnableStreamingIngest:  utils.Bool(d.Get("streaming_ingestion_enabled").(bool)),
-		EnablePurge:            utils.Bool(d.Get("purge_enabled").(bool)),
+		EnableAutoStop:         pointer.To(d.Get("auto_stop_enabled").(bool)),
+		EnableDiskEncryption:   pointer.To(d.Get("disk_encryption_enabled").(bool)),
+		EnableDoubleEncryption: pointer.To(d.Get("double_encryption_enabled").(bool)),
+		EnableStreamingIngest:  pointer.To(d.Get("streaming_ingestion_enabled").(bool)),
+		EnablePurge:            pointer.To(d.Get("purge_enabled").(bool)),
 		PublicNetworkAccess:    &publicNetworkAccess,
 		PublicIPType:           &publicIPType,
 		TrustedExternalTenants: expandTrustedExternalTenants(d.Get("trusted_external_tenants").([]interface{})),
 	}
 
-	if v, ok := d.GetOk("virtual_network_configuration"); ok {
-		vnet := expandKustoClusterVNET(v.([]interface{}))
-		clusterProperties.VirtualNetworkConfiguration = vnet
+	if !features.FivePointOh() {
+		if v, ok := d.GetOk("virtual_network_configuration"); ok {
+			vnet := expandKustoClusterVNET(v.([]interface{}))
+			clusterProperties.VirtualNetworkConfiguration = vnet
+		}
 	}
-
 	if v, ok := d.GetOk("allowed_fqdns"); ok {
 		clusterProperties.AllowedFqdnList = expandKustoListString(v.([]interface{}))
 	}

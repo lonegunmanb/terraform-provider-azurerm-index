@@ -33,6 +33,11 @@ func (r ContainerAppEnvironmentResource) Read() sdk.ResourceFunc {
 				return err
 			}
 
+			var existingState ContainerAppEnvironmentModel
+			if err := metadata.Decode(&existingState); err != nil {
+				return err
+			}
+
 			existing, err := client.Get(ctx, *id)
 			if err != nil {
 				if response.WasNotFound(existing.HttpResponse) {
@@ -69,15 +74,15 @@ func (r ContainerAppEnvironmentResource) Read() sdk.ResourceFunc {
 						state.LogsDestination = pointer.From(appLogsConfig.Destination)
 						if appLogsConfig.LogAnalyticsConfiguration != nil && appLogsConfig.LogAnalyticsConfiguration.CustomerId != nil {
 							workspaceId, err := findWorkspaceResourceIDFromCustomerID(ctx, metadata, *appLogsConfig.LogAnalyticsConfiguration.CustomerId)
-							if err != nil {
-								if v := metadata.ResourceData.GetRawConfig().AsValueMap()["log_analytics_workspace_id"]; !v.IsNull() && v.AsString() != "" {
-									state.LogAnalyticsWorkspaceId = v.AsString()
+							// During refreshing stage, `GetRawConfig()` may return null value.
+
+							if err == nil {
+								if workspaceId != nil {
+									state.LogAnalyticsWorkspaceId = workspaceId.ID()
 								} else {
-									return fmt.Errorf("retrieving Log Analytics Workspace ID for %s: %+v", *appLogsConfig.LogAnalyticsConfiguration.CustomerId, err)
+									state.LogAnalyticsWorkspaceId = existingState.LogAnalyticsWorkspaceId
 								}
 							}
-
-							state.LogAnalyticsWorkspaceId = workspaceId.ID()
 						}
 					}
 

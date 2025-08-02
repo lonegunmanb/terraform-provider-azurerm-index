@@ -1,0 +1,74 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/failovergroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (d MsSqlFailoverGroupDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.MSSQL.FailoverGroupsClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var state MsSqlFailoverGroupDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			serverId, err := commonids.ParseSqlServerID(state.ServerId)
+			if err != nil {
+				return err
+			}
+
+			id := failovergroups.NewFailoverGroupID(subscriptionId, serverId.ResourceGroupName, serverId.ServerName, state.Name)
+			if err != nil {
+				return err
+			}
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			state.Name = id.FailoverGroupName
+			state.ServerId = serverId.ID()
+
+			if model := existing.Model; model != nil {
+				state.Tags = pointer.From(model.Tags)
+				if props := model.Properties; props != nil {
+					state.Databases = pointer.From(props.Databases)
+					state.PartnerServers = flattenPartnerServers(props.PartnerServers)
+
+					if props.ReadOnlyEndpoint != nil && pointer.From(props.ReadOnlyEndpoint.FailoverPolicy) == failovergroups.ReadOnlyEndpointFailoverPolicyEnabled {
+						state.ReadonlyEndpointFailurePolicyEnabled = true
+					}
+
+					state.ReadWriteEndpointFailurePolicy = []ReadWriteEndpointFailurePolicyDataSourceModel{{
+						Mode: string(props.ReadWriteEndpoint.FailoverPolicy),
+					}}
+
+					state.ReadWriteEndpointFailurePolicy[0].GraceMinutes = pointer.From(props.ReadWriteEndpoint.FailoverWithDataLossGracePeriodMinutes)
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}
