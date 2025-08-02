@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2024-08-01/virtualendpoints"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -21,15 +22,39 @@ func (r PostgresqlFlexibleServerVirtualEndpointResource) Delete() sdk.ResourceFu
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
 			client := metadata.Client.Postgres.VirtualEndpointClient
 
-			id, err := virtualendpoints.ParseVirtualEndpointID(metadata.ResourceData.Id())
+			id, err := commonids.ParseCompositeResourceID(metadata.ResourceData.Id(), &virtualendpoints.VirtualEndpointId{}, &virtualendpoints.VirtualEndpointId{})
 			if err != nil {
 				return err
 			}
 
-			locks.ByName(id.FlexibleServerName, postgresqlFlexibleServerResourceName)
-			defer locks.UnlockByName(id.FlexibleServerName, postgresqlFlexibleServerResourceName)
+			// In case of a fail-over, we need to see if the endpoint lives under the source id or the replica id before deleting
+			failOverHasOccurred := false
+			virtualEndpointId := *id.First
+			resp, err := client.Get(ctx, virtualEndpointId)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					virtualEndpointId = *id.Second
+					// if the endpoint doesn't exist under the source server, look for it under the replica server
+					resp, err = client.Get(ctx, virtualEndpointId)
+					if err != nil {
+						if response.WasNotFound(resp.HttpResponse) {
+							// the endpoint was not found under the source or the replica server so we can exit here
+							return nil
+						}
+						return fmt.Errorf("retrieving %s: %+v", id, err)
+					}
+					failOverHasOccurred = true
+				}
+				// if we errored and didn't find the endpoint under the replica id, then we error here
+				if !failOverHasOccurred {
+					return fmt.Errorf("retrieving %s: %+v", id, err)
+				}
+			}
 
-			if err := client.DeleteThenPoll(ctx, *id); err != nil {
+			locks.ByName(virtualEndpointId.FlexibleServerName, postgresqlFlexibleServerResourceName)
+			defer locks.UnlockByName(virtualEndpointId.FlexibleServerName, postgresqlFlexibleServerResourceName)
+
+			if err := client.DeleteThenPoll(ctx, virtualEndpointId); err != nil {
 				return fmt.Errorf("deleting %s: %+v", *id, err)
 			}
 

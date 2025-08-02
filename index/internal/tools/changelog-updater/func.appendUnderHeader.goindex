@@ -1,0 +1,91 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"strings"
+)
+func appendUnderHeader(filePath string, newEntry, header string) error {
+	// Open the file for reading and appending
+	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			println("file open error ", err.Error())
+		}
+	}(file)
+
+	// Read the file content
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// Find the correct header section
+	headerIndex := findHeaderIndex(lines, header)
+
+	// Now append the new entry under the correct header
+	// Check if the next line is empty or not for proper formatting
+	insertIndex := headerIndex + 1
+	for i := headerIndex + 1; i < len(lines); i++ {
+		// Look for the next header to break the section
+		if strings.HasPrefix(lines[i], "[") {
+			insertIndex = i
+			break
+		}
+	}
+
+	// Remove the header prefix from the new entry
+	// Trim the header prefix based on which one it matches
+	var trimmedEntry string
+	switch {
+	case strings.HasPrefix(newEntry, "[BUG]"):
+		trimmedEntry = strings.TrimPrefix(newEntry, "[BUG] ")
+	case strings.HasPrefix(newEntry, "[ENHANCEMENT]"):
+		trimmedEntry = strings.TrimPrefix(newEntry, "[ENHANCEMENT] ")
+	case strings.HasPrefix(newEntry, "[FEATURE]"):
+		trimmedEntry = strings.TrimPrefix(newEntry, "[FEATURE] ")
+	default:
+		return fmt.Errorf("new entry must start with one of the headers [BUG], [ENHANCEMENT], or [FEATURE]")
+	}
+
+	// Insert the new entry under the header
+	section := make([]string, 0)
+	for i := headerIndex + 1; i < insertIndex; i++ {
+		section = append(section, lines[i])
+	}
+	section = append(section, trimmedEntry)
+
+	// Rebuild the file content
+	lines = append(lines[:headerIndex+1], append(section, lines[insertIndex:]...)...)
+
+	// Open the file for writing and overwrite the content
+	writtenFile, err := os.OpenFile(filePath, os.O_RDWR|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			println("file open error ", err.Error())
+		}
+	}(writtenFile)
+
+	// Write the updated content back to the file
+	writer := bufio.NewWriter(writtenFile)
+	for _, line := range lines {
+		_, err := writer.WriteString(line + "\n")
+		if err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
+}

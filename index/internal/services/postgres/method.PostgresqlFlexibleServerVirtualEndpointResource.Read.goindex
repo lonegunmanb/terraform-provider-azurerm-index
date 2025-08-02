@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2024-08-01/virtualendpoints"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -24,21 +25,37 @@ func (r PostgresqlFlexibleServerVirtualEndpointResource) Read() sdk.ResourceFunc
 
 			state := PostgresqlFlexibleServerVirtualEndpointModel{}
 
-			id, err := virtualendpoints.ParseVirtualEndpointID(metadata.ResourceData.Id())
+			id, err := commonids.ParseCompositeResourceID(metadata.ResourceData.Id(), &virtualendpoints.VirtualEndpointId{}, &virtualendpoints.VirtualEndpointId{})
 			if err != nil {
 				return err
 			}
 
-			resp, err := client.Get(ctx, *id)
+			// In case of a fail-over, we need to see if the endpoint lives under the source id or the replica id
+			failOverHasOccurred := false
+			virtualEndpointId := *id.First
+			resp, err := client.Get(ctx, virtualEndpointId)
 			if err != nil {
 				if response.WasNotFound(resp.HttpResponse) {
-					log.Printf("[INFO] %s does not exist - removing from state", metadata.ResourceData.Id())
-					return metadata.MarkAsGone(id)
+					virtualEndpointId = *id.Second
+					// if the endpoint doesn't exist under the source server, look for it under the replica server
+					resp, err = client.Get(ctx, virtualEndpointId)
+					if err != nil {
+						if response.WasNotFound(resp.HttpResponse) {
+							// the endpoint was not found under the source or the replica server so it can safely be removed from state
+							log.Printf("[INFO] %s does not exist - removing from state", metadata.ResourceData.Id())
+							return metadata.MarkAsGone(id)
+						}
+						return fmt.Errorf("retrieving %s: %+v", id, err)
+					}
+					failOverHasOccurred = true
 				}
-				return fmt.Errorf("retrieving %s: %+v", id, err)
+				// if we errored and didn't find the endpoint under the replica id, then we error here
+				if !failOverHasOccurred {
+					return fmt.Errorf("retrieving %s: %+v", id, err)
+				}
 			}
 
-			state.Name = id.VirtualEndpointName
+			state.Name = virtualEndpointId.VirtualEndpointName
 
 			if model := resp.Model; model != nil {
 				if props := model.Properties; props != nil {
@@ -46,18 +63,17 @@ func (r PostgresqlFlexibleServerVirtualEndpointResource) Read() sdk.ResourceFunc
 
 					if props.Members == nil || len(*props.Members) == 0 {
 						// if members list is nil or empty, this is an endpoint that was previously deleted
-						log.Printf("[INFO] Postgresql Flexible Server Endpoint %q was previously deleted - removing from state", id.ID())
+						log.Printf("[INFO] Postgresql Flexible Server Endpoint %q was previously deleted - removing from state", id.First.ID())
 						return metadata.MarkAsGone(id)
 					}
 
-					state.SourceServerId = servers.NewFlexibleServerID(id.SubscriptionId, id.ResourceGroupName, (*props.Members)[0]).ID()
-
+					state.SourceServerId = servers.NewFlexibleServerID(id.First.SubscriptionId, id.First.ResourceGroupName, (*props.Members)[0]).ID()
 					// Model.Properties.Members can contain 1 member which means source and replica are identical, or it can contain
 					// 2 members when source and replica are different => [source_server_id, replication_server_name]
-					replicaServerId := servers.NewFlexibleServerID(id.SubscriptionId, id.ResourceGroupName, (*props.Members)[0]).ID()
+					replicaServerId := state.SourceServerId
 
 					if len(*props.Members) == 2 {
-						replicaServer, err := lookupFlexibleServerByName(ctx, flexibleServerClient, id, (*props.Members)[1], state.SourceServerId)
+						replicaServer, err := lookupFlexibleServerByName(ctx, flexibleServerClient, virtualEndpointId, (*props.Members)[1], state.SourceServerId)
 						if err != nil {
 							return err
 						}
@@ -74,6 +90,11 @@ func (r PostgresqlFlexibleServerVirtualEndpointResource) Read() sdk.ResourceFunc
 
 					state.ReplicaServerId = replicaServerId
 				}
+			}
+
+			// if a fail-over has occurred, the source/replica ids have swapped so we'll have to swap them back in Terraform to prevent a diff
+			if failOverHasOccurred {
+				state.SourceServerId, state.ReplicaServerId = state.ReplicaServerId, state.SourceServerId
 			}
 
 			return metadata.Encode(&state)

@@ -118,6 +118,55 @@ func (m DeploymentResource) Read() sdk.ResourceFunc {
 						output.UpgradeChannel = props.AutoUpgradeProfile.UpgradeChannel
 					}
 
+					if nap := props.NginxAppProtect; nap != nil {
+						waf := WebApplicationFirewall{}
+						if state := nap.WebApplicationFirewallSettings.ActivationState; state != nil {
+							switch *state {
+							case nginxdeployment.ActivationStateEnabled:
+								waf.ActivationStateEnabled = true
+							default:
+								waf.ActivationStateEnabled = false
+							}
+						}
+						if status := nap.WebApplicationFirewallStatus; status != nil {
+							wafStatus := WebApplicationFirewallStatus{}
+							if attackSignature := status.AttackSignaturesPackage; attackSignature != nil {
+								wafStatus.AttackSignaturesPackage = []WebApplicationFirewallPackage{
+									{
+										RevisionDatetime: attackSignature.RevisionDatetime,
+										Version:          attackSignature.Version,
+									},
+								}
+							}
+							if botSignature := status.BotSignaturesPackage; botSignature != nil {
+								wafStatus.BotSignaturesPackage = []WebApplicationFirewallPackage{
+									{
+										RevisionDatetime: botSignature.RevisionDatetime,
+										Version:          botSignature.Version,
+									},
+								}
+							}
+							if threatCampaign := status.ThreatCampaignsPackage; threatCampaign != nil {
+								wafStatus.ThreatCampaignsPackage = []WebApplicationFirewallPackage{
+									{
+										RevisionDatetime: threatCampaign.RevisionDatetime,
+										Version:          threatCampaign.Version,
+									},
+								}
+							}
+							if componentVersions := status.ComponentVersions; componentVersions != nil {
+								wafStatus.ComponentVersions = []WebApplicationFirewallComponentVersions{
+									{
+										WafEngineVersion: componentVersions.WafEngineVersion,
+										WafNginxVersion:  componentVersions.WafNginxVersion,
+									},
+								}
+							}
+							waf.Status = []WebApplicationFirewallStatus{wafStatus}
+							output.WebApplicationFirewall = []WebApplicationFirewall{waf}
+						}
+					}
+
 					flattenedIdentity, err := identity.FlattenSystemAndUserAssignedMapToModel(model.Identity)
 					if err != nil {
 						return fmt.Errorf("flattening `identity`: %v", err)

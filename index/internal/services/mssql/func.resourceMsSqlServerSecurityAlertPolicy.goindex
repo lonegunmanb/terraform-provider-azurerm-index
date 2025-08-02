@@ -4,21 +4,23 @@ import (
 	"log"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/preview/sql/mgmt/v5.0/sql" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serversecurityalertpolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceMsSqlServerSecurityAlertPolicy() *pluginsdk.Resource {
 	return &pluginsdk.Resource{
-		Create: resourceMsSqlServerSecurityAlertPolicyCreateUpdate,
+		Create: resourceMsSqlServerSecurityAlertPolicyCreate,
 		Read:   resourceMsSqlServerSecurityAlertPolicyRead,
-		Update: resourceMsSqlServerSecurityAlertPolicyCreateUpdate,
+		Update: resourceMsSqlServerSecurityAlertPolicyUpdate,
 		Delete: resourceMsSqlServerSecurityAlertPolicyDelete,
 
 		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
@@ -84,23 +86,22 @@ func resourceMsSqlServerSecurityAlertPolicy() *pluginsdk.Resource {
 			"state": {
 				Type:     pluginsdk.TypeString,
 				Required: true,
-				ValidateFunc: validation.StringInSlice([]string{
-					string(sql.SecurityAlertPolicyStateDisabled),
-					string(sql.SecurityAlertPolicyStateEnabled),
-					string(sql.SecurityAlertPolicyStateNew),
-				}, false),
+				ValidateFunc: validation.StringInSlice(serversecurityalertpolicies.PossibleValuesForSecurityAlertsPolicyState(),
+					false),
 			},
 
 			"storage_account_access_key": {
 				Type:         pluginsdk.TypeString,
 				Optional:     true,
 				Sensitive:    true,
+				RequiredWith: []string{"storage_endpoint"},
 				ValidateFunc: validation.StringIsNotEmpty,
 			},
 
 			"storage_endpoint": {
 				Type:         pluginsdk.TypeString,
 				Optional:     true,
+				RequiredWith: []string{"storage_account_access_key"},
 				ValidateFunc: validation.StringIsNotEmpty,
 			},
 		},
