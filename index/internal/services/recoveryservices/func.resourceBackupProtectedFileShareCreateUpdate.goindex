@@ -31,7 +31,6 @@ func resourceBackupProtectedFileShareCreateUpdate(d *pluginsdk.ResourceData, met
 	protectableClient := meta.(*clients.Client).RecoveryServices.ProtectableItemsClient
 	protectionContainerClient := meta.(*clients.Client).RecoveryServices.BackupProtectionContainersClient
 	client := meta.(*clients.Client).RecoveryServices.ProtectedItemsClient
-	opClient := meta.(*clients.Client).RecoveryServices.BackupOperationStatusesClient
 	opResultClient := meta.(*clients.Client).RecoveryServices.ProtectionContainerOperationResultsClient
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
@@ -185,26 +184,8 @@ func resourceBackupProtectedFileShareCreateUpdate(d *pluginsdk.ResourceData, met
 		},
 	}
 
-	resp, err := client.CreateOrUpdate(ctx, id, item)
-	if err != nil {
+	if err := client.CreateOrUpdateThenPoll(ctx, id, item); err != nil {
 		return fmt.Errorf("creating/updating Recovery Service Protected File Share %q (Resource Group %q): %+v", fileShareName, resourceGroup, err)
-	}
-
-	locationURL, err = resp.HttpResponse.Location()
-	if err != nil || locationURL == nil {
-		return fmt.Errorf("creating/updating Azure File Share backup item %q (Vault %q): Location header missing or empty", containerName, vaultName)
-	}
-
-	opResourceID = handleAzureSdkForGoBug2824(locationURL.String())
-
-	parsedLocation, err = azure.ParseAzureResourceID(opResourceID)
-	if err != nil {
-		return err
-	}
-	operationID = parsedLocation.Path["operationResults"]
-
-	if _, err := resourceBackupProtectedFileShareWaitForOperation(ctx, opClient, vaultName, resourceGroup, operationID, d); err != nil {
-		return err
 	}
 
 	d.SetId(id.ID())

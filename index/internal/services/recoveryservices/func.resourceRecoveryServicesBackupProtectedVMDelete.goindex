@@ -4,12 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/recoveryservices/mgmt/2021-12-01/backup" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
@@ -28,8 +25,6 @@ import (
 )
 func resourceRecoveryServicesBackupProtectedVMDelete(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).RecoveryServices.ProtectedItemsClient
-	opResultClient := meta.(*clients.Client).RecoveryServices.BackupOperationResultsClient
-	opClient := meta.(*clients.Client).RecoveryServices.ProtectedItemOperationResultsClient
 	ctx, cancel := timeouts.ForDelete(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -68,18 +63,8 @@ func resourceRecoveryServicesBackupProtectedVMDelete(d *pluginsdk.ResourceData, 
 						},
 					}
 
-					resp, err := client.CreateOrUpdate(ctx, *id, updateInput)
-					if err != nil {
+					if err := client.CreateOrUpdateThenPoll(ctx, *id, updateInput); err != nil {
 						return fmt.Errorf("setting protection to %s and retaining data for %s: %+v", desiredState, id, err)
-					}
-
-					operationId, err := parseBackupOperationId(resp.HttpResponse)
-					if err != nil {
-						return fmt.Errorf("issuing creating/updating request for %s: %+v", id, err)
-					}
-
-					if err = resourceRecoveryServicesBackupProtectedVMWaitForStateCreateUpdate(ctx, opClient, *id, operationId); err != nil {
-						return err
 					}
 
 					return nil
@@ -90,20 +75,8 @@ func resourceRecoveryServicesBackupProtectedVMDelete(d *pluginsdk.ResourceData, 
 
 	log.Printf("[DEBUG] Deleting %s", id)
 
-	resp, err := client.Delete(ctx, *id)
-	if err != nil {
-		if !response.WasNotFound(resp.HttpResponse) {
-			return fmt.Errorf("issuing delete request for %s: %+v", id, err)
-		}
-	}
-
-	operationId, err := parseBackupOperationId(resp.HttpResponse)
-	if err != nil {
+	if err := client.DeleteThenPoll(ctx, *id); err != nil {
 		return fmt.Errorf("deleting %s: %+v", id, err)
-	}
-
-	if err = resourceRecoveryServicesBackupProtectedVMWaitForDeletion(ctx, client, opResultClient, *id, operationId); err != nil {
-		return fmt.Errorf("waiting for deletion %s: %+v", id, err)
 	}
 
 	return nil

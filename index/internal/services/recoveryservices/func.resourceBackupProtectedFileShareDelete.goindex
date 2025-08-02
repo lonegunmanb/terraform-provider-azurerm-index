@@ -28,7 +28,6 @@ import (
 )
 func resourceBackupProtectedFileShareDelete(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).RecoveryServices.ProtectedItemsClient
-	opClient := meta.(*clients.Client).RecoveryServices.BackupOperationStatusesClient
 	ctx, cancel := timeouts.ForDelete(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -39,28 +38,8 @@ func resourceBackupProtectedFileShareDelete(d *pluginsdk.ResourceData, meta inte
 
 	log.Printf("[DEBUG] Deleting %s", *id)
 
-	resp, err := client.Delete(ctx, *id)
-	if err != nil {
-		if !response.WasNotFound(resp.HttpResponse) {
-			return fmt.Errorf("issuing delete request for %s: %+v", id, err)
-		}
-	}
-
-	locationURL, err := resp.HttpResponse.Location()
-	if err != nil || locationURL == nil {
-		return fmt.Errorf("deleting Azure File Share backups item %s (Vault %s): Location header missing or empty", id.ProtectionContainerName, id.VaultName)
-	}
-
-	opResourceID := handleAzureSdkForGoBug2824(locationURL.Path)
-
-	parsedLocation, err := azure.ParseAzureResourceID(opResourceID)
-	if err != nil {
-		return err
-	}
-	operationID := parsedLocation.Path["backupOperationResults"] // This is different for create and delete requests ¯\_(ツ)_/¯
-
-	if _, err := resourceBackupProtectedFileShareWaitForOperation(ctx, opClient, id.VaultName, id.ResourceGroupName, operationID, d); err != nil {
-		return err
+	if err := client.DeleteThenPoll(ctx, *id); err != nil {
+		return fmt.Errorf("deleting %s: %+v", id, err)
 	}
 
 	return nil

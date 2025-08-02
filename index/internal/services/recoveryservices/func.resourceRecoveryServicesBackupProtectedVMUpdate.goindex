@@ -4,12 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/recoveryservices/mgmt/2021-12-01/backup" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
@@ -28,7 +25,6 @@ import (
 )
 func resourceRecoveryServicesBackupProtectedVMUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).RecoveryServices.ProtectedItemsClient
-	opClient := meta.(*clients.Client).RecoveryServices.ProtectedItemOperationResultsClient
 	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -71,18 +67,8 @@ func resourceRecoveryServicesBackupProtectedVMUpdate(d *pluginsdk.ResourceData, 
 	model.Properties = properties
 
 	if updateProtectedBackup {
-		resp, err := client.CreateOrUpdate(ctx, *id, model)
-		if err != nil {
+		if err := client.CreateOrUpdateThenPoll(ctx, *id, model); err != nil {
 			return fmt.Errorf("updating %s: %+v", id, err)
-		}
-
-		operationId, err := parseBackupOperationId(resp.HttpResponse)
-		if err != nil {
-			return fmt.Errorf("issuing update request for %s: %+v", id, err)
-		}
-
-		if err = resourceRecoveryServicesBackupProtectedVMWaitForStateCreateUpdate(ctx, opClient, *id, operationId); err != nil {
-			return err
 		}
 	}
 
@@ -104,18 +90,8 @@ func resourceRecoveryServicesBackupProtectedVMUpdate(d *pluginsdk.ResourceData, 
 			},
 		}
 
-		resp, err := client.CreateOrUpdate(ctx, *id, updateInput)
-		if err != nil {
-			return fmt.Errorf("updating %s: %+v", id, err)
-		}
-
-		operationId, err := parseBackupOperationId(resp.HttpResponse)
-		if err != nil {
-			return fmt.Errorf("issuing update request for %s: %+v", id, err)
-		}
-
-		if err = resourceRecoveryServicesBackupProtectedVMWaitForStateCreateUpdate(ctx, opClient, *id, operationId); err != nil {
-			return err
+		if err := client.CreateOrUpdateThenPoll(ctx, *id, updateInput); err != nil {
+			return fmt.Errorf("updating %s: %+v", *id, err)
 		}
 	}
 
