@@ -1,0 +1,111 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/util"
+	log "github.com/sirupsen/logrus"
+
+	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
+)
+func findAPIsForUntypedResources(d packageData, s *Service) map[string][]API {
+	result := make(map[string][]API)
+
+	servicePackages, ok := d.packages[s.Name]
+	// todo: refactor loadPackages to only return the service package and ignore others such as `client`
+	servicePackage := servicePackages[0]
+	if !ok {
+		return nil // err?
+	}
+
+	registration := servicePackage.pkg.Types.Scope().Lookup("Registration")
+	if registration == nil {
+		return nil // err?
+	}
+
+	var dsRegistration *types.Func
+	var rsRegistration *types.Func
+	for m := range registration.Type().(*types.Named).Methods() {
+		switch m.Name() {
+		case "SupportedDataSources":
+			dsRegistration = m
+		case "SupportedResources":
+			rsRegistration = m
+		}
+	}
+
+	registrationFuncs := make(map[resourceID]*types.Func)
+	// Datasources
+	findRegistrationFuncs(servicePackage.pkg, dsRegistration, registrationFuncs, ResourceTypeData)
+
+	// Resources
+	findRegistrationFuncs(servicePackage.pkg, rsRegistration, registrationFuncs, ResourceTypeResource)
+
+	for _, fn := range registrationFuncs {
+		filenames := make(map[string]struct{})
+		resourceFileName := d.fset.Position(d.prog.FuncValue(fn).Pos()).Filename
+		filenames[resourceFileName] = struct{}{} // for most resources this is all we need
+
+		fnDecl := funcToFuncDeclWithPkgs([]*packages.Package{servicePackage.pkg}, fn)
+		if fnDecl == nil {
+			continue
+		}
+
+		ast.Inspect(fnDecl, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.FuncDecl:
+				return true
+			case *ast.BlockStmt:
+				return true
+			case *ast.AssignStmt:
+				return true
+			case *ast.ReturnStmt:
+				return true
+			case *ast.UnaryExpr:
+				return true
+			case *ast.CompositeLit:
+				return true
+			case *ast.KeyValueExpr:
+				var resourceFn *ssa.Function
+				// here we can find the fields, including `Read:`, `Create:` etc
+				k, ok := n.Key.(*ast.Ident)
+				if !ok {
+					return false
+				}
+
+				switch k.Name {
+				case "Create":
+					resourceFn = findUntypedSSAFunc(servicePackage, n.Value)
+				case "Read":
+					resourceFn = findUntypedSSAFunc(servicePackage, n.Value)
+				case "Update":
+					resourceFn = findUntypedSSAFunc(servicePackage, n.Value)
+				case "Delete":
+					resourceFn = findUntypedSSAFunc(servicePackage, n.Value)
+				}
+
+				if resourceFn != nil {
+					filenames[d.fset.Position(resourceFn.Pos()).Filename] = struct{}{}
+				}
+			}
+
+			return false
+		})
+
+		sdkMethods := usedMethods(d.fset, servicePackage.pkg, util.MapKeys2Slice(filenames))
+		apis := methodsToAPIs(sdkMethods)
+
+		result[resourceFileName] = apis
+	}
+
+	return result
+}

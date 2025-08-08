@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/util"
+	log "github.com/sirupsen/logrus"
+
+	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
+)
+func apiPathFromID(pkg *packages.Package, commonIdsPkg *packages.Package, id *ast.SelectorExpr) string {
+	obj, ok := pkg.TypesInfo.Uses[id.X.(*ast.Ident)]
+	if !ok {
+		return ""
+	}
+
+	pkgs := []*packages.Package{pkg}
+	if commonIdsPkg != nil {
+		pkgs = append(pkgs, commonIdsPkg)
+	}
+
+	idFn := findMethodByName(obj.Type().(*types.Named), id.Sel.Name)
+	idFnDecl := funcToFuncDeclWithPkgs(pkgs, idFn)
+
+	path, _ := strconv.Unquote(idFnDecl.Body.List[0].(*ast.AssignStmt).Rhs[0].(*ast.BasicLit).Value)
+
+	return path
+}

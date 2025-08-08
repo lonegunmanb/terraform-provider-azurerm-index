@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/util"
+	log "github.com/sirupsen/logrus"
+
+	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
+)
+func findResourceFuncDigDeeper(prog *ssa.Program, pkg *packages.Package, ssaPkg *ssa.Package, fn *types.Func) *ssa.Function {
+	debugLog := func(t any, msg string) {
+		log.WithFields(log.Fields{
+			"type":     reflect.TypeOf(t),
+			"function": fn.Name(),
+			"package":  fn.Pkg().Path(),
+		}).Debug(msg)
+	}
+
+	fnDecl := funcToFuncDeclWithPkgs([]*packages.Package{pkg}, fn)
+
+	r := fnDecl.Body.List[0].(*ast.ReturnStmt).Results[0]
+	c, ok := r.(*ast.CallExpr)
+	if !ok {
+		debugLog(c, "expected return value to be of type `*ast.CallExpr`")
+		return nil
+	}
+
+	switch f := c.Fun.(type) {
+	case *ast.SelectorExpr:
+		ssaFn := prog.LookupMethod(pkg.TypesInfo.TypeOf(f.X).(*types.Named), pkg.Types, f.Sel.Name)
+		return findResourceFunc(prog, pkg, ssaPkg, ssaFn)
+	case *ast.Ident:
+		fnObj := pkg.TypesInfo.ObjectOf(f).(*types.Func)
+		return findResourceFunc(prog, pkg, ssaPkg, ssaPkg.Func(fnObj.Name()))
+	default:
+		debugLog(f, "unexpected type")
+		return nil
+	}
+}

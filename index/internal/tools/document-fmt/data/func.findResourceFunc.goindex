@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/util"
+	log "github.com/sirupsen/logrus"
+
+	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
+)
+func findResourceFunc(prog *ssa.Program, pkg *packages.Package, ssaPkg *ssa.Package, fn *ssa.Function) *ssa.Function {
+	switch len(fn.AnonFuncs) {
+	case 0:
+		return findResourceFuncDigDeeper(prog, pkg, ssaPkg, fn.Object().(*types.Func))
+	case 1:
+		return fn.AnonFuncs[0]
+	default:
+		log.WithFields(log.Fields{
+			"count":    len(fn.AnonFuncs),
+			"function": fn.Name(),
+			"package":  fn.Pkg.String(),
+		}).Debug("unexpected number of Anonymous Functions")
+	}
+
+	return nil
+}

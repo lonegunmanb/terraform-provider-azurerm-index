@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/util"
+	log "github.com/sirupsen/logrus"
+
+	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
+)
+func loadPackages(dir string) *packageData {
+	cfg := &packages.Config{
+		Dir:  dir + "/internal/services",
+		Mode: packages.LoadAllSyntax,
+	}
+
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		log.WithError(err).Fatal("encountered an error loading provider packages")
+	}
+
+	fset := pkgs[0].Fset
+	prog, ssaPkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
+	prog.Build()
+
+	if ssaPkgCount, pkgCount := len(ssaPkgs), len(pkgs); ssaPkgCount != pkgCount {
+		log.Fatalf("number of SSA packages (%d) did not equal number of Go packages (%d)", ssaPkgCount, pkgCount)
+	}
+
+	pkgsMap := make(map[string][]pkg)
+	for idx := range ssaPkgs {
+		id := pkgs[idx].ID
+
+		if servicePackageRegex.MatchString(id) {
+			m := servicePackageRegex.FindStringSubmatch(id)
+
+			// map by service base directory name
+			pkgsMap[m[1]] = append(pkgsMap[m[1]], pkg{
+				ssa: ssaPkgs[idx],
+				pkg: pkgs[idx],
+			})
+		}
+	}
+
+	return &packageData{
+		cfg:      cfg,
+		fset:     fset,
+		prog:     prog,
+		packages: pkgsMap,
+	}
+}

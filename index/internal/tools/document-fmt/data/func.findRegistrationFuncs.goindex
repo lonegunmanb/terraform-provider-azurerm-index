@@ -1,0 +1,96 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/util"
+	log "github.com/sirupsen/logrus"
+
+	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
+)
+func findRegistrationFuncs(pkg *packages.Package, fn *types.Func, registrationFuncs map[resourceID]*types.Func, t ResourceType) {
+	fnDecl := funcToFuncDeclWithPkgs([]*packages.Package{pkg}, fn)
+	if fnDecl == nil {
+		return
+	}
+
+	ast.Inspect(fnDecl.Body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.BlockStmt:
+			return true
+		case *ast.ReturnStmt:
+			return true
+		case *ast.CompositeLit:
+			return true
+		case *ast.IfStmt:
+			return true
+		case *ast.ExprStmt:
+			return true
+		case *ast.AssignStmt:
+			if len(n.Lhs) != 1 || len(n.Rhs) != 1 {
+				return true
+			}
+
+			lhs, ok := n.Lhs[0].(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+
+			rhs, ok := n.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+
+			lit, ok := lhs.Index.(*ast.BasicLit)
+			if !ok {
+				return true
+			}
+
+			name, _ := strconv.Unquote(lit.Value)
+
+			fn := pkg.TypesInfo.ObjectOf(rhs.Fun.(*ast.Ident))
+			if fn == nil {
+				return false
+				// todo err
+			}
+
+			registrationFuncs[resourceID{
+				Type: t,
+				Name: name,
+			}] = fn.(*types.Func)
+		case *ast.KeyValueExpr:
+			k, ok := n.Key.(*ast.BasicLit)
+			if !ok || k.Kind != token.STRING {
+				return false
+			}
+
+			v, ok := n.Value.(*ast.CallExpr)
+			if !ok {
+				return false
+			}
+
+			fn := pkg.TypesInfo.ObjectOf(v.Fun.(*ast.Ident))
+			if fn == nil {
+				return false
+				// todo err
+			}
+
+			name, _ := strconv.Unquote(k.Value)
+
+			registrationFuncs[resourceID{
+				Type: t,
+				Name: name,
+			}] = fn.(*types.Func)
+		}
+		return false
+	})
+}

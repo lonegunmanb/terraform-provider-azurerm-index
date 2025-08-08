@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventgrid
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2022-06-15/partnernamespaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2022-06-15/partnerregistrations"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (EventGridPartnerNamespaceResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:     pluginsdk.TypeString,
+			Required: true,
+			ForceNew: true,
+			ValidateFunc: validation.All(
+				validation.StringIsNotEmpty,
+				validation.StringMatch(
+					regexp.MustCompile("^[-a-zA-Z0-9]{3,50}$"),
+					"`name` must be 3 - 50 characters long, contain only letters, numbers and hyphens.",
+				),
+			),
+		},
+		"resource_group_name":     commonschema.ResourceGroupName(),
+		"location":                commonschema.Location(),
+		"partner_registration_id": commonschema.ResourceIDReferenceRequiredForceNew(&partnerregistrations.PartnerRegistrationId{}),
+		"inbound_ip_rule": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 16,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"ip_mask": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.IsCIDR,
+					},
+					"action": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						Default:  string(partnernamespaces.IPActionTypeAllow),
+						ValidateFunc: validation.StringInSlice([]string{
+							string(partnernamespaces.IPActionTypeAllow),
+						}, false),
+					},
+				},
+			},
+		},
+		"local_authentication_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  true,
+		},
+		"partner_topic_routing_mode": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			ValidateFunc: validation.StringInSlice(partnernamespaces.PossibleValuesForPartnerTopicRoutingMode(), false),
+			Default:      string(partnernamespaces.PartnerTopicRoutingModeChannelNameHeader),
+		},
+		"public_network_access": {
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				string(partnernamespaces.PublicNetworkAccessEnabled),
+				string(partnernamespaces.PublicNetworkAccessDisabled),
+			}, false),
+			Default: string(partnernamespaces.PublicNetworkAccessEnabled),
+		},
+		"tags": tags.Schema(),
+	}
+}

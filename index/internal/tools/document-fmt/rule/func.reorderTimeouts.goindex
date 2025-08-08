@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/rule
+import (
+	"fmt"
+	"reflect"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/differror"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/markdown"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/template"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/util"
+	log "github.com/sirupsen/logrus"
+)
+func reorderTimeouts(c []string, found map[data.TimeoutType]int) ([]string, bool) {
+	if len(found) <= 1 {
+		return c, false
+	}
+
+	expectedOrder := []data.TimeoutType{
+		data.TimeoutTypeCreate,
+		data.TimeoutTypeRead,
+		data.TimeoutTypeUpdate,
+		data.TimeoutTypeDelete,
+	}
+
+	originalContent := make([]string, len(c))
+	copy(originalContent, c)
+
+	orderedTimeouts := make([]data.TimeoutType, 0, len(found))
+	for _, t := range expectedOrder {
+		if _, ok := found[t]; ok {
+			orderedTimeouts = append(orderedTimeouts, t)
+		}
+	}
+
+	orderedIndexes := util.MapValues2Slice(found)
+	slices.Sort(orderedIndexes)
+
+	for idx, v := range orderedTimeouts {
+		origIdx := orderedIndexes[idx]
+		c[origIdx] = originalContent[found[v]]
+	}
+
+	return c, !reflect.DeepEqual(originalContent, c)
+}

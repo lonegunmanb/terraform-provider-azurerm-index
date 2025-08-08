@@ -1,0 +1,32 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/sdk
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-cty/cty"
+)
+func (rmd ResourceMetaData) GetRawConfigAt(key string) (cty.Value, error) {
+	ctyPath := constructPath(key)
+
+	msg := "retrieving value at path `%s`: %+v"
+
+	switch {
+	case rmd.ResourceData != nil:
+		val, diags := rmd.ResourceData.GetRawConfigAt(ctyPath)
+		if diags.HasError() {
+			return cty.NilVal, fmt.Errorf(msg, key, diags)
+		}
+		return val, nil
+	case rmd.ResourceDiff != nil:
+		val, diags := rmd.ResourceDiff.GetRawConfigAt(ctyPath)
+		if diags.HasError() {
+			return cty.NilVal, fmt.Errorf(msg, key, diags)
+		}
+		return val, nil
+	}
+
+	// It *shouldn't* be possible to reach this return statement
+	return cty.NilVal, errors.New("internal error: both `ResourceData` and `ResourceDiff` were nil, unable to retrieve RawConfig")
+}

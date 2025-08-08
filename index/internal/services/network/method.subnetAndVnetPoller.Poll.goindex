@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/virtualnetworks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (p *subnetAndVnetPoller) Poll(ctx context.Context) error {
+	// Poll the subnet
+	stateConf := &pluginsdk.StateChangeConf{
+		Pending:    []string{string(subnets.ProvisioningStateUpdating)},
+		Target:     []string{string(subnets.ProvisioningStateSucceeded)},
+		Refresh:    SubnetProvisioningStateRefreshFunc(ctx, p.subnetClient, *p.subnetID),
+		MinTimeout: 1 * time.Minute,
+		Timeout:    time.Until(p.deadline),
+	}
+	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("subnet %s provisioning: %w", p.subnetID.ID(), err)
+	}
+
+	// Poll the parent VNet
+	vnetID := commonids.NewVirtualNetworkID(
+		p.subnetID.SubscriptionId,
+		p.subnetID.ResourceGroupName,
+		p.subnetID.VirtualNetworkName,
+	)
+	vnetConf := &pluginsdk.StateChangeConf{
+		Pending:    []string{string(subnets.ProvisioningStateUpdating)},
+		Target:     []string{string(subnets.ProvisioningStateSucceeded)},
+		Refresh:    VirtualNetworkProvisioningStateRefreshFunc(ctx, p.vnetClient, vnetID),
+		MinTimeout: 1 * time.Minute,
+		Timeout:    time.Until(p.deadline),
+	}
+	if _, err := vnetConf.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("vnet %s provisioning: %w", vnetID, err)
+	}
+
+	return nil
+}

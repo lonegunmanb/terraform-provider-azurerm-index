@@ -1,0 +1,134 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/util"
+	log "github.com/sirupsen/logrus"
+
+	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
+)
+func usedMethods(fset *token.FileSet, pkg *packages.Package, fileNames []string) []sdkMethod {
+	sdkMethods := make(map[sdkMethod]struct{})
+	sdkImportPkgsMap := make(map[*packages.Package]struct{})
+	var commonIdsPkg *packages.Package
+
+	for _, impP := range pkg.Imports {
+		if commonIdsPkg == nil && strings.Contains(impP.ID, "commonids") { // github.com/hashicorp/go-azure-helpers/resourcemanager/commonids
+			commonIdsPkg = impP
+		}
+		if sdkRegex.MatchString(impP.ID) { // only go-azure-sdk for now
+			sdkImportPkgsMap[impP] = struct{}{} // don't want duplicates, overwrite ok
+		}
+	}
+
+	for _, node := range pkg.Syntax {
+		// TODO: pass *ast.File node instead of checking each one in `pkg.Syntax`?
+		for _, name := range fileNames {
+			if !matchesFile(fset, node, name, false) {
+				continue
+			}
+
+			ast.Inspect(node, func(n ast.Node) bool {
+				apiPath := ""
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+
+				recvIdent, ok := sel.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+
+				recvObj := pkg.TypesInfo.Uses[recvIdent]
+				if !isUnderlyingStruct(recvObj.Type()) {
+					return true
+				}
+				recvType := stripPointer(recvObj.Type()).(*types.Named)
+
+				recvTypePkg := recvType.Obj().Pkg()
+				if recvTypePkg == nil {
+					return true
+				}
+
+				if !sdkRegex.MatchString(recvTypePkg.Path()) {
+					return true
+				}
+
+				recvTypePos := recvType.Obj().Pos()
+
+				sdkPkg, file := findFileByPosition(util.MapKeys2Slice(sdkImportPkgsMap), recvTypePos)
+				if file == nil {
+					return true
+				}
+
+				sdkFn := findMethodByName(recvType, sdkMethodSuffixRegex.ReplaceAllString(sel.Sel.Name, ""))
+				if sdkFn == nil {
+					return true
+				}
+
+				sdkFnDecl := funcToFuncDeclWithPkgs([]*packages.Package{sdkPkg}, sdkFn)
+
+				ast.Inspect(sdkFnDecl.Body.List[0], func(n ast.Node) bool {
+					switch n := n.(type) {
+					case *ast.AssignStmt:
+						return true
+					case *ast.CompositeLit:
+						return true
+					case *ast.KeyValueExpr:
+						if k, ok := n.Key.(*ast.Ident); ok && k.Name == "Path" {
+							switch v := n.Value.(type) {
+							case *ast.BasicLit:
+								apiPath, _ = strconv.Unquote(v.Value)
+							case *ast.CallExpr:
+								if fn, ok := v.Fun.(*ast.SelectorExpr); ok {
+									switch fn.X.(*ast.Ident).Name {
+									case "id":
+										apiPath = apiPathFromID(sdkPkg, commonIdsPkg, fn)
+									case "fmt":
+										sel := v.Args[1].(*ast.CallExpr).Fun.(*ast.SelectorExpr)
+										apiPath = apiPathFromID(sdkPkg, commonIdsPkg, sel)
+
+										// Some API providers are actually contained in the fmt string, e.g.
+										// fmt.Sprintf("%s/providers/Microsoft.Security/defenderForStorageSettings/current", id.ID())
+										// thus we add the format string to the API path
+										format, _ := strconv.Unquote(v.Args[0].(*ast.BasicLit).Value)
+										apiPath = format + apiPath
+									}
+								}
+							}
+						}
+					}
+					return false
+				})
+
+				// TODO: Some method calls like `ID` are being caught by this, filter?
+				m := sdkMethod{
+					APIPath:    apiPath,
+					Pkg:        sdkPkg,
+					MethodName: sel.Sel.Name,
+				}
+				sdkMethods[m] = struct{}{}
+
+				return true
+			})
+		}
+	}
+
+	return util.MapKeys2Slice(sdkMethods)
+}

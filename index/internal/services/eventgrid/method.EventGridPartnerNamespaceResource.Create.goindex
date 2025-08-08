@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventgrid
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2022-06-15/partnernamespaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2022-06-15/partnerregistrations"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r EventGridPartnerNamespaceResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.EventGrid.PartnerNamespaces
+
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var config EventGridPartnerNamespaceResourceModel
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+			id := partnernamespaces.NewPartnerNamespaceID(subscriptionId, config.ResourceGroup, config.PartnerNamespaceName)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+			if !response.WasNotFound(existing.HttpResponse) {
+				return metadata.ResourceRequiresImport(r.ResourceType(), id)
+			}
+
+			param := partnernamespaces.PartnerNamespace{
+				Location: config.Location,
+				Properties: &partnernamespaces.PartnerNamespaceProperties{
+					DisableLocalAuth:                    pointer.To(!config.LocalAuthEnabled),
+					InboundIPRules:                      expandPartnerInboundIPRules(config.InboundIPRules),
+					PartnerRegistrationFullyQualifiedId: pointer.To(config.PartnerRegistrationFullyQualifiedID),
+					PartnerTopicRoutingMode:             pointer.ToEnum[partnernamespaces.PartnerTopicRoutingMode](config.PartnerTopicRoutingMode),
+					PublicNetworkAccess:                 pointer.ToEnum[partnernamespaces.PublicNetworkAccess](config.PublicNetworkAccess),
+				},
+				Tags: pointer.To(config.Tags),
+			}
+
+			if err := client.CreateOrUpdateThenPoll(ctx, id, param); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}
