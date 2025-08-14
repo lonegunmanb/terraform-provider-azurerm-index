@@ -1,0 +1,228 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r LogicAppResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.AppService.WebAppsClient
+			resourcesClient := metadata.Client.AppService.ResourceProvidersClient
+			servicePlanClient := metadata.Client.AppService.ServicePlanClient
+			aseClient := metadata.Client.AppService.AppServiceEnvironmentClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			env := metadata.Client.Account.Environment
+			storageAccountDomainSuffix, ok := env.Storage.DomainSuffix()
+			if !ok {
+				return fmt.Errorf("could not determine the domain suffix for storage accounts in environment %q: %+v", env.Name, env.Storage)
+			}
+
+			data := LogicAppResourceModel{}
+
+			if err := metadata.Decode(&data); err != nil {
+				return err
+			}
+
+			id := commonids.NewAppServiceID(subscriptionId, data.ResourceGroupName, data.Name)
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return tf.ImportAsExistsError("azurerm_logic_app_standard", id.ID())
+			}
+
+			servicePlanId, err := commonids.ParseAppServicePlanID(data.AppServicePlanId)
+			if err != nil {
+				return err
+			}
+
+			servicePlan, err := servicePlanClient.Get(ctx, *servicePlanId)
+			if err != nil {
+				return fmt.Errorf("reading %s: %+v", servicePlanId, err)
+			}
+
+			availabilityRequest := resourceproviders.ResourceNameAvailabilityRequest{
+				Name: data.Name,
+				Type: resourceproviders.CheckNameResourceTypesMicrosoftPointWebSites,
+			}
+			if servicePlanModel := servicePlan.Model; servicePlanModel != nil {
+				if ase := servicePlanModel.Properties.HostingEnvironmentProfile; ase != nil {
+					// Attempt to check the ASE for the appropriate suffix for the name availability request.
+					// This varies between internal and external ASE Types, and potentially has other names in other clouds
+					// We use the "internal" as the fallback here, if we can read the ASE, we'll get the full one
+					nameSuffix := "appserviceenvironment.net"
+					if ase.Id != nil {
+						aseId, err := commonids.ParseAppServiceEnvironmentIDInsensitively(*ase.Id)
+						nameSuffix = fmt.Sprintf("%s.%s", aseId.HostingEnvironmentName, nameSuffix)
+						if err != nil {
+							metadata.Logger.Warnf("could not parse App Service Environment ID determine FQDN for name availability check, defaulting to `%s.%s.appserviceenvironment.net`", data.Name, servicePlanId)
+						} else {
+							existingASE, err := aseClient.Get(ctx, *aseId)
+							if err != nil || existingASE.Model == nil {
+								metadata.Logger.Warnf("could not read App Service Environment to determine FQDN for name availability check, defaulting to `%s.%s.appserviceenvironment.net`", data.Name, servicePlanId)
+							} else if props := existingASE.Model.Properties; props != nil && props.DnsSuffix != nil && *props.DnsSuffix != "" {
+								nameSuffix = *props.DnsSuffix
+							}
+						}
+					}
+
+					availabilityRequest.Name = fmt.Sprintf("%s.%s", data.Name, nameSuffix)
+					availabilityRequest.IsFqdn = pointer.To(true)
+				}
+			}
+
+			subId := commonids.NewSubscriptionID(subscriptionId)
+
+			checkName, err := resourcesClient.CheckNameAvailability(ctx, subId, availabilityRequest)
+			if err != nil {
+				return fmt.Errorf("checking name availability for Linux %s: %+v", id, err)
+			}
+			if model := checkName.Model; model != nil && model.NameAvailable != nil && !*model.NameAvailable {
+				return fmt.Errorf("the Site Name %q failed the availability check: %+v", id.SiteName, *model.Message)
+			}
+
+			basicAppSettings, err := getBasicLogicAppSettings(data, *storageAccountDomainSuffix)
+			if err != nil {
+				return err
+			}
+
+			siteConfig, err := expandLogicAppStandardSiteConfigForCreate(data.SiteConfig, metadata)
+			if err != nil {
+				return fmt.Errorf("expanding `site_config`: %+v", err)
+			}
+
+			kind := logicAppStdKind
+			if siteConfig.LinuxFxVersion != nil && len(*siteConfig.LinuxFxVersion) > 0 {
+				kind = logicAppLinuxKind
+			}
+
+			appSettings := expandAppSettings(data.AppSettings)
+			appSettings = append(appSettings, basicAppSettings...)
+
+			siteConfig.AppSettings = pointer.To(appSettings)
+
+			if v, ok := data.AppSettings["WEBSITE_VNET_ROUTE_ALL"]; ok {
+				// For compatibility between app_settings and site_config, we need to set the API property based on the presence of the app_setting map value if present.
+				// a replacement of this resource should consider deprecating support for this.
+				vnetRouteAll, _ := strconv.ParseBool(v)
+				siteConfig.VnetRouteAllEnabled = pointer.To(vnetRouteAll)
+			}
+
+			expandedIdentity, err := identity.ExpandSystemAndUserAssignedMapFromModel(data.Identity)
+			if err != nil {
+				return fmt.Errorf("expanding `identity`: %+v", err)
+			}
+
+			siteEnvelope := webapps.Site{
+				Identity: expandedIdentity,
+				Kind:     pointer.To(kind),
+				Location: location.Normalize(data.Location),
+				Properties: &webapps.SiteProperties{
+					ServerFarmId:            pointer.To(data.AppServicePlanId),
+					Enabled:                 pointer.To(data.Enabled),
+					ClientAffinityEnabled:   pointer.To(data.ClientAffinityEnabled),
+					ClientCertEnabled:       pointer.To(data.ClientCertificateMode != ""),
+					HTTPSOnly:               pointer.To(data.HTTPSOnly),
+					SiteConfig:              siteConfig,
+					VnetContentShareEnabled: pointer.To(data.VNETContentShareEnabled),
+					PublicNetworkAccess:     pointer.To(data.PublicNetworkAccess),
+				},
+				Tags: pointer.To(data.Tags),
+			}
+
+			if !features.FivePointOh() {
+				// if a user is still using `site_config.public_network_access_enabled` we should be setting `public_network_access` for them
+				publicNetworkAccess := reconcilePNA(metadata)
+				if v := siteEnvelope.Properties.SiteConfig.PublicNetworkAccess; v != nil && *v == helpers.PublicNetworkAccessDisabled {
+					publicNetworkAccess = helpers.PublicNetworkAccessDisabled
+				}
+				// conversely if `public_network_access` has been set it should take precedence, and we should be propagating the value for that to `site_config.public_network_access_enabled`
+				if publicNetworkAccess == helpers.PublicNetworkAccessDisabled {
+					siteEnvelope.Properties.SiteConfig.PublicNetworkAccess = pointer.To(helpers.PublicNetworkAccessDisabled)
+				} else if publicNetworkAccess == helpers.PublicNetworkAccessEnabled {
+					siteEnvelope.Properties.SiteConfig.PublicNetworkAccess = pointer.To(helpers.PublicNetworkAccessEnabled)
+				}
+				siteEnvelope.Properties.PublicNetworkAccess = pointer.To(publicNetworkAccess)
+			}
+
+			if !features.FivePointOh() {
+				if data.ClientCertificateMode != "" {
+					siteEnvelope.Properties.ClientCertMode = pointer.ToEnum[webapps.ClientCertMode](data.ClientCertificateMode)
+				}
+			} else {
+				siteEnvelope.Properties.ClientCertMode = pointer.ToEnum[webapps.ClientCertMode](data.ClientCertificateMode)
+			}
+
+			if data.VirtualNetworkSubnetId != "" {
+				siteEnvelope.Properties.VirtualNetworkSubnetId = pointer.To(data.VirtualNetworkSubnetId)
+			}
+
+			if err = client.CreateOrUpdateThenPoll(ctx, id, siteEnvelope); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			if !data.FtpPublishBasicAuthEnabled {
+				policy := webapps.CsmPublishingCredentialsPoliciesEntity{
+					Properties: &webapps.CsmPublishingCredentialsPoliciesEntityProperties{
+						Allow: data.FtpPublishBasicAuthEnabled,
+					},
+				}
+
+				if _, err := client.UpdateFtpAllowed(ctx, id, policy); err != nil {
+					return fmt.Errorf("updating FTP publish basic authentication policy for %s: %+v", id, err)
+				}
+			}
+
+			if !data.SCMPublishBasicAuthEnabled {
+				policy := webapps.CsmPublishingCredentialsPoliciesEntity{
+					Properties: &webapps.CsmPublishingCredentialsPoliciesEntityProperties{
+						Allow: data.SCMPublishBasicAuthEnabled,
+					},
+				}
+
+				if _, err := client.UpdateScmAllowed(ctx, id, policy); err != nil {
+					return fmt.Errorf("updating FTP publish basic authentication policy for %s: %+v", id, err)
+				}
+			}
+
+			connectionStrings := helpers.ExpandConnectionStrings(data.ConnectionStrings)
+			if connectionStrings.Properties != nil {
+				if _, err := client.UpdateConnectionStrings(ctx, id, *connectionStrings); err != nil {
+					return fmt.Errorf("setting Connection Strings for Linux %s: %+v", id, err)
+				}
+			}
+
+			return nil
+		},
+	}
+}

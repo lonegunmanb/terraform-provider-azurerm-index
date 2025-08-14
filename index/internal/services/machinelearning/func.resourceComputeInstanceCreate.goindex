@@ -3,6 +3,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,7 +21,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceComputeInstanceCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).MachineLearning.MachineLearningComputes
@@ -56,10 +56,6 @@ func resourceComputeInstanceCreate(d *pluginsdk.ResourceData, meta interface{}) 
 		}
 	}
 
-	if !d.Get("node_public_ip_enabled").(bool) && d.Get("subnet_resource_id").(string) == "" {
-		return fmt.Errorf("`subnet_resource_id` must be set if `node_public_ip_enabled` is set to `false`")
-	}
-
 	// NOTE: The 'ComputeResource' struct contains the information
 	// which is related to the parent resource of the instance that is
 	// to be deployed (e.g., the workspace), which is why we need to
@@ -80,23 +76,29 @@ func resourceComputeInstanceCreate(d *pluginsdk.ResourceData, meta interface{}) 
 		return fmt.Errorf("machine learning %s Workspace: model `Location` is nil", id)
 	}
 
+	if model.Properties == nil {
+		return fmt.Errorf("machine learning %s Workspace: model `Properties` is nil", id)
+	}
+	if !d.Get("node_public_ip_enabled").(bool) && d.Get("subnet_resource_id").(string) == "" && !hasManagedNetwork(model) {
+		return fmt.Errorf("`subnet_resource_id` must be set if `node_public_ip_enabled` is set to `false` and the workspace is NOT using a managed network (isolation_mode = \"Disabled\")")
+	}
+
 	parameters := machinelearningcomputes.ComputeResource{
 		Identity: identity,
 		Location: pointer.To(azure.NormalizeLocation(*model.Location)),
 		Tags:     tags.Expand(d.Get("tags").(map[string]interface{})),
 	}
 
-	// NOTE: In 4.0 the 'location' field will be deprecated...
 	props := machinelearningcomputes.ComputeInstance{
 		Properties: &machinelearningcomputes.ComputeInstanceProperties{
-			VMSize:                          utils.String(d.Get("virtual_machine_size").(string)),
+			VMSize:                          pointer.To(d.Get("virtual_machine_size").(string)),
 			Subnet:                          subnet,
 			SshSettings:                     expandComputeSSHSetting(d.Get("ssh").([]interface{})),
 			PersonalComputeInstanceSettings: expandComputePersonalComputeInstanceSetting(d.Get("assign_to_user").([]interface{})),
 			EnableNodePublicIP:              pointer.To(d.Get("node_public_ip_enabled").(bool)),
 		},
-		Description:      utils.String(d.Get("description").(string)),
-		DisableLocalAuth: utils.Bool(!d.Get("local_auth_enabled").(bool)),
+		Description:      pointer.To(d.Get("description").(string)),
+		DisableLocalAuth: pointer.To(!d.Get("local_auth_enabled").(bool)),
 	}
 
 	// NOTE: The 'location' field is not supported for instances, "Compute clusters can be created in

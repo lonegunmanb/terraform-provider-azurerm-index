@@ -1,8 +1,8 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
 import (
+	"context"
 	"fmt"
 	"log"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -13,57 +13,50 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
-	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
 	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func getBasicLogicAppSettings(d *pluginsdk.ResourceData, endpointSuffix string) ([]webapps.NameValuePair, error) {
-	storagePropName := "AzureWebJobsStorage"
-	functionVersionPropName := "FUNCTIONS_EXTENSION_VERSION"
-	contentSharePropName := "WEBSITE_CONTENTSHARE"
-	contentFileConnStringPropName := "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING"
+func getBasicLogicAppSettings(d LogicAppResourceModel, endpointSuffix string) ([]webapps.NameValuePair, error) {
 	appKindPropName := "APP_KIND"
 	appKindPropValue := "workflowApp"
 
-	storageAccount := d.Get("storage_account_name").(string)
-	accountKey := d.Get("storage_account_access_key").(string)
+	storageAccount := d.StorageAccountName
+	accountKey := d.StorageAccountAccessKey
 	storageConnection := fmt.Sprintf(
 		"DefaultEndpointsProtocol=https;AccountName=%s;AccountKey=%s;EndpointSuffix=%s",
 		storageAccount,
 		accountKey,
 		endpointSuffix,
 	)
-	functionVersion := d.Get("version").(string)
+	functionVersion := d.Version
 
-	contentShare := strings.ToLower(d.Get("name").(string)) + "-content"
-	if _, ok := d.GetOk("storage_account_share_name"); ok {
-		contentShare = d.Get("storage_account_share_name").(string)
+	contentShare := strings.ToLower(d.Name) + "-content"
+	if d.StorageAccountShareName != "" {
+		contentShare = d.StorageAccountShareName
 	}
 
 	basicSettings := []webapps.NameValuePair{
-		{Name: &storagePropName, Value: &storageConnection},
-		{Name: &functionVersionPropName, Value: &functionVersion},
+		{Name: &storageAppSettingName, Value: &storageConnection},
+		{Name: &functionVersionAppSettingName, Value: &functionVersion},
 		{Name: &appKindPropName, Value: &appKindPropValue},
-		{Name: &contentSharePropName, Value: &contentShare},
-		{Name: &contentFileConnStringPropName, Value: &storageConnection},
+		{Name: &contentShareAppSettingName, Value: &contentShare},
+		{Name: &contentFileConnStringAppSettingName, Value: &storageConnection},
 	}
 
-	useExtensionBundle := d.Get("use_extension_bundle").(bool)
-	if useExtensionBundle {
+	if d.UseExtensionBundle {
 		extensionBundlePropName := "AzureFunctionsJobHost__extensionBundle__id"
 		extensionBundleName := "Microsoft.Azure.Functions.ExtensionBundle.Workflows"
 		extensionBundleVersionPropName := "AzureFunctionsJobHost__extensionBundle__version"
-		extensionBundleVersion := d.Get("bundle_version").(string)
+		extensionBundleVersion := d.BundleVersion
 
 		if extensionBundleVersion == "" {
 			return nil, fmt.Errorf(

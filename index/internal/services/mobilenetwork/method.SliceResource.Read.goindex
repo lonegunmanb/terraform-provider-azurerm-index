@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/mobilenetwork"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mobilenetwork/2022-11-01/slice"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -46,11 +47,14 @@ func (r SliceResource) Read() sdk.ResourceFunc {
 					state.Description = *model.Properties.Description
 				}
 
-				state.SingleNetworkSliceSelectionAssistanceInformation = flattenSingleNetworkSliceSelectionAssistanceInformationResourceModel(model.Properties.Snssai)
-
-				if model.Tags != nil {
-					state.Tags = *model.Tags
+				if !features.FivePointOh() {
+					state.SingleNetworkSliceSelectionAssistanceInformation = flattenSingleNetworkSliceSelectionAssistanceInformationResourceModel(model.Properties.Snssai)
 				}
+				state.SliceServiceType = model.Properties.Snssai.Sst
+				if model.Properties.Snssai.Sd != nil {
+					state.SliceDifferentiator = *model.Properties.Snssai.Sd
+				}
+				state.Tags = pointer.From(model.Tags)
 			}
 
 			return metadata.Encode(&state)

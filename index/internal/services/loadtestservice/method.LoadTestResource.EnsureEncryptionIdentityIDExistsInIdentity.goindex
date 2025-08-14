@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadtestservice
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/loadtestservice/2022-12-01/loadtests"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r LoadTestResource) EnsureEncryptionIdentityIDExistsInIdentity(model LoadTestResourceSchema) error {
+	if len(model.Encryption) == 1 && len(model.Encryption[0].Identity) == 1 && model.Encryption[0].Identity[0].Type == string(loadtests.TypeUserAssigned) {
+		msg := "when `encryption.identity.type` is set to `UserAssigned`, the `encryption.identity.identity_id` provided must also be specified in the `identity.identity_ids` list"
+		if len(model.Identity) == 0 {
+			return errors.New(msg)
+		}
+
+		existsInIdentity := false
+		for _, id := range model.Identity[0].IdentityIds {
+			if id == model.Encryption[0].Identity[0].IdentityID {
+				existsInIdentity = true
+				break
+			}
+		}
+
+		if !existsInIdentity {
+			return errors.New(msg)
+		}
+	}
+
+	return nil
+}

@@ -15,8 +15,10 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	mgmtGroupValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managementgroup/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
@@ -43,10 +45,16 @@ func resourceEventGridSystemTopicCreateUpdate(d *pluginsdk.ResourceData, meta in
 	systemTopic := systemtopics.SystemTopic{
 		Location: location.Normalize(d.Get("location").(string)),
 		Properties: &systemtopics.SystemTopicProperties{
-			Source:    pointer.To(d.Get("source_arm_resource_id").(string)),
+			Source:    pointer.To(d.Get("source_resource_id").(string)),
 			TopicType: pointer.To(d.Get("topic_type").(string)),
 		},
 		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	if !features.FivePointOh() {
+		if v, ok := d.GetOk("source_arm_resource_id"); ok {
+			systemTopic.Properties.Source = pointer.To(v.(string))
+		}
 	}
 
 	if v, ok := d.GetOk("identity"); ok {

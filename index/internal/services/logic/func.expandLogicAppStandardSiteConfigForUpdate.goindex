@@ -1,0 +1,128 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandLogicAppStandardSiteConfigForUpdate(d []helpers.LogicAppSiteConfig, metadata sdk.ResourceMetaData, existing *webapps.SiteConfig) (*webapps.SiteConfig, error) {
+	siteConfig := &webapps.SiteConfig{}
+	if len(d) == 0 {
+		siteConfig.Cors = &webapps.CorsSettings{
+			AllowedOrigins:     pointer.To(make([]string, 0)),
+			SupportCredentials: pointer.To(false),
+		}
+		return siteConfig, nil
+	}
+
+	if existing != nil {
+		siteConfig = existing
+	}
+
+	config := d[0]
+
+	siteConfig.AlwaysOn = pointer.To(config.AlwaysOn)
+	siteConfig.HTTP20Enabled = pointer.To(config.HTTP2Enabled)
+	siteConfig.FunctionsRuntimeScaleMonitoringEnabled = pointer.To(config.RuntimeScaleMonitoringEnabled)
+	siteConfig.Use32BitWorkerProcess = pointer.To(config.Use32BitWorkerProcess)
+	siteConfig.ScmIPSecurityRestrictionsUseMain = pointer.To(config.SCMUseMainIpRestriction)
+	siteConfig.WebSocketsEnabled = pointer.To(config.WebSocketsEnabled)
+	siteConfig.VnetRouteAllEnabled = pointer.To(config.VNETRouteAllEnabled)
+
+	if metadata.ResourceData.HasChange("site_config.0.linux_fx_version") {
+		siteConfig.LinuxFxVersion = pointer.To(config.LinuxFxVersion)
+	}
+
+	if metadata.ResourceData.HasChange("site_config.0.cors") {
+		siteConfig.Cors = helpers.ExpandCorsSettings(config.Cors)
+	}
+
+	if metadata.ResourceData.HasChange("site_config.0.ip_restriction") {
+		ipr, err := helpers.ExpandIpRestrictions(config.IpRestriction)
+		if err != nil {
+			return nil, err
+		}
+		siteConfig.IPSecurityRestrictions = ipr
+	}
+
+	if metadata.ResourceData.HasChange("site_config.0.scm_ip_restriction") {
+		ipr, err := helpers.ExpandIpRestrictions(config.SCMIPRestriction)
+		if err != nil {
+			return nil, err
+		}
+		siteConfig.ScmIPSecurityRestrictions = ipr
+	}
+
+	if metadata.ResourceData.HasChange("site_config.0.scm_min_tls_version") {
+		siteConfig.ScmMinTlsVersion = pointer.ToEnum[webapps.SupportedTlsVersions](config.SCMMinTLSVersion)
+	}
+
+	if metadata.ResourceData.HasChange("site_config.0.scm_type") {
+		siteConfig.ScmType = pointer.ToEnum[webapps.ScmType](config.SCMType)
+	}
+
+	if metadata.ResourceData.HasChange("site_config.0.min_tls_version") {
+		siteConfig.MinTlsVersion = pointer.ToEnum[webapps.SupportedTlsVersions](config.MinTLSVersion)
+	}
+
+	if metadata.ResourceData.HasChange("site_config.0.ftps_state") {
+		siteConfig.FtpsState = pointer.ToEnum[webapps.FtpsState](config.FTPSState)
+	}
+
+	if len(metadata.ResourceData.GetRawConfig().AsValueMap()["site_config"].AsValueSlice()) > 0 && metadata.ResourceData.GetRawConfig().AsValueMap()["site_config"].AsValueSlice()[0].AsValueMap()["pre_warmed_instance_count"].IsKnown() {
+		siteConfig.PreWarmedInstanceCount = pointer.To(config.PreWarmedInstanceCount)
+	}
+
+	if metadata.ResourceData.HasChange("site_config.0.health_check_path") {
+		siteConfig.HealthCheckPath = pointer.To(config.HealthCheckPath)
+	}
+
+	if len(metadata.ResourceData.GetRawConfig().AsValueMap()["site_config"].AsValueSlice()) > 0 && metadata.ResourceData.GetRawConfig().AsValueMap()["site_config"].AsValueSlice()[0].AsValueMap()["elastic_instance_minimum"].IsKnown() {
+		siteConfig.MinimumElasticInstanceCount = pointer.To(config.ElasticInstanceMinimum)
+	}
+
+	if len(metadata.ResourceData.GetRawConfig().AsValueMap()["site_config"].AsValueSlice()) > 0 && metadata.ResourceData.GetRawConfig().AsValueMap()["site_config"].AsValueSlice()[0].AsValueMap()["app_scale_limit"].IsKnown() {
+		siteConfig.FunctionAppScaleLimit = pointer.To(config.AppScaleLimit)
+	}
+
+	if metadata.ResourceData.HasChange("site_config.0.dotnet_framework_version") {
+		siteConfig.NetFrameworkVersion = pointer.To(config.DotnetFrameworkVersion)
+	}
+
+	if !features.FivePointOh() && metadata.ResourceData.HasChanges("site_config.0.public_network_access_enabled") {
+		siteConfig.PublicNetworkAccess = pointer.To(reconcilePNA(metadata))
+	}
+
+	if metadata.ResourceData.HasChanges("app_settings", "storage_account_name", "storage_account_share_name", "storage_account_access_key", "version") {
+		o, n := metadata.ResourceData.GetChange("app_settings")
+
+		appSettings := make([]webapps.NameValuePair, 0)
+		if existing != nil {
+			appSettings = *existing.AppSettings
+		}
+
+		siteConfig.AppSettings = mergeAppSettings(appSettings, o.(map[string]interface{}), n.(map[string]interface{}), metadata)
+	}
+
+	return siteConfig, nil
+}

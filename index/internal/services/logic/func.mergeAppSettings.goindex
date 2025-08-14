@@ -1,0 +1,105 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func mergeAppSettings(existing []webapps.NameValuePair, old, new map[string]interface{}, metadata sdk.ResourceMetaData) *[]webapps.NameValuePair {
+	f := func(input map[string]interface{}) (result map[string]string) {
+		result = make(map[string]string)
+		for k, v := range input {
+			result[k] = v.(string)
+		}
+
+		return
+	}
+
+	eMap := make(map[string]string)
+	for _, i := range existing {
+		n, v := pointer.From(i.Name), pointer.From(i.Value)
+		eMap[n] = v
+	}
+
+	oMap := f(old)
+	cMap := f(new)
+
+	if metadata.ResourceData.HasChanges("storage_account_name", "storage_account_access_key") {
+		accountName := metadata.ResourceData.Get("storage_account_name").(string)
+		accountAccessKey := metadata.ResourceData.Get("storage_account_access_key").(string)
+		suffix, _ := metadata.Client.Account.Environment.Storage.DomainSuffix()
+
+		eMap[storageAppSettingName] = fmt.Sprintf(storageConnectionStringFmt, accountName, accountAccessKey, *suffix)
+		eMap[contentFileConnStringAppSettingName] = fmt.Sprintf(storageConnectionStringFmt, accountName, accountAccessKey, *suffix)
+	}
+
+	if metadata.ResourceData.HasChange("storage_account_share_name") {
+		n := metadata.ResourceData.Get("storage_account_share_name").(string)
+
+		if n != "" {
+			eMap[contentShareAppSettingName] = n
+		} else {
+			name := metadata.ResourceData.Get("name").(string)
+			eMap[contentShareAppSettingName] = strings.ToLower(name) + "-content"
+		}
+	}
+
+	if metadata.ResourceData.HasChange("version") {
+		eMap[functionVersionAppSettingName] = metadata.ResourceData.Get("version").(string)
+	}
+
+	if metadata.ResourceData.HasChanges("bundle_version", "use_extension_bundle") {
+		if bundleVersion := metadata.ResourceData.Get("bundle_version").(string); bundleVersion != "" {
+			eMap[extensionBundleAppSettingName] = extensionBundleAppSettingValue
+			eMap[extensionBundleVersionAppSettingName] = bundleVersion
+		} else {
+			delete(eMap, extensionBundleAppSettingName)
+		}
+	}
+
+	remove := map[string]string{}
+	addOrUpdate := map[string]string{}
+
+	for k, v := range oMap {
+		if _, ok := cMap[k]; !ok {
+			remove[k] = v
+			break
+		}
+
+		addOrUpdate[k] = v
+	}
+
+	for k, v := range cMap {
+		addOrUpdate[k] = v
+	}
+
+	for k := range remove {
+		delete(eMap, k)
+	}
+
+	for k, v := range addOrUpdate {
+		eMap[k] = v
+	}
+
+	return pointer.To(expandAppSettings(eMap))
+}
