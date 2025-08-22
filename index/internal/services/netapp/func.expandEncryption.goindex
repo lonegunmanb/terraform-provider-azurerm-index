@@ -8,7 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-01-01/netappaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/netappaccounts"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
@@ -31,17 +31,26 @@ func expandEncryption(ctx context.Context, input string, keyVaultsClient *keyVau
 
 	keyId, err := keyVaultParse.ParseOptionallyVersionedNestedKeyID(input)
 	if err != nil {
-		return nil, fmt.Errorf("parsing `key_vault_key_id`: %+v", err)
+		return nil, fmt.Errorf("parsing `key_vault_key_id` %q: %+v", input, err)
 	}
 
-	keyVaultID, err := keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, subscriptionID, keyId.KeyVaultBaseUrl)
-	if err != nil {
-		return nil, fmt.Errorf("retrieving the resource id the key vault at url %q: %s", keyId.KeyVaultBaseUrl, err)
-	}
+	var keyVaultResourceID string
 
-	parsedKeyVaultID, err := commonids.ParseKeyVaultID(pointer.From(keyVaultID))
-	if err != nil {
-		return nil, err
+	// For cross-tenant scenarios: using CrossTenantKeyVaultResourceID
+	if model.FederatedClientID != "" {
+		keyVaultResourceID = model.CrossTenantKeyVaultResourceID
+	} else {
+		// Same-tenant scenario: lookup the key vault ID
+		keyVaultID, err := keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, subscriptionID, keyId.KeyVaultBaseUrl)
+		if err != nil {
+			return nil, fmt.Errorf("retrieving the resource id the key vault at url %q: %s", keyId.KeyVaultBaseUrl, err)
+		}
+
+		if keyVaultID == nil {
+			return nil, fmt.Errorf("keyVaultID is nil for key vault url %q", keyId.KeyVaultBaseUrl)
+		}
+
+		keyVaultResourceID = pointer.From(keyVaultID)
 	}
 
 	encryptionIdentity := &netappaccounts.EncryptionIdentity{}
@@ -49,6 +58,9 @@ func expandEncryption(ctx context.Context, input string, keyVaultsClient *keyVau
 	if model.UserAssignedIdentityID != "" {
 		encryptionIdentity = &netappaccounts.EncryptionIdentity{
 			UserAssignedIdentity: pointer.To(model.UserAssignedIdentityID),
+		}
+		if model.FederatedClientID != "" {
+			encryptionIdentity.FederatedClientId = pointer.To(model.FederatedClientID)
 		}
 	}
 
@@ -58,7 +70,7 @@ func expandEncryption(ctx context.Context, input string, keyVaultsClient *keyVau
 		KeyVaultProperties: &netappaccounts.KeyVaultProperties{
 			KeyName:            keyId.Name,
 			KeyVaultUri:        keyId.KeyVaultBaseUrl,
-			KeyVaultResourceId: pointer.To(parsedKeyVaultID.ID()),
+			KeyVaultResourceId: pointer.To(keyVaultResourceID),
 		},
 	}
 

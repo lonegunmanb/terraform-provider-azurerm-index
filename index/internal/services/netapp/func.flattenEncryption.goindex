@@ -8,7 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-01-01/netappaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/netappaccounts"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
@@ -20,15 +20,20 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
-func flattenEncryption(encryptionProperties *netappaccounts.AccountEncryption) (string, error) {
+func flattenEncryption(encryptionProperties *netappaccounts.AccountEncryption) (string, string, error) {
 	if encryptionProperties == nil || *encryptionProperties.KeySource == netappaccounts.KeySourceMicrosoftPointNetApp {
-		return "", nil
+		return "", "", nil
 	}
 
 	keyVaultKeyId, err := keyVaultParse.NewNestedItemID(encryptionProperties.KeyVaultProperties.KeyVaultUri, keyVaultParse.NestedItemTypeKey, encryptionProperties.KeyVaultProperties.KeyName, "")
 	if err != nil {
-		return "", fmt.Errorf("parsing key vault key id: %+v", err)
+		return "", "", fmt.Errorf("parsing key vault key id: %+v", err)
 	}
 
-	return keyVaultKeyId.VersionlessID(), nil
+	federatedClientID := ""
+	if encryptionProperties.Identity != nil && encryptionProperties.Identity.FederatedClientId != nil {
+		federatedClientID = pointer.From(encryptionProperties.Identity.FederatedClientId)
+	}
+
+	return keyVaultKeyId.VersionlessID(), federatedClientID, nil
 }

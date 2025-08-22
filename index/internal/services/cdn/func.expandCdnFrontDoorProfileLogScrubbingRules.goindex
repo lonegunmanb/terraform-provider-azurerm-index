@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandCdnFrontDoorProfileLogScrubbingRules(input []interface{}) *[]profiles.ProfileScrubbingRules {
+	if len(input) == 0 {
+		return nil
+	}
+
+	scrubbingRules := make([]profiles.ProfileScrubbingRules, 0)
+
+	for _, rule := range input {
+		v := rule.(map[string]interface{})
+
+		item := profiles.ProfileScrubbingRules{
+			MatchVariable:         profiles.ScrubbingRuleEntryMatchVariable(v["match_variable"].(string)),
+			Selector:              nil,
+			SelectorMatchOperator: profiles.ScrubbingRuleEntryMatchOperatorEqualsAny, // EqualsAny is the only valid SelectorMatchOperator for log scrubbing in the Profile API
+			State:                 pointer.To(profiles.ScrubbingRuleEntryStateEnabled),
+		}
+
+		scrubbingRules = append(scrubbingRules, item)
+	}
+
+	return &scrubbingRules
+}
