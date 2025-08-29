@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
@@ -112,36 +113,6 @@ func resourceKeyVault() *pluginsdk.Resource {
 				},
 			},
 
-			// NOTE: To unblock customers where they had previously deployed a key vault with
-			// contacts, but cannot re-deploy the key vault. I am adding support for the contact
-			// field back into the resource for UPDATE ONLY. If this is a new resource and the
-			// contact field is defined in the configuration file it will now throw an error.
-			// This will allow legacy key vaults to continue to work as the previously have
-			// and enforces our new model of separating out the data plane call into its
-			// own resource (e.g., contacts)...
-			"contact": {
-				Type:       pluginsdk.TypeSet,
-				Optional:   true,
-				Computed:   true,
-				Deprecated: "As the `contact` property requires reaching out to the dataplane, to better support private endpoints and keyvaults with public network access disabled, new key vaults with the `contact` field defined in the configuration file will now be required to use the `azurerm_key_vault_certificate_contacts` resource instead of the exposed `contact` field in the key vault resource itself.",
-				Elem: &pluginsdk.Resource{
-					Schema: map[string]*pluginsdk.Schema{
-						"email": {
-							Type:     pluginsdk.TypeString,
-							Required: true,
-						},
-						"name": {
-							Type:     pluginsdk.TypeString,
-							Optional: true,
-						},
-						"phone": {
-							Type:     pluginsdk.TypeString,
-							Optional: true,
-						},
-					},
-				},
-			},
-
 			"enabled_for_deployment": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
@@ -157,8 +128,7 @@ func resourceKeyVault() *pluginsdk.Resource {
 				Optional: true,
 			},
 
-			// TODO 4.0: change this from enable_* to *_enabled
-			"enable_rbac_authorization": {
+			"rbac_authorization_enabled": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
 			},
@@ -234,6 +204,53 @@ func resourceKeyVault() *pluginsdk.Resource {
 				Computed: true,
 			},
 		},
+	}
+
+	if !features.FivePointOh() {
+		resource.Schema["rbac_authorization_enabled"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeBool,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"enable_rbac_authorization"},
+		}
+
+		resource.Schema["enable_rbac_authorization"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeBool,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"rbac_authorization_enabled"},
+			Deprecated:    "This property has been renamed to `rbac_authorization_enabled` and will be removed in v5.0 of the provider",
+		}
+
+		// NOTE: To unblock customers where they had previously deployed a key vault with
+		// contacts, but cannot re-deploy the key vault. I am adding support for the contact
+		// field back into the resource for UPDATE ONLY. If this is a new resource and the
+		// contact field is defined in the configuration file it will now throw an error.
+		// This will allow legacy key vaults to continue to work as the previously have
+		// and enforces our new model of separating out the data plane call into its
+		// own resource (e.g., contacts)...
+		resource.Schema["contact"] = &pluginsdk.Schema{
+			Type:       pluginsdk.TypeSet,
+			Optional:   true,
+			Computed:   true,
+			Deprecated: "As the `contact` property uses a data plane API, to better support private endpoints and key vaults with public network access disabled, new key vaults with the `contact` field defined in the configuration file will now be required to use the `azurerm_key_vault_certificate_contacts` resource instead of the exposed `contact` field in the key vault resource itself. This field will be removed in v5.0 of the provider.",
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"email": {
+						Type:     pluginsdk.TypeString,
+						Required: true,
+					},
+					"name": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+					"phone": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+					},
+				},
+			},
+		}
 	}
 
 	return resource

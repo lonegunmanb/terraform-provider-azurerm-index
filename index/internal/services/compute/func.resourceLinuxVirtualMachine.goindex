@@ -18,13 +18,14 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/custompoller"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -61,10 +62,13 @@ func resourceLinuxVirtualMachine() *pluginsdk.Resource {
 
 			"location": commonschema.Location(),
 
-			// Required
 			"admin_username": {
-				Type:         pluginsdk.TypeString,
-				Required:     true,
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ExactlyOneOf: []string{
+					"admin_username",
+					"os_managed_disk_id",
+				},
 				ForceNew:     true,
 				ValidateFunc: computeValidate.LinuxAdminUsername,
 			},
@@ -81,13 +85,29 @@ func resourceLinuxVirtualMachine() *pluginsdk.Resource {
 
 			"os_disk": virtualMachineOSDiskSchema(),
 
+			"os_managed_disk_id": {
+				// Note: O+C as this is the same value as `os_disk.0.id` - which gains a value from implicit
+				// disk creation with a VM when an existing disk is not specified here. This is a top-level property
+				// to enable schema validation to guard against any values for `OsProfile` being set, as these are
+				// incompatible with specifying an existing disk. i.e. the OsProfile becomes unmanageable.
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ForceNew:     true,
+				ValidateFunc: commonids.ValidateManagedDiskID,
+				ExactlyOneOf: []string{
+					"os_managed_disk_id",
+					"source_image_id",
+					"source_image_reference",
+				},
+			},
+
 			"size": {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
 				ValidateFunc: validation.StringIsNotEmpty,
 			},
 
-			// Optional
 			"additional_capabilities": virtualMachineAdditionalCapabilitiesSchema(),
 
 			"admin_password": {
@@ -97,14 +117,17 @@ func resourceLinuxVirtualMachine() *pluginsdk.Resource {
 				Sensitive:        true,
 				DiffSuppressFunc: adminPasswordDiffSuppressFunc,
 				ValidateFunc:     computeValidate.LinuxAdminPassword,
+				ConflictsWith: []string{
+					"os_managed_disk_id",
+				},
 			},
 
-			"admin_ssh_key": SSHKeysSchema(true),
+			"admin_ssh_key": SSHKeysSchemaVM(),
 
 			"allow_extension_operations": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
-				Default:  true,
+				Computed: true,
 			},
 
 			"availability_set_id": {
@@ -128,6 +151,9 @@ func resourceLinuxVirtualMachine() *pluginsdk.Resource {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
 				Default:  false,
+				ConflictsWith: []string{
+					"os_managed_disk_id",
+				},
 			},
 
 			"capacity_reservation_group_id": {
@@ -152,9 +178,21 @@ func resourceLinuxVirtualMachine() *pluginsdk.Resource {
 				ForceNew: true,
 
 				ValidateFunc: computeValidate.LinuxComputerNameFull,
+				ConflictsWith: []string{
+					"os_managed_disk_id",
+				},
 			},
 
-			"custom_data": base64.OptionalSchema(true),
+			"custom_data": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				Sensitive:    true,
+				ValidateFunc: validation.StringIsBase64,
+				ConflictsWith: []string{
+					"os_managed_disk_id",
+				},
+			},
 
 			"dedicated_host_id": {
 				Type:         pluginsdk.TypeString,
@@ -181,10 +219,11 @@ func resourceLinuxVirtualMachine() *pluginsdk.Resource {
 			},
 
 			"disable_password_authentication": {
+				// O+C OsProfile vs os_managed_disk_id
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
 				ForceNew: true,
-				Default:  true,
+				Computed: true,
 			},
 
 			"disk_controller_type": {
@@ -265,30 +304,41 @@ func resourceLinuxVirtualMachine() *pluginsdk.Resource {
 			},
 
 			"provision_vm_agent": {
+				// O+C due to incompatibility between specifying `os_managed_disk_id` and sending OsProfile in the create/update requests
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
-				Default:  true,
+				Computed: true,
 				ForceNew: true,
+				ConflictsWith: []string{
+					"os_managed_disk_id",
+				},
 			},
 
 			"patch_mode": {
 				Type:     pluginsdk.TypeString,
 				Optional: true,
+				Computed: true,
 				ValidateFunc: validation.StringInSlice([]string{
 					string(virtualmachines.LinuxVMGuestPatchModeAutomaticByPlatform),
 					string(virtualmachines.LinuxVMGuestPatchModeImageDefault),
 				}, false),
-				Default: string(virtualmachines.LinuxVMGuestPatchModeImageDefault),
+				ConflictsWith: []string{
+					"os_managed_disk_id",
+				},
 			},
 
 			"patch_assessment_mode": {
+				// O+C due to incompatibility between `os_managed_disk_id` and sending `OsProfile` in create/update
 				Type:     pluginsdk.TypeString,
 				Optional: true,
-				Default:  string(virtualmachines.LinuxPatchAssessmentModeImageDefault),
+				Computed: true,
 				ValidateFunc: validation.StringInSlice([]string{
 					string(virtualmachines.LinuxPatchAssessmentModeAutomaticByPlatform),
 					string(virtualmachines.LinuxPatchAssessmentModeImageDefault),
 				}, false),
+				ConflictsWith: []string{
+					"os_managed_disk_id",
+				},
 			},
 
 			"proximity_placement_group_id": {
@@ -311,6 +361,9 @@ func resourceLinuxVirtualMachine() *pluginsdk.Resource {
 					string(virtualmachines.LinuxVMGuestPatchAutomaticByPlatformRebootSettingIfRequired),
 					string(virtualmachines.LinuxVMGuestPatchAutomaticByPlatformRebootSettingNever),
 				}, false),
+				ConflictsWith: []string{
+					"os_managed_disk_id",
+				},
 			},
 
 			"secret": linuxSecretSchema(),
@@ -335,12 +388,13 @@ func resourceLinuxVirtualMachine() *pluginsdk.Resource {
 					computeValidate.SharedGalleryImageVersionID,
 				),
 				ExactlyOneOf: []string{
+					"os_managed_disk_id",
 					"source_image_id",
 					"source_image_reference",
 				},
 			},
 
-			"source_image_reference": sourceImageReferenceSchema(true),
+			"source_image_reference": sourceImageReferenceSchemaVM(),
 
 			"virtual_machine_scale_set_id": {
 				Type:     pluginsdk.TypeString,

@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
@@ -31,7 +32,6 @@ import (
 )
 func resourceKeyVaultCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
-	managementClient := meta.(*clients.Client).KeyVault.ManagementClient // TODO: Remove in 4.0
 	client := meta.(*clients.Client).KeyVault.VaultsClient
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
@@ -45,13 +45,12 @@ func resourceKeyVaultCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	defer locks.UnlockByName(id.VaultName, keyVaultResourceName)
 
 	isPublic := d.Get("public_network_access_enabled").(bool)
-	contactRaw := d.Get("contact").(*pluginsdk.Set).List()
-	contactCount := len(contactRaw)
-
-	if contactCount > 0 {
-		// In v4.0 providers block creation of all key vaults if the configuration
-		// file contains a 'contact' field...
-		return fmt.Errorf("%s: `contact` field is not supported for new key vaults", id)
+	if !features.FivePointOh() {
+		if len(d.Get("contact").(*pluginsdk.Set).List()) > 0 {
+			// In v4.0, the provider will not allow creating key vaults if the configuration
+			// file contains a 'contact' field...
+			return fmt.Errorf("%s: `contact` field is not supported for new key vaults", id)
+		}
 	}
 
 	// check for the presence of an existing, live one which should be imported into the state
@@ -91,7 +90,6 @@ func resourceKeyVaultCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	enabledForDeployment := d.Get("enabled_for_deployment").(bool)
 	enabledForDiskEncryption := d.Get("enabled_for_disk_encryption").(bool)
 	enabledForTemplateDeployment := d.Get("enabled_for_template_deployment").(bool)
-	enableRbacAuthorization := d.Get("enable_rbac_authorization").(bool)
 	t := d.Get("tags").(map[string]interface{})
 
 	policies := d.Get("access_policy").([]interface{})
@@ -114,25 +112,34 @@ func resourceKeyVaultCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 			EnabledForDeployment:         &enabledForDeployment,
 			EnabledForDiskEncryption:     &enabledForDiskEncryption,
 			EnabledForTemplateDeployment: &enabledForTemplateDeployment,
-			EnableRbacAuthorization:      &enableRbacAuthorization,
 			NetworkAcls:                  networkAcls,
 
 			// @tombuildsstuff: as of 2020-12-15 this is now defaulted on, and appears to be so in all regions
 			// This has been confirmed in Azure Public and Azure China - but I couldn't find any more
 			// documentation with further details
-			EnableSoftDelete: utils.Bool(true),
+			EnableSoftDelete: pointer.To(true),
 		},
 		Tags: tags.Expand(t),
 	}
 
+	if v, ok := d.GetOk("rbac_authorization_enabled"); ok {
+		parameters.Properties.EnableRbacAuthorization = pointer.To(v.(bool))
+	}
+
+	if !features.FivePointOh() {
+		if v, ok := d.GetOk("enable_rbac_authorization"); ok {
+			parameters.Properties.EnableRbacAuthorization = pointer.To(v.(bool))
+		}
+	}
+
 	if isPublic {
-		parameters.Properties.PublicNetworkAccess = utils.String("Enabled")
+		parameters.Properties.PublicNetworkAccess = pointer.To("Enabled")
 	} else {
-		parameters.Properties.PublicNetworkAccess = utils.String("Disabled")
+		parameters.Properties.PublicNetworkAccess = pointer.To("Disabled")
 	}
 
 	if purgeProtectionEnabled := d.Get("purge_protection_enabled").(bool); purgeProtectionEnabled {
-		parameters.Properties.EnablePurgeProtection = utils.Bool(purgeProtectionEnabled)
+		parameters.Properties.EnablePurgeProtection = pointer.To(purgeProtectionEnabled)
 	}
 
 	if v := d.Get("soft_delete_retention_days"); v != 90 {
@@ -215,17 +222,6 @@ func resourceKeyVaultCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 
 		if _, err := stateConf.WaitForStateContext(ctx); err != nil {
 			return fmt.Errorf("waiting for %s to become available: %s", id, err)
-		}
-	}
-
-	// Only call the data plane if the 'contact' field has been defined...
-	if contactCount > 0 {
-		contacts := dataplane.Contacts{
-			ContactList: expandKeyVaultCertificateContactList(contactRaw),
-		}
-
-		if _, err := managementClient.SetCertificateContacts(ctx, vaultUri, contacts); err != nil {
-			return fmt.Errorf("failed to set Contacts for %s: %+v", id, err)
 		}
 	}
 

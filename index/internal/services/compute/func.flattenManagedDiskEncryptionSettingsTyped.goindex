@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenManagedDiskEncryptionSettingsTyped(encryptionSettings *disks.EncryptionSettingsCollection) []EncryptionSetting {
+	if encryptionSettings == nil {
+		return []EncryptionSetting{}
+	}
+
+	diskEncryptionKeys := make([]DiskEncryptionKey, 0)
+	keyEncryptionKeys := make([]KeyEncryptionKey, 0)
+	if encryptionSettings.EncryptionSettings != nil && len(*encryptionSettings.EncryptionSettings) > 0 {
+		settings := (*encryptionSettings.EncryptionSettings)[0]
+
+		if key := settings.DiskEncryptionKey; key != nil {
+			secretUrl := ""
+			if key.SecretURL != "" {
+				secretUrl = key.SecretURL
+			}
+
+			sourceVaultId := ""
+			if key.SourceVault.Id != nil {
+				sourceVaultId = *key.SourceVault.Id
+			}
+
+			diskEncryptionKeys = append(diskEncryptionKeys, DiskEncryptionKey{
+				SecretURL:     secretUrl,
+				SourceVaultID: sourceVaultId,
+			})
+		}
+
+		if key := settings.KeyEncryptionKey; key != nil {
+			keyUrl := ""
+			if key.KeyURL != "" {
+				keyUrl = key.KeyURL
+			}
+
+			sourceVaultId := ""
+			if key.SourceVault.Id != nil {
+				sourceVaultId = *key.SourceVault.Id
+			}
+
+			keyEncryptionKeys = append(keyEncryptionKeys, KeyEncryptionKey{
+				KeyURL:        keyUrl,
+				SourceVaultID: sourceVaultId,
+			})
+		}
+
+		return []EncryptionSetting{
+			{
+				DiskEncryptionKeys: diskEncryptionKeys,
+				KeyEncryptionKeys:  keyEncryptionKeys,
+			},
+		}
+	}
+
+	return []EncryptionSetting{}
+}

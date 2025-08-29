@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/migration
+import (
+	"context"
+	"log"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (s KustoAttachedClusterV1ToV2) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		// This migration fixes #27580, which prevented provider upgrades from <4.0.0 to >=4.0.0.
+		// If the current state file contains the `language_extensions` argument as a list, we'll migrate it to the expected
+		// block format. Otherwise, do nothing.
+		if extensionsRaw, ok := rawState["language_extensions"]; ok {
+			if extensions, ok := extensionsRaw.([]interface{}); ok && len(extensions) > 0 {
+				if _, ok := extensions[0].(map[string]interface{}); ok {
+					return rawState, nil
+				}
+
+				log.Print("[DEBUG] Migrating `language_extensions` to the block format")
+				newExtensions := make([]map[string]interface{}, 0)
+
+				for _, v := range extensions {
+					switch v {
+					case "R":
+						newExtensions = append(newExtensions, map[string]interface{}{
+							"name":  "R",
+							"image": "R",
+						})
+					case "PYTHON":
+						newExtensions = append(newExtensions, map[string]interface{}{
+							"name":  "PYTHON",
+							"image": "Python3_6_5",
+						})
+					case "PYTHON_3.10.8":
+						newExtensions = append(newExtensions, map[string]interface{}{
+							"name":  "PYTHON",
+							"image": "Python3_10_8",
+						})
+					}
+				}
+
+				rawState["language_extensions"] = newExtensions
+			}
+		}
+
+		return rawState, nil
+	}
+}

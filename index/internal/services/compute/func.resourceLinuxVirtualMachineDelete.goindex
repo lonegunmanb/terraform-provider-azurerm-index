@@ -18,13 +18,14 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/custompoller"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -100,6 +101,26 @@ func resourceLinuxVirtualMachineDelete(d *pluginsdk.ResourceData, meta interface
 		}
 	} else {
 		log.Printf("[DEBUG] Skipping Deleting OS Disk from Linux %s", id)
+		// Wait for the Disk to be no longer `Attached` so we know it's released and free to be attached to any subsequent VM etc
+		disksClient := meta.(*clients.Client).Compute.DisksClient
+		managedDiskId := ""
+		if props := existing.Model.Properties; props != nil && props.StorageProfile != nil && props.StorageProfile.OsDisk != nil {
+			if disk := props.StorageProfile.OsDisk.ManagedDisk; disk != nil && disk.Id != nil {
+				managedDiskId = *disk.Id
+			}
+		}
+		if managedDiskId != "" {
+			diskId, err := commonids.ParseManagedDiskID(managedDiskId)
+			if err != nil {
+				return err
+			}
+
+			pollerType := custompoller.NewManagedDiskDetachedPoller(disksClient, *diskId, *id)
+			poller := pollers.NewPoller(pollerType, 10*time.Second, pollers.DefaultNumberOfDroppedConnectionsToAllow)
+			if err := poller.PollUntilDone(ctx); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Need to add a get and a state wait to avoid bug in network API where the attached disk(s) are not actually deleted
