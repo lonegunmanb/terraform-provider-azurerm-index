@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/sdk
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/framework/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+)
+func (r *FrameworkResourceWrapper) SetIdentityOnCreate(ctx context.Context, response *resource.CreateResponse) {
+	if id, idType := r.FrameworkWrappedResource.Identity(); id != nil {
+		parser := resourceids.NewParserFromResourceIdType(id)
+		idVal := ""
+		response.State.GetAttribute(ctx, path.Root("id"), &idVal)
+		parsed, err := parser.Parse(idVal, true)
+		if err != nil {
+			response.Diagnostics.AddError("parsing resource ID: %s", err.Error())
+		}
+
+		segments := id.Segments()
+		numSegments := len(segments)
+		for idx, segment := range segments {
+			if segmentTypeSupported(segment.Type) {
+				name := segmentName(segment, idType, numSegments, idx)
+
+				field, ok := parsed.Parsed[segment.Name]
+				if !ok {
+					response.Diagnostics.AddError("setting resource identity", fmt.Sprintf("field `%s` was not found in the parsed resource ID %s", name, id))
+					return
+				}
+
+				response.Identity.SetAttribute(ctx, path.Root(name), basetypes.NewStringValue(field))
+			}
+		}
+	}
+}

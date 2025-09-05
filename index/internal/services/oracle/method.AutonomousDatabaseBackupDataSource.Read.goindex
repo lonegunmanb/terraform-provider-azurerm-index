@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-03-01/autonomousdatabasebackups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-03-01/autonomousdatabases"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (a AutonomousDatabaseBackupDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 10 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Oracle.OracleClient.AutonomousDatabaseBackups
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			state := AutonomousDatabaseBackupDataModel{}
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			parsedAdbsId, err := autonomousdatabases.ParseAutonomousDatabaseID(state.AutonomousDatabaseId)
+			if err != nil {
+				return err
+			}
+
+			dbId := autonomousdatabases.NewAutonomousDatabaseID(subscriptionId, parsedAdbsId.ResourceGroupName, parsedAdbsId.AutonomousDatabaseName)
+
+			id := autonomousdatabasebackups.NewAutonomousDatabaseBackupID(subscriptionId, parsedAdbsId.ResourceGroupName, parsedAdbsId.AutonomousDatabaseName, state.Name)
+
+			resp, err := getBackupFromOCI(ctx, client, dbId, id)
+			if err != nil {
+				return fmt.Errorf("retrieving backup: %+v", err)
+			}
+
+			if resp != nil {
+				state.Id = pointer.From(resp.Id)
+				if props := resp.Properties; props != nil {
+					state.DisplayName = pointer.From(props.DisplayName)
+					state.RetentionPeriodInDays = pointer.From(props.RetentionPeriodInDays)
+					state.AutonomousDatabaseOcid = pointer.From(props.AutonomousDatabaseOcid)
+					state.AutonomousDatabaseBackupOcid = pointer.From(props.Ocid)
+					state.Type = pointer.FromEnum(props.BackupType)
+					state.DatabaseVersion = pointer.From(props.DbVersion)
+					state.BackupSizeInTbs = pointer.From(props.DatabaseSizeInTbs)
+					state.Automatic = pointer.From(props.IsAutomatic)
+					state.Restorable = pointer.From(props.IsRestorable)
+					state.LifecycleDetails = pointer.From(props.LifecycleDetails)
+					state.LifecycleState = pointer.FromEnum(props.LifecycleState)
+					state.ProvisioningState = pointer.FromEnum(props.ProvisioningState)
+					state.TimeAvailableTil = pointer.From(props.TimeAvailableTil)
+					state.TimeEnded = pointer.From(props.TimeEnded)
+					state.TimeStarted = pointer.From(props.TimeStarted)
+				}
+			}
+
+			metadata.SetID(id)
+			return metadata.Encode(&state)
+		},
+	}
+}

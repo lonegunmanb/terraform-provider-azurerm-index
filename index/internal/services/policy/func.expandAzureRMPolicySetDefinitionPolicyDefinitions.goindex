@@ -23,10 +23,10 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func expandAzureRMPolicySetDefinitionPolicyDefinitions(input []interface{}) ([]policysetdefinitions.PolicyDefinitionReference, error) {
+func expandAzureRMPolicySetDefinitionPolicyDefinitions(input []interface{}, resourceData *pluginsdk.ResourceData) ([]policysetdefinitions.PolicyDefinitionReference, error) {
 	result := make([]policysetdefinitions.PolicyDefinitionReference, 0)
 
-	for _, item := range input {
+	for idx, item := range input {
 		v := item.(map[string]interface{})
 
 		var parameters map[string]policysetdefinitions.ParameterValuesValue
@@ -46,7 +46,21 @@ func expandAzureRMPolicySetDefinitionPolicyDefinitions(input []interface{}) ([]p
 
 		// The API returns an error if we send an empty string
 		if version := v["version"].(string); version != "" {
-			reference.DefinitionVersion = pointer.To(v["version"].(string))
+			path := fmt.Sprintf("policy_definition_reference.%d.version", idx)
+
+			// We need to check the version value using RawConfig due to how Terraform manages blocks with computed nested items.
+			// E.g. in a list of 3 `policy_definition_reference` blocks, if the middle (index 1) block is removed
+			// the `version` argument contains the value from state as it's considered unchanged. However, due to the "shifted"
+			// indexes, the `version` previously computed/returned by Azure may be incorrect for the `policy_definition_id`
+			// it is now associated with, leading to a 400 Bad Request error from Azure.
+			rawVersion, diags := resourceData.GetRawConfigAt(sdk.ConstructCtyPath(path))
+			if diags.HasError() {
+				return nil, fmt.Errorf("retrieving value at path `%s`: %+v", path, diags)
+			}
+
+			if !rawVersion.IsNull() {
+				reference.DefinitionVersion = pointer.To(v["version"].(string))
+			}
 		}
 
 		result = append(result, reference)

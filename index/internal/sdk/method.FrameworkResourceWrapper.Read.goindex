@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/sdk
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/framework/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+)
+func (r *FrameworkResourceWrapper) Read(ctx context.Context, request resource.ReadRequest, response *resource.ReadResponse) {
+	customTimeouts := timeouts.Value{}
+	response.Diagnostics.Append(request.State.GetAttribute(ctx, path.Root("timeouts"), &customTimeouts)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	readTimeout, diags := customTimeouts.Read(ctx, r.ResourceMetadata.TimeoutRead)
+	if diags.HasError() {
+		response.Diagnostics.Append(diags...)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	defer cancel()
+
+	state := r.FrameworkWrappedResource.ModelObject()
+
+	r.ResourceMetadata.DecodeRead(ctx, request, response, state)
+
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	r.FrameworkWrappedResource.Read(ctx, request, response, r.ResourceMetadata, state)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	r.ResourceMetadata.EncodeRead(ctx, response, state)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	r.SetIdentityOnRead(ctx, response)
+}

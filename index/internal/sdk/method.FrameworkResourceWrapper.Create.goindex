@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/sdk
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/framework/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+)
+func (r *FrameworkResourceWrapper) Create(ctx context.Context, request resource.CreateRequest, response *resource.CreateResponse) {
+	customTimeouts := timeouts.Value{}
+	response.Diagnostics.Append(request.Config.GetAttribute(ctx, path.Root("timeouts"), &customTimeouts)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	createTimeout, diags := customTimeouts.Create(ctx, r.ResourceMetadata.TimeoutCreate)
+	if diags.HasError() {
+		response.Diagnostics.Append(diags...)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, createTimeout)
+	defer cancel()
+	model := r.FrameworkWrappedResource.ModelObject()
+
+	r.ResourceMetadata.DecodeCreate(ctx, request, response, model)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	r.FrameworkWrappedResource.Create(ctx, request, response, r.ResourceMetadata, model)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	r.ResourceMetadata.EncodeCreate(ctx, response, model)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	// Set the identity attributes on the response based on the resource ID encoded in the previous step.
+	r.SetIdentityOnCreate(ctx, response)
+}

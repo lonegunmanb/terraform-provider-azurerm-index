@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/templatehelpers
+import (
+	"fmt"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"text/template"
+
+	"github.com/iancoleman/strcase"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+)
+func NewIDCreateFormatter(idType []string, idSegments []string, prefix string) string {
+	if len(idType) != 2 {
+		return "// TODO - ID Type provided to scaff tool did not match the expected format"
+	}
+
+	f := "%s.New%s(%s)"
+	out := make([]string, 0)
+	out = append(out, idSegments...)
+
+	if slices.Contains(out, "SubscriptionId") {
+		f = "%s.New%s(metadata.Client.Account.SubscriptionId, %s)"
+		out = slices.Delete(out, slices.Index(out, "SubscriptionId"), 1)
+		out = out[:len(out)-1]
+	}
+
+	if slices.Contains(out, "ResourceGroup") {
+		idx := slices.Index(out, "ResourceGroup")
+		out = slices.Replace(out, idx, idx, "ResourceGroupName")
+	}
+
+	for i, v := range out {
+		out = slices.Replace(out, i, i, fmt.Sprintf("%s.%s.ValueString()", prefix, v))
+	}
+
+	return fmt.Sprintf(f, idType[0], IdToID(idType[1]), strings.Join(out, ", "))
+}

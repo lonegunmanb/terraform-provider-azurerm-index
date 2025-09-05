@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-03-01/autonomousdatabasebackups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-03-01/autonomousdatabases"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r AutonomousDatabaseBackupResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Oracle.OracleClient.AutonomousDatabaseBackups
+
+			id, err := autonomousdatabasebackups.ParseAutonomousDatabaseBackupID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			adbId := autonomousdatabases.NewAutonomousDatabaseID(
+				id.SubscriptionId,
+				id.ResourceGroupName,
+				id.AutonomousDatabaseName,
+			)
+			backupId := autonomousdatabasebackups.NewAutonomousDatabaseBackupID(id.SubscriptionId, id.ResourceGroupName, id.AutonomousDatabaseName, id.AutonomousDatabaseBackupName)
+
+			backup, err := getBackupFromOCI(ctx, client, adbId, backupId)
+			if err != nil {
+				return fmt.Errorf("retrieving backup: %+v", err)
+			}
+
+			if backup == nil {
+				err := metadata.MarkAsGone(id)
+				if err != nil {
+					return err
+				}
+				return nil
+			}
+
+			state := AutonomousDatabaseBackupResourceModel{
+				Name:                 id.AutonomousDatabaseBackupName,
+				AutonomousDatabaseId: adbId.ID(),
+			}
+
+			if props := backup.Properties; props != nil {
+				state.RetentionPeriodInDays = pointer.From(props.RetentionPeriodInDays)
+				state.Type = pointer.FromEnum(props.BackupType)
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

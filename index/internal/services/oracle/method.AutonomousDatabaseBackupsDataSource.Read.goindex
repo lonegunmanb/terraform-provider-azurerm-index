@@ -1,0 +1,72 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-03-01/autonomousdatabasebackups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-03-01/autonomousdatabases"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (a AutonomousDatabaseBackupsDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 10 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Oracle.OracleClient.AutonomousDatabaseBackups
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			state := AutonomousDatabaseBackupsListDataModel{
+				AutonomousDatabaseBackups: make([]AutonomousDatabaseBackupsDataModel, 0),
+			}
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			parsedAdbsId, err := autonomousdatabases.ParseAutonomousDatabaseID(state.AutonomousDatabaseId)
+			if err != nil {
+				return err
+			}
+			id := autonomousdatabasebackups.NewAutonomousDatabaseID(subscriptionId, parsedAdbsId.ResourceGroupName, parsedAdbsId.AutonomousDatabaseName)
+
+			resp, err := client.ListByParent(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				for _, element := range *model {
+					if props := element.Properties; props != nil {
+						backup := AutonomousDatabaseBackupsDataModel{
+							Id:                           pointer.From(element.Id),
+							DisplayName:                  pointer.From(props.DisplayName),
+							RetentionPeriodInDays:        pointer.From(props.RetentionPeriodInDays),
+							AutonomousDatabaseOcid:       pointer.From(props.AutonomousDatabaseOcid),
+							AutonomousDatabaseBackupOcid: pointer.From(props.Ocid),
+							Type:                         pointer.FromEnum(props.BackupType),
+							DatabaseVersion:              pointer.From(props.DbVersion),
+							BackupSizeInTbs:              pointer.From(props.DatabaseSizeInTbs),
+							Automatic:                    pointer.From(props.IsAutomatic),
+							Restorable:                   pointer.From(props.IsRestorable),
+							LifecycleDetails:             pointer.From(props.LifecycleDetails),
+							LifecycleState:               pointer.FromEnum(props.LifecycleState),
+							ProvisioningState:            pointer.FromEnum(props.ProvisioningState),
+							TimeAvailableTil:             pointer.From(props.TimeAvailableTil),
+							TimeEnded:                    pointer.From(props.TimeEnded),
+							TimeStarted:                  pointer.From(props.TimeStarted),
+						}
+						state.AutonomousDatabaseBackups = append(state.AutonomousDatabaseBackups, backup)
+					}
+				}
+			}
+
+			metadata.SetID(id)
+			return metadata.Encode(&state)
+		},
+	}
+}

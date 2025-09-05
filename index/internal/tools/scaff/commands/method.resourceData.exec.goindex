@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/scaff/commands
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"strings"
+	"text/template"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/templatehelpers"
+	"github.com/mitchellh/cli"
+)
+func (d *resourceData) exec() error {
+	// Generate Resource
+	tpl := template.Must(template.New("resource.gotpl").Funcs(templatehelpers.TplFuncMap).ParseFS(Templatedir, "templates/resource.gotpl"))
+
+	outputPath := fmt.Sprintf(outputResourceFileFmt, d.ServicePackageName, d.Name)
+
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed opening output resource file for writing: %+v", err.Error())
+	}
+	defer func(f *os.File) {
+		err := f.Close()
+		if err != nil {
+			log.Println("failed closing output resource file for writing:", err.Error())
+			os.Exit(3)
+		}
+	}(f)
+
+	if err := tpl.Execute(f, d); err != nil {
+		return fmt.Errorf("failed writing output resource file (%s): %s", outputPath, err.Error())
+	}
+
+	if err := templatehelpers.GoImports(outputPath); err != nil {
+		return err
+	}
+
+	// Generate Resource Model(s)
+	tpl = template.Must(template.New("resource_models.gotpl").Funcs(templatehelpers.TplFuncMap).ParseFS(Templatedir, "templates/resource_models.gotpl"))
+
+	outputPath = fmt.Sprintf(outputModelFileFmt, d.ServicePackageName, d.Name)
+
+	f, err = os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed opening output models file for writing: %+v", err.Error())
+	}
+	defer func(f *os.File) {
+		err := f.Close()
+		if err != nil {
+			log.Println("failed closing output models file for writing:", err.Error())
+			os.Exit(3)
+		}
+	}(f)
+
+	if err := tpl.Execute(f, d); err != nil {
+		return fmt.Errorf("failed writing output models file (%s): %s", outputPath, err.Error())
+	}
+
+	if err := templatehelpers.GoImports(outputPath); err != nil {
+		return err
+	}
+
+	return nil
+}

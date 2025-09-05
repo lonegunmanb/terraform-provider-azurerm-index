@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-03-01/autonomousdatabasebackups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-03-01/autonomousdatabases"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r AutonomousDatabaseBackupResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			if !metadata.ResourceData.HasChange("retention_period_in_days") {
+				return nil
+			}
+			client := metadata.Client.Oracle.OracleClient.AutonomousDatabaseBackups
+
+			id, err := autonomousdatabasebackups.ParseAutonomousDatabaseBackupID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			adbId := autonomousdatabases.NewAutonomousDatabaseID(
+				id.SubscriptionId,
+				id.ResourceGroupName,
+				id.AutonomousDatabaseName,
+			)
+			backupId := autonomousdatabasebackups.NewAutonomousDatabaseBackupID(id.SubscriptionId, id.ResourceGroupName, id.AutonomousDatabaseName, id.AutonomousDatabaseBackupName)
+
+			var model AutonomousDatabaseBackupResourceModel
+			if err = metadata.Decode(&model); err != nil {
+				return fmt.Errorf("retrieving %s: %+v", backupId, err)
+			}
+
+			_, err = getBackupFromOCI(ctx, client, adbId, backupId)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", backupId, err)
+			}
+
+			update := autonomousdatabasebackups.AutonomousDatabaseBackupUpdate{
+				Properties: &autonomousdatabasebackups.AutonomousDatabaseBackupUpdateProperties{},
+			}
+
+			if metadata.ResourceData.HasChange("retention_period_in_days") {
+				update.Properties.RetentionPeriodInDays = &model.RetentionPeriodInDays
+			}
+
+			if err := client.UpdateThenPoll(ctx, *id, update); err != nil {
+				return fmt.Errorf("updating %s: %v", id, err)
+			}
+
+			return nil
+		},
+	}
+}
