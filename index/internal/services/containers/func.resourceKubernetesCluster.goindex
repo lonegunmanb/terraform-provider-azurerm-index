@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2023-11-01-preview/registries"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2025-05-01/agentpools"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2025-05-01/maintenanceconfigurations"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2025-05-01/managedclusters"
@@ -108,6 +109,16 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 				// Once it is GA, an additional logic is needed to handle the uninstallation of network policy.
 				return old.(string) != ""
 			}),
+			func(ctx context.Context, d *schema.ResourceDiff, meta interface{}) error {
+				outboundType := d.Get("network_profile.0.outbound_type").(string)
+				artifactSource := d.Get("bootstrap_profile.0.artifact_source").(string)
+
+				if outboundType == string(managedclusters.OutboundTypeNone) && artifactSource != string(managedclusters.ArtifactSourceCache) {
+					return fmt.Errorf("when `network_profile.0.outbound_type` is set to `none`, `bootstrap_profile.0.artifact_source` must be set to `Cache`")
+				}
+
+				return nil
+			},
 		),
 
 		Timeouts: &pluginsdk.ResourceTimeout{
@@ -671,6 +682,30 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 				},
 			},
 
+			"bootstrap_profile": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				// Note: O+C because the API returns a default value for `bootstrapProfile` when it is omitted in the API request
+				Computed: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"artifact_source": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: validation.StringInSlice(managedclusters.PossibleValuesForArtifactSource(), false),
+							Default:      managedclusters.ArtifactSourceDirect,
+						},
+
+						"container_registry_id": {
+							Type:         pluginsdk.TypeString,
+							Optional:     true,
+							ValidateFunc: registries.ValidateRegistryID,
+						},
+					},
+				},
+			},
+
 			"local_account_disabled": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
@@ -1110,6 +1145,7 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 								string(managedclusters.OutboundTypeUserDefinedRouting),
 								string(managedclusters.OutboundTypeManagedNATGateway),
 								string(managedclusters.OutboundTypeUserAssignedNATGateway),
+								string(managedclusters.OutboundTypeNone),
 							}, false),
 						},
 
