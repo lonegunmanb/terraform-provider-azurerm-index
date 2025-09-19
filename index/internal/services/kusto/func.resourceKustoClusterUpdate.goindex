@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -119,8 +121,34 @@ func resourceKustoClusterUpdate(d *pluginsdk.ResourceData, meta interface{}) err
 		props.EnableDoubleEncryption = pointer.To(d.Get("double_encryption_enabled").(bool))
 	}
 
-	if d.HasChange("language_extensions") {
-		props.LanguageExtensions = expandKustoClusterLanguageExtensionList(d.Get("language_extensions").([]interface{}))
+	if d.HasChange("language_extension") {
+		props.LanguageExtensions = expandKustoClusterLanguageExtensionList(d.Get("language_extension").([]any))
+	}
+
+	if !features.FivePointOh() {
+		if d.HasChange("language_extensions") {
+			props.LanguageExtensions = expandKustoClusterLanguageExtensionList(d.Get("language_extensions").([]any))
+		} else if len(d.Get("language_extensions").([]any)) > 0 || len(d.Get("language_extension").([]any)) > 0 {
+			hasError := false
+			rawLanguageExtensions, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("language_extensions"))
+			if diags.HasError() {
+				hasError = true
+			}
+
+			rawLanguageExtension, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("language_extension"))
+			if diags.HasError() {
+				hasError = true
+			}
+
+			// If RawConfig has a slice of len 0 for both blocks we want to ensure the API payload contains an empty slice to remove any language extensions.
+			// This is a workaround to the O+C behaviour where removing all blocks from config doesn't trigger a change.
+			// While the `CustomizeDiff` does update `*ResourceDiff` with the updated (empty) value, it doesn't seem to propagate through to the `*ResourceData` in `Update()`
+			if !hasError && !rawLanguageExtensions.IsNull() && rawLanguageExtensions.IsKnown() && !rawLanguageExtension.IsNull() && rawLanguageExtension.IsKnown() {
+				if len(rawLanguageExtensions.AsValueSlice()) == 0 && len(rawLanguageExtension.AsValueSlice()) == 0 {
+					props.LanguageExtensions = expandKustoClusterLanguageExtensionList(make([]any, 0))
+				}
+			}
+		}
 	}
 
 	if d.HasChange("outbound_network_access_restricted") {

@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -97,7 +98,7 @@ func resourceKeyVaultKeyRead(d *pluginsdk.ResourceData, meta interface{}) error 
 		if key.N != nil {
 			nBytes, err := base64.RawURLEncoding.DecodeString(*key.N)
 			if err != nil {
-				return fmt.Errorf("Could not decode N: %+v", err)
+				return fmt.Errorf("could not decode N: %+v", err)
 			}
 			d.Set("key_size", len(nBytes)*8)
 		}
@@ -119,7 +120,8 @@ func resourceKeyVaultKeyRead(d *pluginsdk.ResourceData, meta interface{}) error 
 	d.Set("version", id.Version)
 	d.Set("versionless_id", id.VersionlessID())
 	if key := resp.Key; key != nil {
-		if key.Kty == keyvault.JSONWebKeyTypeRSA || key.Kty == keyvault.JSONWebKeyTypeRSAHSM {
+		switch key.Kty {
+		case keyvault.JSONWebKeyTypeRSA, keyvault.JSONWebKeyTypeRSAHSM:
 			nBytes, err := base64.RawURLEncoding.DecodeString(*key.N)
 			if err != nil {
 				return fmt.Errorf("failed to decode N: %+v", err)
@@ -136,7 +138,7 @@ func resourceKeyVaultKeyRead(d *pluginsdk.ResourceData, meta interface{}) error 
 			if err != nil {
 				return fmt.Errorf("failed to read public key: %+v", err)
 			}
-		} else if key.Kty == keyvault.JSONWebKeyTypeEC || key.Kty == keyvault.JSONWebKeyTypeECHSM {
+		case keyvault.JSONWebKeyTypeEC, keyvault.JSONWebKeyTypeECHSM:
 			// do ec keys
 			xBytes, err := base64.RawURLEncoding.DecodeString(*key.X)
 			if err != nil {

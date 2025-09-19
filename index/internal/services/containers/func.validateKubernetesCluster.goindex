@@ -36,7 +36,7 @@ func validateKubernetesCluster(d *pluginsdk.ResourceData, cluster *managedcluste
 				}
 
 				// if not All empty values or All set values.
-				if !(dnsServiceIP == "" && !isServiceCidrSet) && !(dnsServiceIP != "" && isServiceCidrSet) {
+				if (dnsServiceIP != "" || isServiceCidrSet) && (dnsServiceIP == "" || !isServiceCidrSet) {
 					return fmt.Errorf("`dns_service_ip` and `service_cidr` should all be empty or both should be set")
 				}
 
@@ -80,7 +80,7 @@ func validateKubernetesCluster(d *pluginsdk.ResourceData, cluster *managedcluste
 
 			// a non-MI Service Principal exists on the cluster, but not locally
 			if servicePrincipalExists {
-				return existingClusterServicePrincipalRemovedErr
+				return errExistingClusterServicePrincipalRemoved
 			}
 		}
 
@@ -98,7 +98,7 @@ func validateKubernetesCluster(d *pluginsdk.ResourceData, cluster *managedcluste
 		}
 
 		// if we have both a Service Principal and an Identity Block defined
-		return newClusterWithBothServicePrincipalAndMSIErr
+		return errNewClusterWithBothServicePrincipalAndMSI
 	} else {
 		// for an existing cluster
 		servicePrincipalIsMsi := false
@@ -112,7 +112,7 @@ func validateKubernetesCluster(d *pluginsdk.ResourceData, cluster *managedcluste
 
 		// the user has a Service Principal block defined, but the Cluster's been upgraded to use MSI
 		if servicePrincipalIsMsi {
-			return existingClusterHasBeenUpgradedErr
+			return errExistingClusterHasBeenUpgraded
 		}
 
 		hasIdentity := false
@@ -123,7 +123,7 @@ func validateKubernetesCluster(d *pluginsdk.ResourceData, cluster *managedcluste
 		if hasIdentity {
 			// there's a Service Principal block and an Identity block present - but it hasn't been upgraded
 			// tell the user to update it
-			return existingClusterRequiresUpgradingErr(resourceGroup, name)
+			return errExistingClusterRequiresUpgrading(resourceGroup, name)
 		}
 	}
 

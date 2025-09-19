@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -77,13 +78,14 @@ func resourceKeyVaultKeyCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 		Tags: tags.Expand(t),
 	}
 
-	if parameters.Kty == keyvault.JSONWebKeyTypeEC || parameters.Kty == keyvault.JSONWebKeyTypeECHSM {
+	switch parameters.Kty {
+	case keyvault.JSONWebKeyTypeEC, keyvault.JSONWebKeyTypeECHSM:
 		curveName := d.Get("curve").(string)
 		parameters.Curve = keyvault.JSONWebKeyCurveName(curveName)
-	} else if parameters.Kty == keyvault.JSONWebKeyTypeRSA || parameters.Kty == keyvault.JSONWebKeyTypeRSAHSM {
+	case keyvault.JSONWebKeyTypeRSA, keyvault.JSONWebKeyTypeRSAHSM:
 		keySize, ok := d.GetOk("key_size")
 		if !ok {
-			return fmt.Errorf("Key size is required when creating an RSA key")
+			return errors.New("key_size is required when creating an RSA key")
 		}
 		parameters.KeySize = utils.Int32(int32(keySize.(int)))
 	}
@@ -126,7 +128,7 @@ func resourceKeyVaultKeyCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 				log.Printf("[DEBUG] Key %q recovered with ID: %q", name, *kid)
 			}
 		} else {
-			return fmt.Errorf("Creating Key: %+v", err)
+			return fmt.Errorf("creating Key: %+v", err)
 		}
 	}
 

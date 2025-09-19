@@ -50,64 +50,8 @@ func resourceVirtualNetworkRead(d *pluginsdk.ResourceData, meta interface{}) err
 		return fmt.Errorf("retrieving %s: %+v", *id, err)
 	}
 
-	d.Set("name", id.VirtualNetworkName)
-	d.Set("resource_group_name", id.ResourceGroupName)
-
-	if model := resp.Model; model != nil {
-		d.Set("location", location.NormalizeNilable(model.Location))
-		d.Set("edge_zone", flattenEdgeZoneModel(model.ExtendedLocation))
-
-		if props := model.Properties; props != nil {
-			d.Set("guid", props.ResourceGuid)
-			d.Set("flow_timeout_in_minutes", props.FlowTimeoutInMinutes)
-			d.Set("private_endpoint_vnet_policies", string(pointer.From(props.PrivateEndpointVNetPolicies)))
-
-			if space := props.AddressSpace; space != nil {
-				if err = d.Set("address_space", space.AddressPrefixes); err != nil {
-					return fmt.Errorf("setting `address_space`: %+v", err)
-				}
-
-				if err := d.Set("ip_address_pool", flattenVirtualNetworkIPAddressPool(space.IPamPoolPrefixAllocations)); err != nil {
-					return fmt.Errorf("setting `ip_address_pool`: %+v", err)
-				}
-			}
-
-			if err := d.Set("ddos_protection_plan", flattenVirtualNetworkDDoSProtectionPlan(props)); err != nil {
-				return fmt.Errorf("setting `ddos_protection_plan`: %+v", err)
-			}
-
-			if err := d.Set("encryption", flattenVirtualNetworkEncryption(props.Encryption)); err != nil {
-				return fmt.Errorf("setting `encryption`: %+v", err)
-			}
-
-			subnet, err := flattenVirtualNetworkSubnets(props.Subnets)
-			if err != nil {
-				return fmt.Errorf("flattening `subnet`: %+v", err)
-			}
-			if err := d.Set("subnet", subnet); err != nil {
-				return fmt.Errorf("setting `subnet`: %+v", err)
-			}
-
-			if err := d.Set("dns_servers", flattenVirtualNetworkDNSServers(props.DhcpOptions)); err != nil {
-				return fmt.Errorf("setting `dns_servers`: %+v", err)
-			}
-
-			bgpCommunity := ""
-			if p := props.BgpCommunities; p != nil {
-				bgpCommunity = p.VirtualNetworkCommunity
-			}
-			if err := d.Set("bgp_community", bgpCommunity); err != nil {
-				return fmt.Errorf("setting `bgp_community`: %+v", err)
-			}
-		}
-
-		if err := tags.FlattenAndSet(d, model.Tags); err != nil {
-			return fmt.Errorf("flattening `tags`: %+v", err)
-		}
-	}
-
-	if err := pluginsdk.SetResourceIdentityData(d, id); err != nil {
-		return err
+	if err := resourceVirtualNetworkFlatten(d, *id, resp.Model); err != nil {
+		return fmt.Errorf("encoding %s: %+v", *id, err)
 	}
 
 	return nil

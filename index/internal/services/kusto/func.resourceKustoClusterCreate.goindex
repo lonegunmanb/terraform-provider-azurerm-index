@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -110,9 +112,15 @@ func resourceKustoClusterCreate(d *pluginsdk.ResourceData, meta interface{}) err
 	}
 	clusterProperties.RestrictOutboundNetworkAccess = &restrictOutboundNetworkAccess
 
-	if v, ok := d.GetOk("language_extensions"); ok {
-		extList := v.([]interface{})
-		clusterProperties.LanguageExtensions = expandKustoClusterLanguageExtensionList(extList)
+	if v, ok := d.GetOk("language_extension"); ok {
+		clusterProperties.LanguageExtensions = expandKustoClusterLanguageExtensionList(v.([]any))
+	}
+
+	if !features.FivePointOh() {
+		if v, ok := d.GetOk("language_extensions"); ok {
+			extList := v.([]interface{})
+			clusterProperties.LanguageExtensions = expandKustoClusterLanguageExtensionList(extList)
+		}
 	}
 
 	expandedIdentity, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))

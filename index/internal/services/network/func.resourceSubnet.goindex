@@ -31,6 +31,16 @@ func resourceSubnet() *pluginsdk.Resource {
 		Delete:   resourceSubnetDelete,
 		Importer: pluginsdk.ImporterValidatingIdentity(&commonids.SubnetId{}),
 
+		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+				// Validate `sharing_scope` cannot be set when `default_outbound_access_enabled` is true.
+				if diff.Get("sharing_scope").(string) != "" && diff.Get("default_outbound_access_enabled").(bool) {
+					return fmt.Errorf("`sharing_scope` cannot be set if `default_outbound_access_enabled` is set to `true`")
+				}
+				return nil
+			}),
+		),
+
 		Timeouts: &pluginsdk.ResourceTimeout{
 			Create: pluginsdk.DefaultTimeout(30 * time.Minute),
 			Read:   pluginsdk.DefaultTimeout(5 * time.Minute),
@@ -93,6 +103,13 @@ func resourceSubnet() *pluginsdk.Resource {
 					Type:         pluginsdk.TypeString,
 					ValidateFunc: serviceendpointpolicies.ValidateServiceEndpointPolicyID,
 				},
+			},
+
+			"sharing_scope": {
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				// todo "Tenant" is only supported until https://github.com/Azure/azure-rest-api-specs/issues/36446 is addressed
+				ValidateFunc: validation.StringInSlice([]string{string(subnets.SharingScopeTenant)}, false),
 			},
 
 			"delegation": {

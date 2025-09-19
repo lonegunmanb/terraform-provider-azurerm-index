@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -146,7 +148,7 @@ func resourceKustoCluster() *pluginsdk.Resource {
 				Computed: true,
 			},
 
-			"language_extensions": {
+			"language_extension": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
 				Elem: &pluginsdk.Resource{
@@ -221,6 +223,49 @@ func resourceKustoCluster() *pluginsdk.Resource {
 	}
 
 	if !features.FivePointOh() {
+		resource.Schema["language_extension"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeList,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"language_extensions"},
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringInSlice(clusters.PossibleValuesForLanguageExtensionName(), false),
+					},
+					"image": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringInSlice(clusters.PossibleValuesForLanguageExtensionImageName(), false),
+					},
+				},
+			},
+		}
+
+		resource.Schema["language_extensions"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeList,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"language_extension"},
+			Deprecated:    "`language_extensions` has been deprecated in favour of `language_extension` and will be removed in v5.0 of the AzureRM provider",
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringInSlice(clusters.PossibleValuesForLanguageExtensionName(), false),
+					},
+					"image": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringInSlice(clusters.PossibleValuesForLanguageExtensionImageName(), false),
+					},
+				},
+			},
+		}
+
 		resource.Schema["virtual_network_configuration"] = &pluginsdk.Schema{
 			Type:       pluginsdk.TypeList,
 			Optional:   true,
@@ -248,6 +293,34 @@ func resourceKustoCluster() *pluginsdk.Resource {
 					},
 				},
 			},
+		}
+
+		resource.CustomizeDiff = func(_ context.Context, d *pluginsdk.ResourceDiff, _ interface{}) error {
+			rawLanguageExtensions, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("language_extensions"))
+			if diags.HasError() {
+				return nil
+			}
+
+			rawLanguageExtension, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("language_extension"))
+			if diags.HasError() {
+				return nil
+			}
+
+			// If neither the `language_extensions` nor the `language_extension` block is defined in config, set both to an empty slice.
+			// This ensures removal of these blocks from config still triggers an update while these 2 blocks are O+C for 4.x.
+			if !rawLanguageExtensions.IsNull() && rawLanguageExtensions.IsKnown() && !rawLanguageExtension.IsNull() && rawLanguageExtension.IsKnown() {
+				if len(rawLanguageExtensions.AsValueSlice()) == 0 && len(rawLanguageExtension.AsValueSlice()) == 0 {
+					if err := d.SetNew("language_extensions", make([]any, 0)); err != nil {
+						return err
+					}
+
+					if err := d.SetNew("language_extension", make([]any, 0)); err != nil {
+						return err
+					}
+				}
+			}
+
+			return nil
 		}
 	}
 

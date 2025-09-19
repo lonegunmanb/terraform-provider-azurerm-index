@@ -119,6 +119,17 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 
 				return nil
 			},
+			func(ctx context.Context, d *schema.ResourceDiff, meta interface{}) error {
+				if len(d.Get("network_profile.0.advanced_networking").([]interface{})) == 1 {
+					if d.Get("network_profile.0.network_data_plane").(string) != string(managedclusters.NetworkDataplaneCilium) {
+						return fmt.Errorf("when `network_profile.0.advanced_networking` is set, `network_profile.0.network_data_plane` must be set to `%s`", managedclusters.NetworkDataplaneCilium)
+					}
+					if d.Get("network_profile.0.network_plugin").(string) != string(managedclusters.NetworkPluginAzure) {
+						return fmt.Errorf("when `network_profile.0.advanced_networking` is set, `network_profile.0.network_plugin` must be set to `%s`", managedclusters.NetworkPluginAzure)
+					}
+				}
+				return nil
+			},
 		),
 
 		Timeouts: &pluginsdk.ResourceTimeout{
@@ -1270,6 +1281,28 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 									string(managedclusters.IPFamilyIPvFour),
 									string(managedclusters.IPFamilyIPvSix),
 								}, false),
+							},
+						},
+
+						"advanced_networking": {
+							Type:     pluginsdk.TypeList,
+							Optional: true,
+							MaxItems: 1,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"observability_enabled": {
+										Type:         pluginsdk.TypeBool,
+										Optional:     true,
+										Default:      false,
+										AtLeastOneOf: []string{"network_profile.0.advanced_networking.0.observability_enabled", "network_profile.0.advanced_networking.0.security_enabled"},
+									},
+									"security_enabled": {
+										Type:         pluginsdk.TypeBool,
+										Optional:     true,
+										Default:      false,
+										AtLeastOneOf: []string{"network_profile.0.advanced_networking.0.observability_enabled", "network_profile.0.advanced_networking.0.security_enabled"},
+									},
+								},
 							},
 						},
 					},

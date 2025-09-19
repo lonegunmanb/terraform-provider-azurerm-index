@@ -26,7 +26,7 @@ func (sbu BlobUpload) pageUploadFromSource(ctx context.Context, file io.ReaderAt
 
 	// finally we upload the contents of said file
 	pages := make(chan storageBlobPage, len(pageList))
-	errors := make(chan error, len(pageList))
+	errs := make(chan error, len(pageList))
 	wg := &sync.WaitGroup{}
 	wg.Add(len(pageList))
 
@@ -41,15 +41,15 @@ func (sbu BlobUpload) pageUploadFromSource(ctx context.Context, file io.ReaderAt
 		go sbu.blobPageUploadWorker(ctx, blobPageUploadContext{
 			blobSize: fileSize,
 			pages:    pages,
-			errors:   errors,
+			errors:   errs,
 			wg:       wg,
 		})
 	}
 
 	wg.Wait()
 
-	if len(errors) > 0 {
-		return fmt.Errorf("while uploading source file %q: %s", sbu.Source, <-errors)
+	if len(errs) > 0 {
+		return fmt.Errorf("while uploading source file %q: %s", sbu.Source, <-errs)
 	}
 
 	return nil
