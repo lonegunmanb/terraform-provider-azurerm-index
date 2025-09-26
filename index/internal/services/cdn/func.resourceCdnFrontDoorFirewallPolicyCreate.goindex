@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
@@ -91,18 +91,24 @@ func resourceCdnFrontDoorFirewallPolicyCreate(d *pluginsdk.ResourceData, meta in
 		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
 	}
 
-	// NOTE: JS Challenge Expiration policy is enabled by default on Premium SKU's with a default of
+	// NOTE: CAPTCHA and JS Challenge Expiration policy is enabled by default on Premium SKU's with a default of
 	// 30 minutes, if it is not in the config set the default and include it in the policy settings
 	// payload block...
 	if sku == string(waf.SkuNamePremiumAzureFrontDoor) {
-		// Set the Default value...
+		// Set the Default values...
 		jsChallengeExpirationInMinutes := 30
+		captchaExpirationInMinutes := 30
 
 		if v, ok := d.GetOk("js_challenge_cookie_expiration_in_minutes"); ok {
 			jsChallengeExpirationInMinutes = v.(int)
 		}
 
+		if v, ok := d.GetOk("captcha_cookie_expiration_in_minutes"); ok {
+			captchaExpirationInMinutes = v.(int)
+		}
+
 		payload.Properties.PolicySettings.JavascriptChallengeExpirationInMinutes = pointer.FromInt64(int64(jsChallengeExpirationInMinutes))
+		payload.Properties.PolicySettings.CaptchaExpirationInMinutes = pointer.FromInt64(int64(captchaExpirationInMinutes))
 	}
 
 	if managedRules != nil {

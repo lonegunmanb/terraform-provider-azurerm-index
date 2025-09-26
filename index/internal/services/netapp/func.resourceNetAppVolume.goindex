@@ -125,7 +125,6 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 
 			"protocols": {
 				Type:     pluginsdk.TypeSet,
-				ForceNew: true,
 				Optional: true,
 				Computed: true,
 				MaxItems: 2,
@@ -497,6 +496,36 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 					if !ruleMap["protocols_enabled"].IsNull() && !ruleMap["protocol"].IsNull() {
 						return fmt.Errorf("conflicting configuration arguments. export_policy_rule.protocol conflicts with export_policy_rule.protocols_enabled")
 					}
+				}
+			}
+
+			// Validate NFSv3 to NFSv4.1 protocol conversion restrictions
+			if d.HasChange("protocols") {
+				old, new := d.GetChange("protocols")
+				oldProtocols := old.(*pluginsdk.Set).List()
+				newProtocols := new.(*pluginsdk.Set).List()
+
+				// Convert to string slices for validation
+				oldProtocolsStr := make([]string, len(oldProtocols))
+				newProtocolsStr := make([]string, len(newProtocols))
+
+				for i, v := range oldProtocols {
+					oldProtocolsStr[i] = v.(string)
+				}
+				for i, v := range newProtocols {
+					newProtocolsStr[i] = v.(string)
+				}
+
+				kerberosEnabled := d.Get("kerberos_enabled").(bool)
+				dataReplication := d.Get("data_protection_replication").([]interface{})
+
+				// Get the new export policy rules configuration to validate against new protocols
+				// Always use the new configuration when protocols are changing to ensure validation against intended state
+				exportPolicyRules := d.Get("export_policy_rule").([]interface{})
+
+				validationErrors := netAppValidate.ValidateNetAppVolumeProtocolConversion(oldProtocolsStr, newProtocolsStr, kerberosEnabled, dataReplication, exportPolicyRules)
+				for _, err := range validationErrors {
+					return err
 				}
 			}
 

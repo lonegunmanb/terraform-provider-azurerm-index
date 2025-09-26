@@ -21,20 +21,34 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	hsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func flattenFlexibleServerDataEncryption(de *servers.DataEncryption) ([]interface{}, error) {
+func flattenFlexibleServerDataEncryption(de *servers.DataEncryption, meta interface{}) ([]interface{}, error) {
 	if de == nil || *de.Type == servers.DataEncryptionTypeSystemManaged {
 		return []interface{}{}, nil
 	}
 
+	env := meta.(*clients.Client).Account.Environment
+
 	item := map[string]interface{}{}
 	if de.PrimaryKeyURI != nil {
-		item["key_vault_key_id"] = *de.PrimaryKeyURI
+		isHsmKey, _, _, err := managedHsmHelpers.IsManagedHSMURI(env, pointer.From(de.PrimaryKeyURI))
+		if err != nil {
+			return nil, err
+		}
+
+		if isHsmKey {
+			item["managed_hsm_key_id"] = pointer.From(de.PrimaryKeyURI)
+		} else {
+			item["key_vault_key_id"] = pointer.From(de.PrimaryKeyURI)
+		}
 	}
+
 	if identity := de.PrimaryUserAssignedIdentityId; identity != nil {
 		parsed, err := commonids.ParseUserAssignedIdentityIDInsensitively(*identity)
 		if err != nil {

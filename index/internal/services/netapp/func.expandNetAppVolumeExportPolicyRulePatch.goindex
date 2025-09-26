@@ -28,7 +28,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func expandNetAppVolumeExportPolicyRulePatch(input []interface{}) *volumes.VolumePatchPropertiesExportPolicy {
+func expandNetAppVolumeExportPolicyRulePatch(input []interface{}, overrideProtocols []string) *volumes.VolumePatchPropertiesExportPolicy {
 	results := make([]volumes.ExportPolicyRule, 0)
 	for _, item := range input {
 		if item != nil {
@@ -39,25 +39,24 @@ func expandNetAppVolumeExportPolicyRulePatch(input []interface{}) *volumes.Volum
 			nfsv3Enabled := false
 			nfsv41Enabled := false
 			cifsEnabled := false
-			if vpe := v["protocol"]; vpe != nil {
-				protocolsEnabled := vpe.([]interface{})
-				if len(protocolsEnabled) != 0 {
-					for _, protocol := range protocolsEnabled {
-						if protocol != nil {
-							switch strings.ToLower(protocol.(string)) {
-							case "cifs":
-								cifsEnabled = true
-							case "nfsv3":
-								nfsv3Enabled = true
-							case "nfsv4.1":
-								nfsv41Enabled = true
-							}
-						}
+
+			// If overrideProtocols is provided (during protocol conversion), use those protocols
+			// instead of reading from the export policy rule configuration
+			if len(overrideProtocols) > 0 {
+				for _, protocol := range overrideProtocols {
+					switch strings.ToLower(protocol) {
+					case "cifs":
+						cifsEnabled = true
+					case "nfsv3":
+						nfsv3Enabled = true
+					case "nfsv4.1":
+						nfsv41Enabled = true
 					}
 				}
-			}
-			if !features.FivePointOh() {
-				if vpe := v["protocols_enabled"]; vpe != nil {
+			} else {
+				// Use existing logic when no protocol override is provided
+				// This handles both FivePointOh() v5 and !FivePointOh() v4 cases
+				if vpe := v["protocol"]; vpe != nil {
 					protocolsEnabled := vpe.([]interface{})
 					if len(protocolsEnabled) != 0 {
 						for _, protocol := range protocolsEnabled {
@@ -69,6 +68,25 @@ func expandNetAppVolumeExportPolicyRulePatch(input []interface{}) *volumes.Volum
 									nfsv3Enabled = true
 								case "nfsv4.1":
 									nfsv41Enabled = true
+								}
+							}
+						}
+					}
+				}
+				if !features.FivePointOh() {
+					if vpe := v["protocols_enabled"]; vpe != nil {
+						protocolsEnabled := vpe.([]interface{})
+						if len(protocolsEnabled) != 0 {
+							for _, protocol := range protocolsEnabled {
+								if protocol != nil {
+									switch strings.ToLower(protocol.(string)) {
+									case "cifs":
+										cifsEnabled = true
+									case "nfsv3":
+										nfsv3Enabled = true
+									case "nfsv4.1":
+										nfsv41Enabled = true
+									}
 								}
 							}
 						}

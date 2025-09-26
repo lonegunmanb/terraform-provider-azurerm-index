@@ -21,6 +21,8 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
+	hsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -114,9 +116,10 @@ func resourceMysqlFlexibleServer() *pluginsdk.Resource {
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
 						"key_vault_key_id": {
-							Type:         pluginsdk.TypeString,
-							Optional:     true,
-							ValidateFunc: keyVaultValidate.NestedItemIdWithOptionalVersion,
+							Type:          pluginsdk.TypeString,
+							Optional:      true,
+							ValidateFunc:  keyVaultValidate.NestedItemIdWithOptionalVersion,
+							ConflictsWith: []string{"customer_managed_key.0.managed_hsm_key_id"},
 							RequiredWith: []string{
 								"identity",
 								"customer_managed_key.0.primary_user_assigned_identity_id",
@@ -140,6 +143,16 @@ func resourceMysqlFlexibleServer() *pluginsdk.Resource {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							ValidateFunc: commonids.ValidateUserAssignedIdentityID,
+						},
+						"managed_hsm_key_id": {
+							Type:          pluginsdk.TypeString,
+							Optional:      true,
+							ValidateFunc:  validation.Any(hsmValidate.ManagedHSMDataPlaneVersionedKeyID, hsmValidate.ManagedHSMDataPlaneVersionlessKeyID),
+							ConflictsWith: []string{"customer_managed_key.0.key_vault_key_id"},
+							RequiredWith: []string{
+								"identity",
+								"customer_managed_key.0.primary_user_assigned_identity_id",
+							},
 						},
 					},
 				},

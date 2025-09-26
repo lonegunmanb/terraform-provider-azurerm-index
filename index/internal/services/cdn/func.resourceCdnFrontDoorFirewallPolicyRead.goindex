@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
@@ -30,15 +30,19 @@ func resourceCdnFrontDoorFirewallPolicyRead(d *pluginsdk.ResourceData, meta inte
 		return err
 	}
 
-	result, err := client.PoliciesGet(ctx, *id)
+	resp, err := client.PoliciesGet(ctx, *id)
 	if err != nil {
-		return fmt.Errorf("retrieving %s: %+v", *id, err)
+		if response.WasNotFound(resp.HttpResponse) {
+			d.SetId("")
+			return nil
+		}
+		return fmt.Errorf("retrieving %s: %+v", id, err)
 	}
 
 	d.Set("name", id.FrontDoorWebApplicationFirewallPolicyName)
 	d.Set("resource_group_name", id.ResourceGroupName)
 
-	if model := result.Model; model != nil {
+	if model := resp.Model; model != nil {
 		if sku := model.Sku; sku != nil {
 			d.Set("sku_name", string(pointer.From(sku.Name)))
 		}
@@ -64,10 +68,15 @@ func resourceCdnFrontDoorFirewallPolicyRead(d *pluginsdk.ResourceData, meta inte
 				d.Set("custom_block_response_status_code", int(pointer.From(policy.CustomBlockResponseStatusCode)))
 				d.Set("custom_block_response_body", policy.CustomBlockResponseBody)
 
-				// NOTE: js_challenge_cookie_expiration_in_minutes is only returned
-				// for Premium_AzureFrontDoor skus, else it will be 'nil'...
+				// NOTE: `js_challenge_cookie_expiration_in_minutes` and
+				// `captcha_cookie_expiration_in_minutes` is only returned
+				// for Premium_AzureFrontDoor skus, else they will be 'nil'...
 				if policy.JavascriptChallengeExpirationInMinutes != nil {
 					d.Set("js_challenge_cookie_expiration_in_minutes", int(pointer.From(policy.JavascriptChallengeExpirationInMinutes)))
+				}
+
+				if policy.CaptchaExpirationInMinutes != nil {
+					d.Set("captcha_cookie_expiration_in_minutes", int(pointer.From(policy.CaptchaExpirationInMinutes)))
 				}
 
 				if err := d.Set("log_scrubbing", flattenCdnFrontDoorFirewallLogScrubbingPolicy(policy.LogScrubbing)); err != nil {

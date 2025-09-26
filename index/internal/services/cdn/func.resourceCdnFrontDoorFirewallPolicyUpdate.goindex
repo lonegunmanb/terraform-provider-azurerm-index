@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
@@ -47,7 +47,7 @@ func resourceCdnFrontDoorFirewallPolicyUpdate(d *pluginsdk.ResourceData, meta in
 
 	props := *model.Properties
 
-	if d.HasChanges("custom_block_response_body", "custom_block_response_status_code", "enabled", "mode", "redirect_url", "request_body_check_enabled", "js_challenge_cookie_expiration_in_minutes", "log_scrubbing") {
+	if d.HasChanges("custom_block_response_body", "custom_block_response_status_code", "enabled", "mode", "redirect_url", "request_body_check_enabled", "js_challenge_cookie_expiration_in_minutes", "captcha_cookie_expiration_in_minutes", "log_scrubbing") {
 		enabled := waf.PolicyEnabledStateDisabled
 		if d.Get("enabled").(bool) {
 			enabled = waf.PolicyEnabledStateEnabled
@@ -64,17 +64,23 @@ func resourceCdnFrontDoorFirewallPolicyUpdate(d *pluginsdk.ResourceData, meta in
 			RequestBodyCheck: pointer.To(requestBodyCheck),
 		}
 
-		// NOTE: js_challenge_cookie_expiration_in_minutes is only valid for
-		// Premium_AzureFrontDoor skus...
-		if model.Sku != nil && *model.Sku.Name == waf.SkuNamePremiumAzureFrontDoor {
+		// NOTE: 'captcha_cookie_expiration_in_minutes' and 'js_challenge_cookie_expiration_in_minutes'
+		// is only valid for 'Premium_AzureFrontDoor' skus...
+		if model.Sku != nil && model.Sku.Name != nil && *model.Sku.Name == waf.SkuNamePremiumAzureFrontDoor {
 			// Set the Default value...
 			jsChallengeExpirationInMinutes := 30
+			captchaExpirationInMinutes := 30
 
 			if v, ok := d.GetOk("js_challenge_cookie_expiration_in_minutes"); ok {
 				jsChallengeExpirationInMinutes = v.(int)
 			}
 
+			if v, ok := d.GetOk("captcha_cookie_expiration_in_minutes"); ok {
+				captchaExpirationInMinutes = v.(int)
+			}
+
 			props.PolicySettings.JavascriptChallengeExpirationInMinutes = pointer.FromInt64(int64(jsChallengeExpirationInMinutes))
+			props.PolicySettings.CaptchaExpirationInMinutes = pointer.FromInt64(int64(captchaExpirationInMinutes))
 		}
 
 		if redirectUrl := d.Get("redirect_url").(string); redirectUrl != "" {
