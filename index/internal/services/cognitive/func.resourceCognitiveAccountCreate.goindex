@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2025-06-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
 	search "github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/services"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
@@ -55,10 +57,7 @@ func resourceCognitiveAccountCreate(d *pluginsdk.ResourceData, meta interface{})
 		Name: d.Get("sku_name").(string),
 	}
 
-	networkAcls, subnetIds, err := expandCognitiveAccountNetworkAcls(d)
-	if err != nil {
-		return err
-	}
+	networkAcls, subnetIds := expandCognitiveAccountNetworkAcls(d)
 
 	// also lock on the Virtual Network ID's since modifications in the networking stack are exclusive
 	virtualNetworkNames := make([]string, 0)
@@ -85,6 +84,11 @@ func resourceCognitiveAccountCreate(d *pluginsdk.ResourceData, meta interface{})
 		return err
 	}
 
+	identity, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+	if err != nil {
+		return fmt.Errorf("expanding `identity`: %+v", err)
+	}
+
 	props := cognitiveservicesaccounts.Account{
 		Kind:     utils.String(kind),
 		Location: utils.String(azure.NormalizeLocation(d.Get("location").(string))),
@@ -96,34 +100,19 @@ func resourceCognitiveAccountCreate(d *pluginsdk.ResourceData, meta interface{})
 			AllowedFqdnList:               utils.ExpandStringSlice(d.Get("fqdns").([]interface{})),
 			PublicNetworkAccess:           &publicNetworkAccess,
 			UserOwnedStorage:              expandCognitiveAccountStorage(d.Get("storage").([]interface{})),
-			RestrictOutboundNetworkAccess: utils.Bool(d.Get("outbound_network_access_restricted").(bool)),
-			DisableLocalAuth:              utils.Bool(!d.Get("local_auth_enabled").(bool)),
-			DynamicThrottlingEnabled:      utils.Bool(d.Get("dynamic_throttling_enabled").(bool)),
+			RestrictOutboundNetworkAccess: pointer.To(d.Get("outbound_network_access_restricted").(bool)),
+			DisableLocalAuth:              pointer.To(!d.Get("local_auth_enabled").(bool)),
+			DynamicThrottlingEnabled:      pointer.To(d.Get("dynamic_throttling_enabled").(bool)),
+			AllowProjectManagement:        pointer.To(d.Get("project_management_enabled").(bool)),
+			NetworkInjections:             expandCognitiveAccountNetworkInjection(d.Get("network_injection").([]interface{})),
 			Encryption:                    expandCognitiveAccountCustomerManagedKey(d.Get("customer_managed_key").([]interface{})),
 		},
-		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+		Identity: identity,
+		Tags:     tags.Expand(d.Get("tags").(map[string]interface{})),
 	}
 
-	identity, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))
-	if err != nil {
-		return fmt.Errorf("expanding `identity`: %+v", err)
-	}
-	props.Identity = identity
-
-	if _, err := client.AccountsCreate(ctx, id, props); err != nil {
+	if err := client.AccountsCreateThenPoll(ctx, id, props); err != nil {
 		return fmt.Errorf("creating %s: %+v", id, err)
-	}
-
-	stateConf := &pluginsdk.StateChangeConf{
-		Pending:    []string{"Accepted", "Creating"},
-		Target:     []string{"Succeeded"},
-		Refresh:    cognitiveAccountStateRefreshFunc(ctx, client, id),
-		MinTimeout: 15 * time.Second,
-		Timeout:    d.Timeout(pluginsdk.TimeoutCreate),
-	}
-
-	if _, err = stateConf.WaitForStateContext(ctx); err != nil {
-		return fmt.Errorf("waiting for creation of %s: %+v", id, err)
 	}
 
 	d.SetId(id.ID())

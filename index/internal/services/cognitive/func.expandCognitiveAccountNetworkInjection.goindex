@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2025-06-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	search "github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/services"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandCognitiveAccountNetworkInjection(input []interface{}) *[]cognitiveservicesaccounts.NetworkInjection {
+	if len(input) == 0 {
+		return nil
+	}
+
+	results := make([]cognitiveservicesaccounts.NetworkInjection, 0)
+	for _, v := range input {
+		m := v.(map[string]interface{})
+
+		scenario := cognitiveservicesaccounts.ScenarioType(m["scenario"].(string))
+
+		var subnetId *string
+		if m["subnet_id"] != nil && m["subnet_id"] != "" {
+			subnetId = pointer.To(m["subnet_id"].(string))
+		}
+
+		results = append(results, cognitiveservicesaccounts.NetworkInjection{
+			Scenario:    &scenario,
+			SubnetArmId: subnetId,
+		})
+	}
+
+	return &results
+}

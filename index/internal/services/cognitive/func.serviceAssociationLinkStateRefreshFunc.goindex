@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2025-06-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
+	search "github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/services"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/validate"
+	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func serviceAssociationLinkStateRefreshFunc(ctx context.Context, client *subnets.SubnetsClient, subnetId commonids.SubnetId) pluginsdk.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+		resp, err := client.Get(ctx, subnetId, subnets.DefaultGetOperationOptions())
+		if err != nil {
+			return nil, "Error", fmt.Errorf("retrieving subnet %s: %+v", subnetId, err)
+		}
+
+		if resp.Model != nil && resp.Model.Properties != nil && resp.Model.Properties.ServiceAssociationLinks != nil {
+			serviceAssociationLinks := *resp.Model.Properties.ServiceAssociationLinks
+
+			if len(serviceAssociationLinks) > 0 {
+				for _, sal := range serviceAssociationLinks {
+					// The SAL name associated with the Cognitive Services account is "legionservicelink"
+					if pointer.From(sal.Name) == "legionservicelink" && sal.Properties != nil && sal.Properties.ProvisioningState != nil {
+						log.Printf("[DEBUG] Found Service Association Link %s with provisioning state %s",
+							pointer.From(sal.Name), *sal.Properties.ProvisioningState)
+						return resp, "SALExists", nil
+					}
+				}
+			}
+		}
+
+		log.Printf("[DEBUG] No Service Association Links found on subnet %s", subnetId.ID())
+		return resp, "SALDeleted", nil
+	}
+}

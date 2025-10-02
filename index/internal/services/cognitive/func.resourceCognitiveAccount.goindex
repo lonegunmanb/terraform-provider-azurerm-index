@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2025-06-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2024-05-01/subnets"
 	search "github.com/hashicorp/go-azure-sdk/resource-manager/search/2024-06-01-preview/services"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
@@ -65,6 +67,7 @@ func resourceCognitiveAccount() *pluginsdk.Resource {
 				Required: true,
 				ForceNew: true,
 				ValidateFunc: validation.StringInSlice([]string{
+					"AIServices",
 					"Academic",
 					"AnomalyDetector",
 					"Bing.Autosuggest",
@@ -112,10 +115,15 @@ func resourceCognitiveAccount() *pluginsdk.Resource {
 				}, false),
 			},
 
+			"project_management_enabled": {
+				Type:     pluginsdk.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+
 			"custom_subdomain_name": {
 				Type:         pluginsdk.TypeString,
 				Optional:     true,
-				ForceNew:     true,
 				ValidateFunc: validation.StringIsNotEmpty,
 			},
 
@@ -205,6 +213,7 @@ func resourceCognitiveAccount() *pluginsdk.Resource {
 								string(cognitiveservicesaccounts.NetworkRuleActionDeny),
 							}, false),
 						},
+
 						"ip_rules": {
 							Type:     pluginsdk.TypeSet,
 							Optional: true,
@@ -249,6 +258,30 @@ func resourceCognitiveAccount() *pluginsdk.Resource {
 					},
 				},
 			},
+
+			"network_injection": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"scenario": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringInSlice([]string{
+								string(cognitiveservicesaccounts.ScenarioTypeAgent),
+							}, false),
+						},
+
+						"subnet_id": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: commonids.ValidateSubnetID,
+						},
+					},
+				},
+			},
+
 			"outbound_network_access_restricted": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
@@ -318,6 +351,55 @@ func resourceCognitiveAccount() *pluginsdk.Resource {
 				Computed:  true,
 				Sensitive: true,
 			},
+		},
+
+		CustomizeDiff: func(ctx context.Context, d *pluginsdk.ResourceDiff, i interface{}) error {
+			kind := d.Get("kind").(string)
+
+			if d.Get("project_management_enabled").(bool) {
+				if kind != "AIServices" {
+					return errors.New("`project_management_enabled` can only be set to `true` when `kind` is set to `AIServices`")
+				}
+
+				if len(d.Get("identity").([]interface{})) == 0 {
+					return errors.New("for `project_management_enabled` to be set to `true`, a managed identity must be assigned. Please configure the `identity` block")
+				}
+
+				if d.HasChange("customer_managed_key") && len(d.Get("customer_managed_key").([]interface{})) == 0 {
+					if err := d.ForceNew("customer_managed_key"); err != nil {
+						return err
+					}
+				}
+			} else if d.HasChange("project_management_enabled") {
+				if err := d.ForceNew("project_management_enabled"); err != nil {
+					return err
+				}
+			}
+
+			if d.Get("dynamic_throttling_enabled").(bool) && utils.SliceContainsValue([]string{"OpenAI", "AIServices"}, kind) {
+				return errors.New("`dynamic_throttling_enabled` is currently not supported when `kind` is set to `OpenAI` or `AIServices`")
+			}
+
+			if bypass, ok := d.GetOk("network_acls.0.bypass"); ok && bypass != "" && !utils.SliceContainsValue([]string{"OpenAI", "AIServices"}, kind) {
+				return fmt.Errorf("the `network_acls.bypass` does not support Trusted Services when `kind` is set to `%s`", kind)
+			}
+
+			networkInjection := d.Get("network_injection").([]interface{})
+			if len(networkInjection) > 0 && networkInjection[0] != nil {
+				if kind != "AIServices" {
+					return errors.New("the `network_injection` block is only supported when `kind` is set to `AIServices`")
+				}
+			}
+
+			if d.HasChange("custom_subdomain_name") {
+				old, _ := d.GetChange("custom_subdomain_name")
+				if old != nil && old != "" {
+					if err := d.ForceNew("custom_subdomain_name"); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
 		},
 	}
 }
