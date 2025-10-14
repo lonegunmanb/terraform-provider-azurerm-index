@@ -1,5 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -18,12 +20,12 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceNetworkWatcherFlowLogUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Network.FlowLogs
@@ -49,16 +51,12 @@ func resourceNetworkWatcherFlowLogUpdate(d *pluginsdk.ResourceData, meta interfa
 
 	payload := existing.Model
 
-	targetResourceId := ""
-
+	targetResourceId := d.Get("target_resource_id").(string)
 	if !features.FivePointOh() {
-		if v, ok := d.GetOk("network_security_group_id"); ok && v.(string) != "" {
-			targetResourceId = v.(string)
+		// Need to use RawConfig here since both properties are computed and a `Get`/`GetOk` may return the previously computed value
+		if rawVal, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("network_security_group_id")); !diags.HasError() && !rawVal.IsNull() {
+			targetResourceId = rawVal.AsString()
 		}
-	}
-
-	if v, ok := d.GetOk("target_resource_id"); ok && v.(string) != "" {
-		targetResourceId = v.(string)
 	}
 
 	locks.ByID(targetResourceId)
@@ -92,6 +90,10 @@ func resourceNetworkWatcherFlowLogUpdate(d *pluginsdk.ResourceData, meta interfa
 
 	if d.HasChange("tags") {
 		payload.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+	}
+
+	if d.HasChange("target_resource_id") || (!features.FivePointOh() && d.HasChange("network_security_group_id")) {
+		payload.Properties.TargetResourceId = targetResourceId
 	}
 
 	if err := client.CreateOrUpdateThenPoll(ctx, *id, *payload); err != nil {

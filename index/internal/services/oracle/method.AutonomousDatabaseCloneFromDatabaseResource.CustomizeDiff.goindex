@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-03-01/autonomousdatabases"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (AutonomousDatabaseCloneFromDatabaseResource) CustomizeDiff() sdk.ResourceFunc {
+	workloadMatrixForClone := map[string][]string{
+		"DW":   {"OLTP", "DW"},
+		"OLTP": {"DW", "OLTP"},
+		"AJD":  {"OLTP", "DW", "APEX"},
+		"APEX": {"AJD", "OLTP", "DW"},
+	}
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Second,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			if metadata.ResourceDiff == nil {
+				return nil
+			}
+
+			sourceId := metadata.ResourceDiff.Get("source_autonomous_database_id").(string)
+			dbWorkload := metadata.ResourceDiff.Get("database_workload").(string)
+
+			if sourceId == "" || dbWorkload == "" {
+				return nil
+			}
+
+			if metadata.ResourceDiff.Id() != "" {
+				return nil
+			}
+
+			sourceWorkload, err := getSourceWorkloadforClone(ctx, sourceId, metadata)
+			if err != nil {
+				return err
+			}
+
+			targets, exists := workloadMatrixForClone[sourceWorkload]
+			if !exists {
+				return fmt.Errorf("unsupported source workload: %s", sourceWorkload)
+			}
+
+			for _, target := range targets {
+				if dbWorkload == target {
+					return nil
+				}
+			}
+
+			return fmt.Errorf("invalid workload: %s->%s not allowed", sourceWorkload, dbWorkload)
+		},
+	}
+}

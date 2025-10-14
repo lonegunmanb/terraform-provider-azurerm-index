@@ -18,7 +18,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceNotificationHubNamespaceCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).NotificationHubs.NamespacesClient
@@ -39,6 +38,11 @@ func resourceNotificationHubNamespaceCreate(d *pluginsdk.ResourceData, meta inte
 		return tf.ImportAsExistsError("azurerm_notification_hub_namespace", id.ID())
 	}
 
+	zoneRedundancy := namespaces.ZoneRedundancyPreferenceDisabled
+	if v, ok := d.GetOk("zone_redundancy_enabled"); ok && v.(bool) {
+		zoneRedundancy = namespaces.ZoneRedundancyPreferenceEnabled
+	}
+
 	namespaceType := namespaces.NamespaceType(d.Get("namespace_type").(string))
 	parameters := namespaces.NamespaceResource{
 		Location: location.Normalize(d.Get("location").(string)),
@@ -46,11 +50,17 @@ func resourceNotificationHubNamespaceCreate(d *pluginsdk.ResourceData, meta inte
 			Name: namespaces.SkuName(d.Get("sku_name").(string)),
 		},
 		Properties: &namespaces.NamespaceProperties{
-			NamespaceType: &namespaceType,
-			Enabled:       utils.Bool(d.Get("enabled").(bool)),
+			NamespaceType:  &namespaceType,
+			Enabled:        pointer.To(d.Get("enabled").(bool)),
+			ZoneRedundancy: pointer.To(zoneRedundancy),
 		},
 		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
 	}
+
+	if v, ok := d.GetOk("replication_region"); ok {
+		parameters.Properties.ReplicationRegion = pointer.To(namespaces.ReplicationRegion(location.Normalize(v.(string))))
+	}
+
 	if _, err := client.CreateOrUpdate(ctx, id, parameters); err != nil {
 		return fmt.Errorf("creating %s: %+v", id, err)
 	}
