@@ -18,15 +18,24 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func expandBackupVaultDppIdentityDetails(input []interface{}) (*backupvaults.DppIdentityDetails, error) {
-	config, err := identity.ExpandSystemAssigned(input)
+	config, err := identity.ExpandSystemAndUserAssignedMap(input)
 	if err != nil {
 		return nil, err
 	}
 
-	return &backupvaults.DppIdentityDetails{
-		Type: utils.String(string(config.Type)),
-	}, nil
+	identity := backupvaults.DppIdentityDetails{
+		Type: pointer.To(string(config.Type)),
+	}
+
+	if len(config.IdentityIds) > 0 {
+		identityIds := make(map[string]backupvaults.UserAssignedIdentity, len(config.IdentityIds))
+		for id := range config.IdentityIds {
+			identityIds[id] = backupvaults.UserAssignedIdentity{}
+		}
+		identity.UserAssignedIdentities = pointer.To(identityIds)
+	}
+
+	return &identity, nil
 }

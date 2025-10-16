@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/search
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/search/2025-05-01/adminkeys"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/search/2025-05-01/querykeys"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/search/2025-05-01/services"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func validateSearchServiceSKUUpdate(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+	// only validate if the resource already exists
+	if diff.Id() == "" {
+		return nil
+	}
+
+	old, new := diff.GetChange("sku")
+	if old == new {
+		return nil
+	}
+
+	oldSku := old.(string)
+	newSku := new.(string)
+
+	// Define SKU hierarchy for validation - excludes Free tier
+	skuHierarchy := map[string]int{
+		string(services.SkuNameBasic):         1, // basic
+		string(services.SkuNameStandard):      2, // standard (S1)
+		string(services.SkuNameStandardTwo):   3, // standard2 (S2)
+		string(services.SkuNameStandardThree): 4, // standard3 (S3)
+		// Free and Storage optimized SKUs are not included as they're not part of the Basic->Standard upgrade path
+	}
+
+	oldLevel, oldExists := skuHierarchy[oldSku]
+	newLevel, newExists := skuHierarchy[newSku]
+
+	// If it's not a valid upgrade, force recreation instead of blocking the change
+	if !oldExists || !newExists || newLevel <= oldLevel {
+		return diff.ForceNew("sku")
+	}
+
+	return nil
+}
