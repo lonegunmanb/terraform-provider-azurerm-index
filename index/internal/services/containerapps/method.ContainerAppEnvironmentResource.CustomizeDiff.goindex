@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -29,6 +30,11 @@ func (r ContainerAppEnvironmentResource) CustomizeDiff() sdk.ResourceFunc {
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
 			if metadata.ResourceDiff == nil {
 				return nil
+			}
+
+			var model ContainerAppEnvironmentModel
+			if err := metadata.DecodeDiff(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
 			}
 
 			if metadata.ResourceDiff.HasChange("workload_profile") {
@@ -61,12 +67,12 @@ func (r ContainerAppEnvironmentResource) CustomizeDiff() sdk.ResourceFunc {
 						switch logsDestination {
 						case LogsDestinationLogAnalytics:
 							if logAnalyticsWorkspaceIDIsNull {
-								return fmt.Errorf("`log_analytics_workspace_id` must be set when `logs_destination` is set to `log-analytics`")
+								return errors.New("`log_analytics_workspace_id` must be set when `logs_destination` is set to `log-analytics`")
 							}
 
 						case LogsDestinationAzureMonitor, LogsDestinationNone:
 							if (logAnalyticsWorkspaceID != "" || !logAnalyticsWorkspaceIDIsNull) && !logDestinationIsNull {
-								return fmt.Errorf("`log_analytics_workspace_id` can only be set when `logs_destination` is set to `log-analytics` or omitted")
+								return errors.New("`log_analytics_workspace_id` can only be set when `logs_destination` is set to `log-analytics` or omitted")
 							}
 						}
 					}
@@ -79,15 +85,19 @@ func (r ContainerAppEnvironmentResource) CustomizeDiff() sdk.ResourceFunc {
 					switch logsDestination {
 					case LogsDestinationLogAnalytics:
 						if logAnalyticsWorkspaceID == "" {
-							return fmt.Errorf("`log_analytics_workspace_id` must be set when `logs_destination` is set to `log-analytics`")
+							return errors.New("`log_analytics_workspace_id` must be set when `logs_destination` is set to `log-analytics`")
 						}
 
 					case LogsDestinationAzureMonitor, LogsDestinationNone:
 						if logAnalyticsWorkspaceID != "" {
-							return fmt.Errorf("`log_analytics_workspace_id` can only be set when `logs_destination` is set to `log-analytics` or omitted")
+							return errors.New("`log_analytics_workspace_id` can only be set when `logs_destination` is set to `log-analytics` or omitted")
 						}
 					}
 				}
+			}
+
+			if model.InternalLoadBalancerEnabled && model.PublicNetworkAccess == string(managedenvironments.PublicNetworkAccessEnabled) {
+				return errors.New("`public_network_access` cannot be `Enabled` when `internal_load_balancer_enabled` is set to `true`")
 			}
 
 			return nil

@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-04-01/databases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-04-01/redisenterprise"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis/databaselink"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func toDbIds(otherClusterIds []string, selfDbId databases.DatabaseId) ([]string, error) {
+	dbIds := make([]string, 0, len(otherClusterIds)+1)
+	containsSelf := false
+
+	for _, cIdStr := range otherClusterIds {
+		cId, err := redisenterprise.ParseRedisEnterpriseID(cIdStr)
+		if err != nil {
+			return nil, err
+		}
+		otherDbId := databases.NewDatabaseID(cId.SubscriptionId, cId.ResourceGroupName, cId.RedisEnterpriseName, defaultDatabaseName)
+
+		if resourceids.Match(&otherDbId, &selfDbId) {
+			containsSelf = true
+		}
+
+		dbIds = append(dbIds, otherDbId.ID())
+	}
+
+	if !containsSelf {
+		dbIds = append(dbIds, selfDbId.ID())
+	}
+
+	return dbIds, nil
+}

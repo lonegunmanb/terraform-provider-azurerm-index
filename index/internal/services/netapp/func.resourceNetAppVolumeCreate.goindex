@@ -280,9 +280,16 @@ func resourceNetAppVolumeCreate(d *pluginsdk.ResourceData, meta interface{}) err
 			return fmt.Errorf("cannot authorize volume replication: %v", err)
 		}
 
-		// Wait for volume replication authorization to complete
-		log.Printf("[DEBUG] Waiting for replication authorization on %s to complete", id)
-		if err := waitForReplAuthorization(ctx, replicationClient, *replVolID); err != nil {
+		// Wait for volume replication authorization to complete on the destination volume
+		// Note: We check the destination (current volume being created), not the source
+		// This is important for one-to-many replication where checking the source would fail
+		destinationReplID, err := volumesreplication.ParseVolumeID(id.ID())
+		if err != nil {
+			return err
+		}
+
+		log.Printf("[DEBUG] Waiting for replication authorization on destination volume %s to complete", id)
+		if err := waitForReplAuthorization(ctx, replicationClient, *destinationReplID); err != nil {
 			return err
 		}
 	}

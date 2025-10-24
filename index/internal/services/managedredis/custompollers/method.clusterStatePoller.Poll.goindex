@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis/custompollers
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-04-01/redisenterprise"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+)
+func (p clusterStatePoller) Poll(ctx context.Context) (*pollers.PollResult, error) {
+	resp, err := p.client.Get(ctx, p.id)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving %s: %+v", p.id, err)
+	}
+
+	if resp.Model == nil || resp.Model.Properties == nil || resp.Model.Properties.ResourceState == nil {
+		return nil, fmt.Errorf("polling for %s: `resourceState` was empty", p.id)
+	}
+
+	resourceState := pointer.FromEnum(resp.Model.Properties.ResourceState)
+	log.Printf("[DEBUG] ClusterStatePoller for id: %s, resourceState: %s..", p.id, resourceState)
+
+	if resourceState == "Running" {
+		return &pollingSuccess, nil
+	}
+
+	pendingStates := map[string]bool{"Creating": true, "Updating": true, "Enabling": true, "Deleting": true, "Disabling": true}
+	if pendingStates[resourceState] {
+		return &pollingInProgress, nil
+	}
+
+	return nil, fmt.Errorf("unexpected resource state for %s: %s", p.id, resourceState)
+}

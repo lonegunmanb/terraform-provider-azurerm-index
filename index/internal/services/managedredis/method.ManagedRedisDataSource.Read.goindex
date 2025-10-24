@@ -1,0 +1,105 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-04-01/databases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-04-01/redisenterprise"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r ManagedRedisDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			clusterClient := metadata.Client.ManagedRedis.Client
+			dbClient := metadata.Client.ManagedRedis.DatabaseClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var state ManagedRedisDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			clusterId := redisenterprise.NewRedisEnterpriseID(subscriptionId, state.ResourceGroupName, state.Name)
+			dbId := databases.NewDatabaseID(subscriptionId, clusterId.ResourceGroupName, clusterId.RedisEnterpriseName, defaultDatabaseName)
+
+			clusterResp, err := clusterClient.Get(ctx, clusterId)
+			if err != nil {
+				if response.WasNotFound(clusterResp.HttpResponse) {
+					return fmt.Errorf("%s was not found", clusterId)
+				}
+				return fmt.Errorf("retrieving %s: %+v", clusterId, err)
+			}
+
+			dbResp, err := dbClient.Get(ctx, dbId)
+			if err != nil {
+				if !response.WasNotFound(dbResp.HttpResponse) {
+					return fmt.Errorf("retrieving %s: %+v", dbId, err)
+				}
+			}
+
+			metadata.SetID(clusterId)
+
+			if model := clusterResp.Model; model != nil {
+				flattenedIdentity, err := identity.FlattenSystemAndUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return fmt.Errorf("flattening `identity`: %+v", err)
+				}
+
+				state.Identity = pointer.From(flattenedIdentity)
+				state.Location = location.Normalize(model.Location)
+				state.SkuName = string(model.Sku.Name)
+				state.Tags = pointer.From(model.Tags)
+
+				if props := model.Properties; props != nil {
+					state.CustomerManagedKey = flattenManagedRedisClusterCustomerManagedKey(props.Encryption)
+					state.HighAvailabilityEnabled = strings.EqualFold(string(pointer.From(props.HighAvailability)), string(redisenterprise.HighAvailabilityEnabled))
+					state.Hostname = pointer.From(props.HostName)
+				}
+			}
+
+			if model := dbResp.Model; model != nil {
+				if props := model.Properties; props != nil {
+					defaultDb := DefaultDatabaseDataSourceModel{
+						AccessKeysAuthenticationEnabled: strings.EqualFold(pointer.FromEnum(props.AccessKeysAuthentication), string(databases.AccessKeysAuthenticationEnabled)),
+						ClientProtocol:                  pointer.FromEnum(props.ClientProtocol),
+						ClusteringPolicy:                pointer.FromEnum(props.ClusteringPolicy),
+						EvictionPolicy:                  pointer.FromEnum(props.EvictionPolicy),
+						GeoReplicationGroupName:         flattenGeoReplicationGroupName(props.GeoReplication),
+						GeoReplicationLinkedDatabaseIds: flattenLinkedDatabases(props.GeoReplication.LinkedDatabases),
+						Module:                          flattenModules(props.Modules),
+						Port:                            pointer.From(props.Port),
+					}
+
+					if props.GeoReplication != nil {
+						defaultDb.GeoReplicationLinkedDatabaseIds = flattenLinkedDatabases(props.GeoReplication.LinkedDatabases)
+					}
+
+					if defaultDb.AccessKeysAuthenticationEnabled {
+						keysResp, err := dbClient.ListKeys(ctx, dbId)
+						if err != nil {
+							return fmt.Errorf("listing keys for %s: %+v", dbId, err)
+						}
+						if keysModel := keysResp.Model; keysModel != nil {
+							defaultDb.PrimaryAccessKey = pointer.From(keysResp.Model.PrimaryKey)
+							defaultDb.SecondaryAccessKey = pointer.From(keysResp.Model.SecondaryKey)
+						}
+					}
+
+					state.DefaultDatabase = []DefaultDatabaseDataSourceModel{defaultDb}
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

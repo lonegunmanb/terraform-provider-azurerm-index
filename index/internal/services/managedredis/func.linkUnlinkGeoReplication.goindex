@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-04-01/databases"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-04-01/redisenterprise"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis/databaselink"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func linkUnlinkGeoReplication(ctx context.Context, client *databases.DatabasesClient, model ManagedRedisGeoReplicationResourceModel, clusterId *redisenterprise.RedisEnterpriseId) error {
+	id := databases.NewDatabaseID(clusterId.SubscriptionId, clusterId.ResourceGroupName, clusterId.RedisEnterpriseName, defaultDatabaseName)
+
+	existing, err := client.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if existing.Model.Properties == nil {
+		return fmt.Errorf("retrieving %s: `properties` was nil", id)
+	}
+	if existing.Model.Properties.GeoReplication == nil {
+		return fmt.Errorf("geo_replication_group_name has to be set on database %s", id)
+	}
+
+	fromDbIds := flattenLinkedDatabases(existing.Model.Properties.GeoReplication.LinkedDatabases)
+	toDbIds, err := toDbIds(model.LinkedManagedRedisIds, id)
+	if err != nil {
+		return err
+	}
+
+	dbIdsToUnlink := databaselink.DbIdsToUnlink(fromDbIds, toDbIds)
+
+	if len(dbIdsToUnlink) > 0 {
+		params := databases.ForceUnlinkParameters{
+			Ids: dbIdsToUnlink,
+		}
+		if err := client.ForceUnlinkThenPoll(ctx, id, params); err != nil {
+			return fmt.Errorf("force unlink %s: %+v", id, err)
+		}
+	}
+
+	if databaselink.HasDbToLink(fromDbIds, toDbIds) {
+		params := databases.ForceLinkParameters{
+			GeoReplication: databases.ForceLinkParametersGeoReplication{
+				GroupNickname:   existing.Model.Properties.GeoReplication.GroupNickname,
+				LinkedDatabases: expandLinkedDatabases(toDbIds),
+			},
+		}
+
+		err = client.ForceLinkToReplicationGroupThenPoll(ctx, id, params)
+		if err != nil {
+			return fmt.Errorf("force link %s: %+v", id, err)
+		}
+	}
+	return nil
+}
