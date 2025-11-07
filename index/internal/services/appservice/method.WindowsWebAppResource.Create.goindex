@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/migration"
@@ -138,6 +139,19 @@ func (r WindowsWebAppResource) Create() sdk.ResourceFunc {
 					VnetBackupRestoreEnabled: pointer.To(webApp.VirtualNetworkBackupRestoreEnabled),
 					VnetRouteAllEnabled:      siteConfig.VnetRouteAllEnabled,
 				},
+			}
+
+			if !features.FivePointOh() {
+				rawVnetImagePullEnabled, err := metadata.GetRawConfigAt("virtual_network_image_pull_enabled")
+				if err != nil {
+					return err
+				}
+
+				if !rawVnetImagePullEnabled.IsNull() {
+					siteEnvelope.Properties.VnetImagePullEnabled = pointer.To(webApp.VirtualNetworkImagePullEnabled)
+				}
+			} else {
+				siteEnvelope.Properties.VnetImagePullEnabled = pointer.To(webApp.VirtualNetworkImagePullEnabled)
 			}
 
 			pna := helpers.PublicNetworkAccessEnabled

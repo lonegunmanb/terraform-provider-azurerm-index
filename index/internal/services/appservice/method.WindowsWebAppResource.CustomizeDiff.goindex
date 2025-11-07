@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r WindowsWebAppResource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.AppService.ServicePlanClient
+
+			model := WindowsWebAppModel{}
+			if err := metadata.DecodeDiff(&model); err != nil {
+				return fmt.Errorf("decoding: %w", err)
+			}
+
+			if metadata.ResourceDiff.HasChange("virtual_network_image_pull_enabled") {
+				planId := model.ServicePlanId
+				if planId == "" {
+					return nil
+				}
+
+				_, newValue := metadata.ResourceDiff.GetChange("virtual_network_image_pull_enabled")
+				if newValue.(bool) {
+					return nil
+				}
+
+				servicePlanID, err := commonids.ParseAppServicePlanID(planId)
+				if err != nil {
+					return err
+				}
+
+				resp, err := client.Get(ctx, *servicePlanID)
+				if err != nil {
+					return fmt.Errorf("retrieving %s: %w", *servicePlanID, err)
+				}
+
+				if aspModel := resp.Model; aspModel != nil {
+					if aspModel.Properties != nil && aspModel.Properties.HostingEnvironmentProfile != nil &&
+						pointer.From(aspModel.Properties.HostingEnvironmentProfile.Id) != "" && !newValue.(bool) {
+						return fmt.Errorf("`virtual_network_image_pull_enabled` cannot be disabled for app running in an app service environment")
+					}
+				}
+			}
+
+			return nil
+		},
+	}
+}
