@@ -3,6 +3,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2024-05-01/backend"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/validate"
@@ -48,6 +50,90 @@ func resourceApiManagementBackend() *pluginsdk.Resource {
 			"api_management_name": schemaz.SchemaApiManagementName(),
 
 			"resource_group_name": commonschema.ResourceGroupName(),
+
+			"circuit_breaker_rule": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"name": {
+							Type:     pluginsdk.TypeString,
+							Required: true,
+							ValidateFunc: validation.StringMatch(
+								regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,78}[a-zA-Z0-9])?$`),
+								"`name` must be between 1 and 80 characters in length and may contain only numbers, letters, and hyphens (-) sign when preceded and followed by number or a letter.",
+							),
+						},
+						"trip_duration": {
+							Type:         pluginsdk.TypeString,
+							Required:     true,
+							ValidateFunc: azValidate.ISO8601Duration,
+						},
+						"accept_retry_after_enabled": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+						"failure_condition": {
+							Type:     pluginsdk.TypeList,
+							Required: true,
+							MaxItems: 1,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"interval_duration": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: azValidate.ISO8601Duration,
+									},
+									"count": {
+										Type:         pluginsdk.TypeInt,
+										Optional:     true,
+										ExactlyOneOf: []string{"circuit_breaker_rule.0.failure_condition.0.count", "circuit_breaker_rule.0.failure_condition.0.percentage"},
+										ValidateFunc: validation.IntBetween(1, 10000),
+									},
+									"error_reasons": {
+										Type:         pluginsdk.TypeList,
+										Optional:     true,
+										MaxItems:     10,
+										AtLeastOneOf: []string{"circuit_breaker_rule.0.failure_condition.0.status_code_range", "circuit_breaker_rule.0.failure_condition.0.error_reasons"},
+										Elem: &pluginsdk.Schema{
+											Type:         pluginsdk.TypeString,
+											ValidateFunc: validation.StringLenBetween(1, 200),
+										},
+									},
+									"percentage": {
+										Type:         pluginsdk.TypeInt,
+										Optional:     true,
+										ExactlyOneOf: []string{"circuit_breaker_rule.0.failure_condition.0.count", "circuit_breaker_rule.0.failure_condition.0.percentage"},
+										ValidateFunc: validation.IntBetween(1, 100),
+									},
+									"status_code_range": {
+										Type:         pluginsdk.TypeList,
+										Optional:     true,
+										MaxItems:     10,
+										AtLeastOneOf: []string{"circuit_breaker_rule.0.failure_condition.0.status_code_range", "circuit_breaker_rule.0.failure_condition.0.error_reasons"},
+										Elem: &pluginsdk.Resource{
+											Schema: map[string]*pluginsdk.Schema{
+												"min": {
+													Type:         pluginsdk.TypeInt,
+													Required:     true,
+													ValidateFunc: validation.IntBetween(200, 599),
+												},
+												"max": {
+													Type:         pluginsdk.TypeInt,
+													Required:     true,
+													ValidateFunc: validation.IntBetween(200, 599),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 
 			"credentials": {
 				Type:     pluginsdk.TypeList,
