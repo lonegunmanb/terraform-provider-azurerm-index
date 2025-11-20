@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
@@ -19,6 +20,44 @@ import (
 	"github.com/jackofallops/giovanni/storage/2023-11-03/file/shares"
 )
 func resourceStorageShareDirectory() *pluginsdk.Resource {
+	schema := map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.StorageShareDirectoryName,
+		},
+
+		"storage_share_url": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.StorageShareDataPlaneID,
+		},
+
+		"metadata": MetaDataSchema(),
+	}
+
+	if !features.FivePointOh() {
+		schema["storage_share_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.StorageShareDataPlaneID,
+			ExactlyOneOf: []string{"storage_share_id", "storage_share_url"},
+			Deprecated:   "This property has been deprecated in favour of `storage_share_url` and will be removed in version 5.0 of the Provider.",
+		}
+		schema["storage_share_url"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ForceNew:     true,
+			ValidateFunc: validate.StorageShareDataPlaneID,
+			ExactlyOneOf: []string{"storage_share_id", "storage_share_url"},
+		}
+	}
+
 	resource := &pluginsdk.Resource{
 		Create: resourceStorageShareDirectoryCreate,
 		Read:   resourceStorageShareDirectoryRead,
@@ -37,23 +76,7 @@ func resourceStorageShareDirectory() *pluginsdk.Resource {
 			Delete: pluginsdk.DefaultTimeout(30 * time.Minute),
 		},
 
-		Schema: map[string]*pluginsdk.Schema{
-			"name": {
-				Type:         pluginsdk.TypeString,
-				Required:     true,
-				ForceNew:     true,
-				ValidateFunc: validate.StorageShareDirectoryName,
-			},
-
-			"storage_share_id": {
-				Type:         pluginsdk.TypeString,
-				Required:     true,
-				ForceNew:     true,
-				ValidateFunc: validate.StorageShareDataPlaneID,
-			},
-
-			"metadata": MetaDataSchema(),
-		},
+		Schema: schema,
 	}
 
 	return resource

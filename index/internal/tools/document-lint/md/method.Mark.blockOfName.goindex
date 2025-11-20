@@ -34,7 +34,23 @@ func (m *Mark) blockOfName(name string, parent string, pos model.PosType) (b *Bl
 	}
 
 	if len(res) > 1 {
-		msg = fmt.Sprintf("duplicate block exists as name `%s`", util.Blue(name))
+		// Check if these are actual duplicate block definitions or just shared references
+		// Look at the actual block definitions to see if they have different content
+		uniqueDefinitions := make(map[string]Block)
+		for _, block := range res {
+			// Create a key based on the block's actual content/structure
+			key := fmt.Sprintf("%s:%d", block.Name, len(block.Fields))
+			if existing, exists := uniqueDefinitions[key]; exists {
+				// Check if they're actually different blocks
+				if !blocksHaveSameDefinition(existing, block) {
+					msg = fmt.Sprintf("duplicate block exists as name `%s`", util.Blue(name))
+					break
+				}
+			} else {
+				uniqueDefinitions[key] = block
+			}
+		}
+		// If we only have one unique definition, it's just a shared block reference, not a duplicate
 	}
 	return &res[0], msg
 }

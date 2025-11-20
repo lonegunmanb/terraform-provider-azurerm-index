@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
@@ -21,8 +22,12 @@ import (
 func storageShareDirectoryRefreshFunc(ctx context.Context, client *directories.Client, id directories.DirectoryId) pluginsdk.StateRefreshFunc {
 	return func() (interface{}, string, error) {
 		res, err := client.Get(ctx, id.ShareName, id.DirectoryPath)
-		if err != nil {
-			return nil, strconv.Itoa(res.HttpResponse.StatusCode), fmt.Errorf("retrieving %s: %v", id, err)
+		if err != nil && !response.WasNotFound(res.HttpResponse) {
+			state := "unknown"
+			if res.HttpResponse != nil {
+				state = strconv.Itoa(res.HttpResponse.StatusCode)
+			}
+			return nil, state, fmt.Errorf("retrieving %s: %v", id, err)
 		}
 
 		return res, strconv.Itoa(res.HttpResponse.StatusCode), nil

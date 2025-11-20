@@ -70,14 +70,22 @@ func (r ManagedRedisDataSource) Read() sdk.ResourceFunc {
 
 			if model := dbResp.Model; model != nil {
 				if props := model.Properties; props != nil {
+					databaseId, err := redisenterprise.ParseDatabaseID(pointer.From(model.Id))
+					if err != nil {
+						return fmt.Errorf("parsing Managed Redis Database ID %q: %+v", pointer.From(model.Id), err)
+					}
+
 					defaultDb := DefaultDatabaseDataSourceModel{
-						AccessKeysAuthenticationEnabled: strings.EqualFold(pointer.FromEnum(props.AccessKeysAuthentication), string(databases.AccessKeysAuthenticationEnabled)),
-						ClientProtocol:                  pointer.FromEnum(props.ClientProtocol),
-						ClusteringPolicy:                pointer.FromEnum(props.ClusteringPolicy),
-						EvictionPolicy:                  pointer.FromEnum(props.EvictionPolicy),
-						GeoReplicationGroupName:         flattenGeoReplicationGroupName(props.GeoReplication),
-						Module:                          flattenModules(props.Modules),
-						Port:                            pointer.From(props.Port),
+						AccessKeysAuthenticationEnabled:          strings.EqualFold(pointer.FromEnum(props.AccessKeysAuthentication), string(databases.AccessKeysAuthenticationEnabled)),
+						ClientProtocol:                           pointer.FromEnum(props.ClientProtocol),
+						ClusteringPolicy:                         pointer.FromEnum(props.ClusteringPolicy),
+						EvictionPolicy:                           pointer.FromEnum(props.EvictionPolicy),
+						GeoReplicationGroupName:                  flattenGeoReplicationGroupName(props.GeoReplication),
+						ID:                                       databaseId.ID(),
+						Module:                                   flattenModules(props.Modules),
+						PersistenceAppendOnlyFileBackupFrequency: flattenPersistenceAOF(props.Persistence),
+						PersistenceRedisDatabaseBackupFrequency:  flattenPersistenceRDB(props.Persistence),
+						Port:                                     pointer.From(props.Port),
 					}
 
 					if props.GeoReplication != nil {

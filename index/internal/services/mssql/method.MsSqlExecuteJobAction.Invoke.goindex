@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/framework/typehelpers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/jobexecutions"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-plugin-framework/action"
+	"github.com/hashicorp/terraform-plugin-framework/action/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/custompollers"
+)
+func (m *MsSqlExecuteJobAction) Invoke(ctx context.Context, request action.InvokeRequest, response *action.InvokeResponse) {
+	client := m.Client.MSSQL.JobExecutionsClient
+	jobStepExecutionsClient := m.Client.MSSQL.JobStepExecutionsClient
+
+	model := MsSqlJobExecuteActionModel{}
+
+	response.Diagnostics.Append(request.Config.Get(ctx, &model)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	timeout := 15 * time.Minute
+	if t := model.Timeout; !t.IsNull() {
+		duration, err := time.ParseDuration(t.ValueString())
+		if err != nil {
+			sdk.SetResponseErrorDiagnostic(response, "parsing `timeout`", err)
+			return
+		}
+		timeout = duration
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	id, err := jobexecutions.ParseJobID(model.JobID.ValueString())
+	if err != nil {
+		sdk.SetResponseErrorDiagnostic(response, "parsing ID", err)
+		return
+	}
+
+	resp, err := client.Create(ctx, *id)
+	if err != nil {
+		sdk.SetResponseErrorDiagnostic(response, "running action", fmt.Errorf("executing job: %w", err))
+		return
+	}
+
+	response.SendProgress(action.InvokeProgressEvent{
+		Message: fmt.Sprintf("triggered execution of `%s`", id.ID()),
+	})
+
+	if model.WaitForCompletion.ValueBool() {
+		response.SendProgress(action.InvokeProgressEvent{
+			Message: fmt.Sprintf("waiting for completion on `%s`", id.ID()),
+		})
+
+		if resp.Model == nil || resp.Model.Id == nil {
+			sdk.SetResponseErrorDiagnostic(response, "waiting for completion", "unable to retrieve execution ID")
+			return
+		}
+
+		executionId, err := jobexecutions.ParseExecutionID(*resp.Model.Id)
+		if err != nil {
+			sdk.SetResponseErrorDiagnostic(response, "waiting for completion", err)
+			return
+		}
+
+		executionPoller := custompollers.NewMssqlJobExecutionStatusPoller(client, jobStepExecutionsClient, *executionId)
+		poller := pollers.NewPoller(executionPoller, 10*time.Second, pollers.DefaultNumberOfDroppedConnectionsToAllow)
+		if err := poller.PollUntilDone(ctx); err != nil {
+			sdk.SetResponseErrorDiagnostic(response, "waiting for completion", err)
+			return
+		}
+
+		response.SendProgress(action.InvokeProgressEvent{
+			Message: fmt.Sprintf("execution of `%s` completed", id.ID()),
+		})
+	}
+}

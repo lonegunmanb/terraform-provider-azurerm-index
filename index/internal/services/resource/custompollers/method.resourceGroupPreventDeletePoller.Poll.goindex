@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/custompollers
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2023-07-01/resourcegroups"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+)
+func (p resourceGroupPreventDeletePoller) Poll(ctx context.Context) (*pollers.PollResult, error) {
+	results, err := p.client.ResourcesListByResourceGroupComplete(ctx, p.id, resourcegroups.ResourcesListByResourceGroupOperationOptions{
+		Expand: pointer.To("provisioningState"),
+		Top:    pointer.To[int64](10),
+	})
+	if err != nil {
+		if response.WasNotFound(results.LatestHttpResponse) {
+			return pollingSuccess, nil
+		}
+		return pollingFailed, fmt.Errorf("listing resources in %s: %v", p.id, err)
+	}
+
+	nestedResourceIds := make([]string, 0)
+	for _, item := range results.Items {
+		val := item
+		if val.Id != nil {
+			nestedResourceIds = append(nestedResourceIds, *val.Id)
+		}
+	}
+
+	if len(nestedResourceIds) > 0 {
+		return &pollers.PollResult{
+			PollInterval: 30 * time.Second,
+			Status:       pollers.PollingStatusInProgress,
+		}, resourceGroupContainsItemsError(p.id.ResourceGroupName, nestedResourceIds)
+	}
+
+	return pollingSuccess, nil
+}
