@@ -12,17 +12,17 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2024-08-01/serverrestart"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2024-08-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2025-08-01/servers"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
@@ -30,7 +30,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	resource := &pluginsdk.Resource{
 		Create: resourcePostgresqlFlexibleServerCreate,
 		Read:   resourcePostgresqlFlexibleServerRead,
 		Update: resourcePostgresqlFlexibleServerUpdate,
@@ -144,17 +144,17 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 				Optional: true,
 				Computed: true,
 				ValidateFunc: validation.StringInSlice([]string{
-					string(servers.AzureManagedDiskPerformanceTiersPFour),
-					string(servers.AzureManagedDiskPerformanceTiersPSix),
-					string(servers.AzureManagedDiskPerformanceTiersPOneZero),
-					string(servers.AzureManagedDiskPerformanceTiersPOneFive),
-					string(servers.AzureManagedDiskPerformanceTiersPTwoZero),
-					string(servers.AzureManagedDiskPerformanceTiersPThreeZero),
-					string(servers.AzureManagedDiskPerformanceTiersPFourZero),
-					string(servers.AzureManagedDiskPerformanceTiersPFiveZero),
-					string(servers.AzureManagedDiskPerformanceTiersPSixZero),
-					string(servers.AzureManagedDiskPerformanceTiersPSevenZero),
-					string(servers.AzureManagedDiskPerformanceTiersPEightZero),
+					string(servers.AzureManagedDiskPerformanceTierPFour),
+					string(servers.AzureManagedDiskPerformanceTierPSix),
+					string(servers.AzureManagedDiskPerformanceTierPOneZero),
+					string(servers.AzureManagedDiskPerformanceTierPOneFive),
+					string(servers.AzureManagedDiskPerformanceTierPTwoZero),
+					string(servers.AzureManagedDiskPerformanceTierPThreeZero),
+					string(servers.AzureManagedDiskPerformanceTierPFourZero),
+					string(servers.AzureManagedDiskPerformanceTierPFiveZero),
+					string(servers.AzureManagedDiskPerformanceTierPSixZero),
+					string(servers.AzureManagedDiskPerformanceTierPSevenZero),
+					string(servers.AzureManagedDiskPerformanceTierPEightZero),
 				}, false),
 			},
 
@@ -163,13 +163,14 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 				Optional: true,
 				Computed: true,
 				ValidateFunc: validation.StringInSlice([]string{
-					string(servers.ServerVersionOneFive),
-					string(servers.ServerVersionOneFour),
-					string(servers.ServerVersionOneOne),
-					string(servers.ServerVersionOneSix),
-					string(servers.ServerVersionOneThree),
-					string(servers.ServerVersionOneTwo),
-					"17", // version 17 is supported but not yet present as an enum in the SDK
+					string(servers.PostgresMajorVersionOneOne),
+					string(servers.PostgresMajorVersionOneTwo),
+					string(servers.PostgresMajorVersionOneThree),
+					string(servers.PostgresMajorVersionOneFour),
+					string(servers.PostgresMajorVersionOneFive),
+					string(servers.PostgresMajorVersionOneSix),
+					string(servers.PostgresMajorVersionOneSeven),
+					string(servers.PostgresMajorVersionOneEight),
 				}, false),
 			},
 
@@ -316,7 +317,7 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 						"key_vault_key_id": {
 							Type:         pluginsdk.TypeString,
 							Required:     true,
-							ValidateFunc: keyVaultValidate.NestedItemIdWithOptionalVersion,
+							ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeKey),
 							RequiredWith: []string{
 								"identity",
 								"customer_managed_key.0.primary_user_assigned_identity_id",
@@ -330,7 +331,7 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 						"geo_backup_key_vault_key_id": {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
-							ValidateFunc: keyVaultValidate.NestedItemIdWithOptionalVersion,
+							ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeKey),
 							RequiredWith: []string{
 								"identity",
 								"customer_managed_key.0.geo_backup_user_assigned_identity_id",
@@ -457,4 +458,28 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 		},
 		),
 	}
+
+	if !features.FivePointOh() {
+		resource.Schema["customer_managed_key"].Elem.(*pluginsdk.Resource).Schema["key_vault_key_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeAny),
+			RequiredWith: []string{
+				"identity",
+				"customer_managed_key.0.primary_user_assigned_identity_id",
+			},
+		}
+
+		resource.Schema["customer_managed_key"].Elem.(*pluginsdk.Resource).Schema["geo_backup_key_vault_key_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeAny),
+			RequiredWith: []string{
+				"identity",
+				"customer_managed_key.0.geo_backup_user_assigned_identity_id",
+			},
+		}
+	}
+
+	return resource
 }

@@ -9,18 +9,16 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/backups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/capacitypools"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/volumegroups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/volumes"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/volumesreplication"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func authorizeVolumeReplication(ctx context.Context, volumeList *[]volumegroups.VolumeGroupVolumeProperties, replicationClient *volumesreplication.VolumesReplicationClient, subscriptionId, resourceGroupName, accountName string) error {
-	if volumeList == nil || replicationClient == nil {
+func authorizeVolumeReplication(ctx context.Context, volumeList *[]volumegroups.VolumeGroupVolumeProperties, client *volumes.VolumesClient, subscriptionId, resourceGroupName, accountName string) error {
+	if volumeList == nil || client == nil {
 		return nil
 	}
 
@@ -44,14 +42,14 @@ func authorizeVolumeReplication(ctx context.Context, volumeList *[]volumegroups.
 				)
 
 				// Getting primary resource id
-				primaryId, err := volumesreplication.ParseVolumeID(pointer.From(replication.RemoteVolumeResourceId))
+				primaryId, err := volumes.ParseVolumeID(pointer.From(replication.RemoteVolumeResourceId))
 				if err != nil {
 					return fmt.Errorf("parsing primary volume ID %q: %+v", pointer.From(replication.RemoteVolumeResourceId), err)
 				}
 
 				// Authorizing
-				if err := replicationClient.VolumesAuthorizeReplicationThenPoll(ctx, pointer.From(primaryId), volumesreplication.AuthorizeRequest{
-					RemoteVolumeResourceId: utils.String(secondaryId.ID()),
+				if err := client.AuthorizeReplicationThenPoll(ctx, pointer.From(primaryId), volumes.AuthorizeRequest{
+					RemoteVolumeResourceId: pointer.To(secondaryId.ID()),
 				}); err != nil {
 					return fmt.Errorf("authorizing volume replication for volume %q: %+v", secondaryId.ID(), err)
 				}
@@ -70,7 +68,7 @@ func authorizeVolumeReplication(ctx context.Context, volumeList *[]volumegroups.
 			}
 
 			// Create the destination volume ID for status checking
-			destinationReplId := volumesreplication.NewVolumeID(subscriptionId,
+			destinationReplId := volumes.NewVolumeID(subscriptionId,
 				resourceGroupName,
 				accountName,
 				capacityPoolId.CapacityPoolName,
@@ -79,7 +77,7 @@ func authorizeVolumeReplication(ctx context.Context, volumeList *[]volumegroups.
 
 			// Wait for volume replication authorization to complete on the destination volume
 			log.Printf("[DEBUG] Waiting for replication authorization on destination volume %s to complete", destinationReplId.ID())
-			if err := waitForReplAuthorization(ctx, replicationClient, destinationReplId); err != nil {
+			if err := waitForReplAuthorization(ctx, client, destinationReplId); err != nil {
 				return err
 			}
 		}

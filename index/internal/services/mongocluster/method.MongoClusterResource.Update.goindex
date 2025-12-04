@@ -8,10 +8,13 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mongocluster/2025-09-01/mongoclusters"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -51,8 +54,17 @@ func (r MongoClusterResource) Update() sdk.ResourceFunc {
 			// https://github.com/Azure/azure-rest-api-specs/issues/31377 has been filed to track it.
 			payload.SystemData = nil
 
-			// Set `identity` to `nil` to avoid schema validation errors returned by service API when upgrading API version from `2024-07-01` to `2025-09-01`.
-			payload.Identity = nil
+			// Set `identity` to `nil` to avoid schema validation errors returned by service API when `identity` type is `None`.
+			if payload.Identity != nil && payload.Identity.Type == identity.TypeNone {
+				// Setting the `identity` to nil is equivalent to setting the `identity` to `None`.
+				payload.Identity = nil
+			}
+
+			// Clear `data_api_mode_enabled` for clusters created with `PointInTimeRestore` or `GeoReplica` mode to avoid schema validation errors
+			// `data_api_mode_enabled` is only supported for `Default` create mode
+			if state.CreateMode != string(mongoclusters.CreateModeDefault) {
+				payload.Properties.DataApi = nil
+			}
 
 			// upgrades involving Free or M25(Burstable) compute tier require first upgrading the compute tier, after which other configurations can be updated.
 			if metadata.ResourceData.HasChange("compute_tier") {
@@ -89,6 +101,7 @@ func (r MongoClusterResource) Update() sdk.ResourceFunc {
 			if metadata.ResourceData.HasChange("storage_size_in_gb") {
 				payload.Properties.Storage = &mongoclusters.StorageProperties{
 					SizeGb: pointer.To(state.StorageSizeInGb),
+					Type:   pointer.To(mongoclusters.StorageType(state.StorageType)),
 				}
 			}
 
@@ -98,6 +111,30 @@ func (r MongoClusterResource) Update() sdk.ResourceFunc {
 
 			if metadata.ResourceData.HasChange("version") {
 				payload.Properties.ServerVersion = pointer.To(state.Version)
+			}
+
+			if metadata.ResourceData.HasChange("customer_managed_key") {
+				payload.Properties.Encryption = expandMongoClusterCustomerManagedKey(state.CustomerManagedKey)
+			}
+
+			if metadata.ResourceData.HasChange("authentication_methods") {
+				payload.Properties.AuthConfig = expandMongoClusterAuthConfig(state.AuthenticationMethods)
+			}
+
+			// Only allow enabling `data_api_mode_enabled`, disabling should trigger ForceNew (handled in CustomizeDiff)
+			if metadata.ResourceData.HasChange("data_api_mode_enabled") {
+				// CustomizeDiff ensures this change is always false -> true
+				payload.Properties.DataApi = &mongoclusters.DataApiProperties{
+					Mode: pointer.To(mongoclusters.DataApiModeEnabled),
+				}
+			}
+
+			if metadata.ResourceData.HasChange("identity") {
+				identityVal, err := identity.ExpandUserAssignedMapFromModel(state.Identity)
+				if err != nil {
+					return fmt.Errorf(`expanding "identity": %v`, err)
+				}
+				payload.Identity = identityVal
 			}
 
 			if err := client.CreateOrUpdateThenPoll(ctx, *id, *payload); err != nil {

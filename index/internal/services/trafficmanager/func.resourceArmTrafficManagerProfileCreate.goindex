@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
@@ -19,7 +20,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceArmTrafficManagerProfileCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).TrafficManager.ProfilesClient
@@ -44,27 +44,24 @@ func resourceArmTrafficManagerProfileCreate(d *pluginsdk.ResourceData, meta inte
 	trafficRoutingMethod := profiles.TrafficRoutingMethod(d.Get("traffic_routing_method").(string))
 	// No existing profile - start from a new struct.
 	profile := profiles.Profile{
-		Name:     utils.String(id.TrafficManagerProfileName),
-		Location: utils.String("global"), // must be provided in request
+		Name:     pointer.To(id.TrafficManagerProfileName),
+		Location: pointer.To("global"), // must be provided in request
 		Properties: &profiles.ProfileProperties{
-			TrafficRoutingMethod: &trafficRoutingMethod,
-			DnsConfig:            expandArmTrafficManagerDNSConfig(d),
-			MonitorConfig:        expandArmTrafficManagerMonitorConfig(d),
+			TrafficRoutingMethod:        &trafficRoutingMethod,
+			TrafficViewEnrollmentStatus: expandArmTrafficManagerTrafficView(d.Get("traffic_view_enabled").(bool)),
+			DnsConfig:                   expandArmTrafficManagerDNSConfig(d),
+			MonitorConfig:               expandArmTrafficManagerMonitorConfig(d),
 		},
 		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
 	}
 
 	if maxReturn, ok := d.GetOk("max_return"); ok {
-		profile.Properties.MaxReturn = utils.Int64(int64(maxReturn.(int)))
+		profile.Properties.MaxReturn = pointer.To(int64(maxReturn.(int)))
 	}
 
 	if status, ok := d.GetOk("profile_status"); ok {
 		profileStatus := profiles.ProfileStatus(status.(string))
 		profile.Properties.ProfileStatus = &profileStatus
-	}
-
-	if trafficViewStatus, ok := d.GetOk("traffic_view_enabled"); ok {
-		profile.Properties.TrafficViewEnrollmentStatus = expandArmTrafficManagerTrafficView(trafficViewStatus.(bool))
 	}
 
 	trafficRoutingMethodPtr := profile.Properties.TrafficRoutingMethod

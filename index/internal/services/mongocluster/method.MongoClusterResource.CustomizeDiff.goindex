@@ -8,10 +8,13 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mongocluster/2025-09-01/mongoclusters"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -53,6 +56,10 @@ func (r MongoClusterResource) CustomizeDiff() sdk.ResourceFunc {
 				if state.SourceLocation == "" {
 					return fmt.Errorf("`source_location` is required when `create_mode` is `GeoReplica`")
 				}
+			case string(mongoclusters.CreateModePointInTimeRestore):
+				if len(state.Restore) == 0 {
+					return fmt.Errorf("`restore` is required when `create_mode` is `PointInTimeRestore`")
+				}
 			}
 
 			if state.ComputeTier == "Free" || state.ComputeTier == "M25" {
@@ -81,6 +88,29 @@ func (r MongoClusterResource) CustomizeDiff() sdk.ResourceFunc {
 					return err
 				}
 			}
+
+			if !metadata.ResourceDiff.GetRawConfig().AsValueMap()["data_api_mode_enabled"].IsNull() && state.CreateMode != string(mongoclusters.CreateModeDefault) {
+				return fmt.Errorf("`data_api_mode_enabled` can only be set when `create_mode` is `Default`")
+			}
+
+			// Service team confirmed that `data_api_mode_enabled` can only be updated to `Enabled` after the cluster has been created
+			if oldVal, newVal := metadata.ResourceDiff.GetChange("data_api_mode_enabled"); oldVal.(bool) && !newVal.(bool) && state.CreateMode == string(mongoclusters.CreateModeDefault) {
+				if err := metadata.ResourceDiff.ForceNew("data_api_mode_enabled"); err != nil {
+					return err
+				}
+			}
+
+			// When identity is added or removed from the configuration, it should trigger ForceNew.
+			// 1. When identity type is changed from `UserAssigned` to `None`, go-azure-sdk always sets `identity.userAssignedIdentities` to `nil` in the request payload.
+			// But since service API does not allow explicitly setting `identity.userAssignedIdentities` to `nil` when the identity type is `None`,
+			// otherwise it will throw a schema validation error, Terraform can only dynamically treat this change as forceNew.
+			// 2. Service API will fail when identity type is changed from `None` to `UserAssigned`.
+			if oldVal, newVal := metadata.ResourceDiff.GetChange("identity"); (len(oldVal.([]interface{})) > 0 && len(newVal.([]interface{})) == 0) || (len(oldVal.([]interface{})) == 0 && len(newVal.([]interface{})) > 0) {
+				if err := metadata.ResourceDiff.ForceNew("identity"); err != nil {
+					return err
+				}
+			}
+
 			return nil
 		},
 	}

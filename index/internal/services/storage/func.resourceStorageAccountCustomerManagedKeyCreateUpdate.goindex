@@ -17,7 +17,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceStorageAccountCustomerManagedKeyCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	storageClient := meta.(*clients.Client).Storage.ResourceManager.StorageAccounts
@@ -116,32 +115,36 @@ func resourceStorageAccountCustomerManagedKeyCreateUpdate(d *pluginsdk.ResourceD
 			Encryption: &storageaccounts.Encryption{
 				Services: &storageaccounts.EncryptionServices{
 					Blob: &storageaccounts.EncryptionService{
-						Enabled: utils.Bool(true),
+						Enabled: pointer.To(true),
 					},
 					File: &storageaccounts.EncryptionService{
-						Enabled: utils.Bool(true),
+						Enabled: pointer.To(true),
 					},
 				},
 				Identity: &storageaccounts.EncryptionIdentity{
-					UserAssignedIdentity: utils.String(userAssignedIdentity),
+					UserAssignedIdentity: pointer.To(userAssignedIdentity),
 				},
 				KeySource: pointer.To(storageaccounts.KeySourceMicrosoftPointKeyvault),
 				Keyvaultproperties: &storageaccounts.KeyVaultProperties{
-					Keyname:     utils.String(keyName),
-					Keyversion:  utils.String(keyVersion),
-					Keyvaulturi: utils.String(keyVaultURI),
+					Keyname:     pointer.To(keyName),
+					Keyversion:  pointer.To(keyVersion),
+					Keyvaulturi: pointer.To(keyVaultURI),
 				},
 			},
 		},
 	}
 
 	if federatedIdentityClientID != "" {
-		payload.Properties.Encryption.Identity.FederatedIdentityClientId = utils.String(federatedIdentityClientID)
+		payload.Properties.Encryption.Identity.FederatedIdentityClientId = pointer.To(federatedIdentityClientID)
 	}
 	if _, err = storageClient.Update(ctx, *id, payload); err != nil {
 		return fmt.Errorf("updating Customer Managed Key for %s: %+v", id, err)
 	}
 
 	d.SetId(id.ID())
+	if err := pluginsdk.SetResourceIdentityData(d, id, pluginsdk.ResourceTypeForIdentityVirtual); err != nil {
+		return err
+	}
+
 	return resourceStorageAccountCustomerManagedKeyRead(d, meta)
 }

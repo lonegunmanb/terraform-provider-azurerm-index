@@ -12,11 +12,8 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/backups"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/poolchange"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/snapshots"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/volumes"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/volumesreplication"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
@@ -30,7 +27,6 @@ import (
 )
 func resourceNetAppVolumeUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).NetApp.VolumeClient
-	poolChangeClient := meta.(*clients.Client).NetApp.PoolChangeClient
 	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -169,14 +165,14 @@ func resourceNetAppVolumeUpdate(d *pluginsdk.ResourceData, meta interface{}) err
 	if d.HasChanges("service_level", "pool_name") {
 		poolName := d.Get("pool_name").(string)
 		poolId := volumes.NewCapacityPoolID(id.SubscriptionId, id.ResourceGroupName, id.NetAppAccountName, poolName)
-		volumeId, err := poolchange.ParseVolumeID(id.ID())
+		volumeId, err := volumes.ParseVolumeID(id.ID())
 		if err != nil {
 			return err
 		}
-		poolChangeInput := poolchange.PoolChangeRequest{
+		poolChangeInput := volumes.PoolChangeRequest{
 			NewPoolResourceId: poolId.ID(),
 		}
-		if _, err = poolChangeClient.VolumesPoolChange(ctx, *volumeId, poolChangeInput); err != nil {
+		if _, err = client.PoolChange(ctx, *volumeId, poolChangeInput); err != nil {
 			return fmt.Errorf("updating `service_level` for %s: %+v", id, err)
 		}
 

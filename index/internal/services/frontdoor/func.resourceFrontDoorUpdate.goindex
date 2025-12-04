@@ -6,11 +6,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -20,7 +21,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceFrontDoorUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Frontdoor.FrontDoorsClient
@@ -35,26 +35,26 @@ func resourceFrontDoorUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 	// remove in 3.0
 	// due to a change in the RP, if a Frontdoor exists in a location other than 'Global' it may continue to
 	// exist in that location, if this is a brand new Frontdoor it must be created in the 'Global' location
-	var location string
+	var loc string
 
 	exists, err := client.Get(ctx, id)
 	if err != nil || exists.Model == nil {
 		return fmt.Errorf("locating %s: %+v", id, err)
 	} else {
-		location = azure.NormalizeLocation(*exists.Model.Location)
+		loc = location.Normalize(*exists.Model.Location)
 	}
 
 	cfgLocation, hasLocation := d.GetOk("location")
 	if hasLocation {
-		if location != azure.NormalizeLocation(cfgLocation) {
-			return fmt.Errorf("the Front Door %q (Resource Group %q) already exists in %q and cannot be moved to the %q location", name, resourceGroup, location, cfgLocation)
+		if loc != location.Normalize(cfgLocation.(string)) {
+			return fmt.Errorf("the Front Door %q (Resource Group %q) already exists in %q and cannot be moved to the %q location", name, resourceGroup, loc, cfgLocation)
 		}
 	}
 
 	existingModel := *exists.Model
 
 	if d.HasChange("friendly_name") {
-		existingModel.Properties.FriendlyName = utils.String(d.Get("friendly_name").(string))
+		existingModel.Properties.FriendlyName = pointer.To(d.Get("friendly_name").(string))
 	}
 
 	routingRules := d.Get("routing_rule").([]interface{})

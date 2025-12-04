@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -78,10 +78,10 @@ func resourceIotHubCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 		routingProperties.FallbackRoute = expandIoTHubFallbackRoute(d)
 	} else {
 		routingProperties.FallbackRoute = &devices.FallbackRouteProperties{
-			Source:        utils.String(string(devices.RoutingSourceDeviceMessages)),
-			Condition:     utils.String("true"),
+			Source:        pointer.To(string(devices.RoutingSourceDeviceMessages)),
+			Condition:     pointer.To("true"),
 			EndpointNames: &[]string{"events"},
-			IsEnabled:     utils.Bool(true),
+			IsEnabled:     pointer.To(true),
 		}
 	}
 
@@ -109,8 +109,8 @@ func resourceIotHubCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	}
 
 	props := devices.IotHubDescription{
-		Name:     utils.String(id.Name),
-		Location: utils.String(azure.NormalizeLocation(d.Get("location").(string))),
+		Name:     pointer.To(id.Name),
+		Location: pointer.To(location.Normalize(d.Get("location").(string))),
 		Sku:      expandIoTHubSku(d),
 		Properties: &devices.IotHubProperties{
 			Routing:                       &routingProperties,
@@ -141,10 +141,10 @@ func resourceIotHubCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	if partitionOk || retentionOk {
 		eh := devices.EventHubProperties{}
 		if retentionOk {
-			eh.RetentionTimeInDays = utils.Int64(int64(retention.(int)))
+			eh.RetentionTimeInDays = pointer.To(int64(retention.(int)))
 		}
 		if partitionOk {
-			eh.PartitionCount = utils.Int32(int32(partition.(int)))
+			eh.PartitionCount = pointer.To(int32(partition.(int)))
 		}
 
 		props.Properties.EventHubEndpoints = map[string]*devices.EventHubProperties{
@@ -152,10 +152,10 @@ func resourceIotHubCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 		}
 	}
 
-	props.Properties.DisableLocalAuth = utils.Bool(!d.Get("local_authentication_enabled").(bool))
+	props.Properties.DisableLocalAuth = pointer.To(!d.Get("local_authentication_enabled").(bool))
 
 	if v, ok := d.GetOk("min_tls_version"); ok {
-		props.Properties.MinTLSVersion = utils.String(v.(string))
+		props.Properties.MinTLSVersion = pointer.To(v.(string))
 	}
 
 	future, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.Name, props, "")

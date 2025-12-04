@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2025-08-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandFlexibleServerAuthConfigForPatch(authRaw []interface{}) *servers.AuthConfigForPatch {
+	if len(authRaw) == 0 || authRaw[0] == nil {
+		return nil
+	}
+
+	authConfigs := authRaw[0].(map[string]interface{})
+	out := servers.AuthConfigForPatch{}
+
+	activeDirectoryAuthEnabled := servers.MicrosoftEntraAuthDisabled
+	if authConfigs["active_directory_auth_enabled"].(bool) {
+		activeDirectoryAuthEnabled = servers.MicrosoftEntraAuthEnabled
+	}
+	out.ActiveDirectoryAuth = &activeDirectoryAuthEnabled
+
+	passwordAuthEnabled := servers.PasswordBasedAuthDisabled
+	if authConfigs["password_auth_enabled"].(bool) {
+		passwordAuthEnabled = servers.PasswordBasedAuthEnabled
+	}
+	out.PasswordAuth = &passwordAuthEnabled
+
+	if tenantId, ok := authConfigs["tenant_id"].(string); ok {
+		out.TenantId = &tenantId
+	}
+
+	return &out
+}

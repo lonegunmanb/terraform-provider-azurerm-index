@@ -11,19 +11,17 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2025-06-01/cognitiveservicesaccounts"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/subnets"
 	search "github.com/hashicorp/go-azure-sdk/resource-manager/search/2025-05-01/services"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/validate"
-	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
@@ -37,7 +35,7 @@ func expandCognitiveAccountCustomerManagedKey(input []interface{}) *cognitiveser
 	}
 
 	v := input[0].(map[string]interface{})
-	keyId, _ := keyVaultParse.ParseOptionallyVersionedNestedItemID(v["key_vault_key_id"].(string))
+	keyId, _ := keyvault.ParseNestedItemID(v["key_vault_key_id"].(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
 	if keyId == nil {
 		return nil
 	}
@@ -52,10 +50,10 @@ func expandCognitiveAccountCustomerManagedKey(input []interface{}) *cognitiveser
 	return &cognitiveservicesaccounts.Encryption{
 		KeySource: &keySource,
 		KeyVaultProperties: &cognitiveservicesaccounts.KeyVaultProperties{
-			KeyName:          utils.String(keyId.Name),
-			KeyVersion:       utils.String(keyId.Version),
-			KeyVaultUri:      utils.String(keyId.KeyVaultBaseUrl),
-			IdentityClientId: utils.String(identity),
+			KeyName:          pointer.To(keyId.Name),
+			KeyVersion:       pointer.To(keyId.Version),
+			KeyVaultUri:      pointer.To(keyId.KeyVaultBaseURL),
+			IdentityClientId: pointer.To(identity),
 		},
 	}
 }

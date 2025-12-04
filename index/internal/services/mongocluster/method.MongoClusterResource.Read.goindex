@@ -8,10 +8,13 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mongocluster/2025-09-01/mongoclusters"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -42,12 +45,20 @@ func (r MongoClusterResource) Read() sdk.ResourceFunc {
 			if model := resp.Model; model != nil {
 				state.Location = location.Normalize(model.Location)
 
+				identity, err := identity.FlattenUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return fmt.Errorf("flattening `identity`: %+v", err)
+				}
+				state.Identity = pointer.From(identity)
+
 				if props := model.Properties; props != nil {
 					// API doesn't return the value of administrator_password
 					state.AdministratorPassword = metadata.ResourceData.Get("administrator_password").(string)
 
 					// API doesn't return the value of create_mode, https://github.com/Azure/azure-rest-api-specs/issues/31266 has been filed to track it.
 					state.CreateMode = metadata.ResourceData.Get("create_mode").(string)
+
+					state.CustomerManagedKey = flattenMongoClusterCustomerManagedKey(props.Encryption)
 
 					if v := props.Administrator; v != nil {
 						state.AdministratorUserName = pointer.From(v.UserName)
@@ -65,6 +76,8 @@ func (r MongoClusterResource) Read() sdk.ResourceFunc {
 						}
 					}
 
+					state.Restore = flattenMongoClusterRestore(props.RestoreParameters)
+
 					if v := props.Sharding; v != nil {
 						state.ShardCount = pointer.From(v.ShardCount)
 					}
@@ -79,11 +92,18 @@ func (r MongoClusterResource) Read() sdk.ResourceFunc {
 
 					if v := props.Storage; v != nil {
 						state.StorageSizeInGb = pointer.From(v.SizeGb)
+						state.StorageType = pointer.FromEnum(v.Type)
 					}
 					if v := props.PreviewFeatures; v != nil {
 						state.PreviewFeatures = flattenMongoClusterPreviewFeatures(v)
 					}
 					state.Version = pointer.From(props.ServerVersion)
+
+					state.AuthenticationMethods = flattenMongoClusterAuthConfig(props.AuthConfig)
+
+					if v := props.DataApi; v != nil {
+						state.DataApiModeEnabled = pointer.From(v.Mode) == mongoclusters.DataApiModeEnabled
+					}
 				}
 
 				state.Tags = pointer.From(model.Tags)

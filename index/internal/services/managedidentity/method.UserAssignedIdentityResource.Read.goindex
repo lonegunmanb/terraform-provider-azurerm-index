@@ -10,15 +10,16 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/managedidentity/2023-01-31/managedidentities"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/managedidentity/2024-11-30/identities"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedidentity/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 )
 func (r UserAssignedIdentityResource) Read() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Timeout: 5 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
-			client := metadata.Client.ManagedIdentity.V20230131.ManagedIdentities
+			client := metadata.Client.ManagedIdentity.V20241130.Identities
 			schema := UserAssignedIdentityResourceSchema{}
 
 			id, err := commonids.ParseUserAssignedIdentityID(metadata.ResourceData.Id())
@@ -37,8 +38,13 @@ func (r UserAssignedIdentityResource) Read() sdk.ResourceFunc {
 			if model := resp.Model; model != nil {
 				schema.Name = id.UserAssignedIdentityName
 				schema.ResourceGroupName = id.ResourceGroupName
-				if err := r.mapIdentityToUserAssignedIdentityResourceSchema(*model, &schema); err != nil {
-					return fmt.Errorf("flattening model: %+v", err)
+				schema.Location = location.Normalize(model.Location)
+				schema.Tags = tags.Flatten(model.Tags)
+
+				if model.Properties != nil {
+					schema.ClientId = pointer.From(model.Properties.ClientId)
+					schema.PrincipalId = pointer.From(model.Properties.PrincipalId)
+					schema.TenantId = pointer.From(model.Properties.TenantId)
 				}
 			}
 

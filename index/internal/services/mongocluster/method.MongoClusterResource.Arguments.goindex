@@ -8,10 +8,13 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mongocluster/2025-09-01/mongoclusters"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -43,12 +46,44 @@ func (r MongoClusterResource) Arguments() map[string]*pluginsdk.Schema {
 			Type:     pluginsdk.TypeString,
 			Optional: true,
 			Default:  string(mongoclusters.CreateModeDefault),
-			// Confirmed with service team the 'Default' and `GeoReplica` are the only accepted value currently, other values will be supported later.
+			// Confirmed with service team the 'Default', `GeoReplica` and `PointInTimeRestore` are the only accepted value currently, other values will be supported later.
 			ValidateFunc: validation.StringInSlice([]string{
 				string(mongoclusters.CreateModeDefault),
 				string(mongoclusters.CreateModeGeoReplica),
+				string(mongoclusters.CreateModePointInTimeRestore),
 			}, false),
 		},
+
+		"customer_managed_key": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			ForceNew: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"key_vault_key_id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: keyVaultValidate.VersionlessNestedItemId,
+					},
+
+					"user_assigned_identity_id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: commonids.ValidateUserAssignedIdentityID,
+					},
+				},
+			},
+		},
+
+		"data_api_mode_enabled": {
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Default:  false,
+		},
+
+		// Although Swagger defines four identity types, the service API currently only supports `None` and `UserAssigned`. Service team has confirmed that they will support the other types in the future.
+		"identity": commonschema.UserAssignedIdentityOptional(),
 
 		"preview_features": {
 			Type:     pluginsdk.TypeList,
@@ -57,6 +92,30 @@ func (r MongoClusterResource) Arguments() map[string]*pluginsdk.Schema {
 			Elem: &pluginsdk.Schema{
 				Type:         pluginsdk.TypeString,
 				ValidateFunc: validation.StringIsNotEmpty,
+			},
+		},
+
+		"restore": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			ForceNew: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"point_in_time_utc": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ForceNew:     true,
+						ValidateFunc: validation.IsRFC3339Time,
+					},
+
+					"source_id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ForceNew:     true,
+						ValidateFunc: mongoclusters.ValidateMongoClusterID,
+					},
+				},
 			},
 		},
 
@@ -90,6 +149,17 @@ func (r MongoClusterResource) Arguments() map[string]*pluginsdk.Schema {
 			Sensitive:    true,
 			ValidateFunc: validation.StringIsNotEmpty,
 			RequiredWith: []string{"administrator_username"},
+		},
+
+		// NOTE: O+C `AuthConfig` is an object and its sub property `AllowedModes` has default value `NativeAuth` when `AuthConfig` isn't set in the tfconfig. So, `O+C` is required otherwise it will incur difference.
+		"authentication_methods": {
+			Type:     pluginsdk.TypeSet,
+			Optional: true,
+			Computed: true,
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: validation.StringInSlice(mongoclusters.PossibleValuesForAuthenticationMode(), false),
+			},
 		},
 
 		"compute_tier": {
@@ -130,6 +200,15 @@ func (r MongoClusterResource) Arguments() map[string]*pluginsdk.Schema {
 			Type:         pluginsdk.TypeInt,
 			Optional:     true,
 			ValidateFunc: validation.IntBetween(32, 16384),
+		},
+
+		"storage_type": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			Default:      string(mongoclusters.StorageTypePremiumSSD),
+			ValidateFunc: validation.StringInSlice(mongoclusters.PossibleValuesForStorageType(), false),
+			RequiredWith: []string{"storage_size_in_gb"},
 		},
 
 		"tags": commonschema.Tags(),

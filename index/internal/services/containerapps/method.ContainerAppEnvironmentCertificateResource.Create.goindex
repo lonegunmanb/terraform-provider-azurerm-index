@@ -6,7 +6,9 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2025-07-01/certificates"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2025-07-01/managedenvironments"
@@ -40,13 +42,21 @@ func (r ContainerAppEnvironmentCertificateResource) Create() sdk.ResourceFunc {
 			}
 
 			model := certificates.Certificate{
-				Location: env.Model.Location,
-				Name:     pointer.To(id.CertificateName),
-				Properties: &certificates.CertificateProperties{
-					Password: pointer.To(cert.CertificatePassword),
-					Value:    pointer.To(cert.CertificateBlob),
-				},
-				Tags: tags.Expand(cert.Tags),
+				Location:   env.Model.Location,
+				Name:       pointer.To(id.CertificateName),
+				Properties: &certificates.CertificateProperties{},
+				Tags:       tags.Expand(cert.Tags),
+			}
+
+			if cert.CertificateBlob != "" && cert.CertificatePassword != "" {
+				model.Properties.Password = pointer.To(cert.CertificatePassword)
+				model.Properties.Value = pointer.To(cert.CertificateBlob)
+			} else if len(cert.CertificateKeyVault) > 0 {
+				kvConfig := cert.CertificateKeyVault[0]
+				model.Properties.CertificateKeyVaultProperties = &certificates.CertificateKeyVaultProperties{
+					Identity:    pointer.To(kvConfig.Identity),
+					KeyVaultURL: pointer.To(kvConfig.KeyVaultSecretId),
+				}
 			}
 
 			if _, err := client.CreateOrUpdate(ctx, id, model); err != nil {

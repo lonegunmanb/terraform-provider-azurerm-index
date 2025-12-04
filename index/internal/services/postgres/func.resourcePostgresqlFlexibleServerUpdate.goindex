@@ -12,17 +12,17 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2024-08-01/serverrestart"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2024-08-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2025-08-01/servers"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
@@ -39,8 +39,8 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 		return err
 	}
 
-	parameters := servers.ServerForUpdate{
-		Properties: &servers.ServerPropertiesForUpdate{},
+	parameters := servers.ServerForPatch{
+		Properties: &servers.ServerPropertiesForPatch{},
 	}
 
 	requireUpdateOnLogin := false // it's required to call Create with `createMode` set to `Update` to update login name.
@@ -59,7 +59,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 		if authRaw, authExist := d.GetOk("authentication"); authExist {
 			authConfig := expandFlexibleServerAuthConfig(authRaw.([]interface{}))
 			if authConfig.PasswordAuth != nil {
-				pwdEnabled = *authConfig.PasswordAuth == servers.PasswordAuthEnumEnabled
+				pwdEnabled = *authConfig.PasswordAuth == servers.PasswordBasedAuthEnabled
 			}
 		}
 
@@ -129,8 +129,8 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 		replicationRole := d.Get("replication_role").(string)
 		if createMode == string(servers.CreateModeReplica) && replicationRole == string(servers.ReplicationRoleNone) {
 			replicationRole := servers.ReplicationRoleNone
-			parameters := servers.ServerForUpdate{
-				Properties: &servers.ServerPropertiesForUpdate{
+			parameters := servers.ServerForPatch{
+				Properties: &servers.ServerPropertiesForPatch{
 					ReplicationRole: &replicationRole,
 				},
 			}
@@ -154,15 +154,15 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if d.HasChange("authentication") {
-		parameters.Properties.AuthConfig = expandFlexibleServerAuthConfig(d.Get("authentication").([]interface{}))
+		parameters.Properties.AuthConfig = expandFlexibleServerAuthConfigForPatch(d.Get("authentication").([]interface{}))
 	}
 
 	if d.HasChange("auto_grow_enabled") || d.HasChange("storage_mb") || d.HasChange("storage_tier") {
 		// TODO remove the additional update after https://github.com/Azure/azure-rest-api-specs/issues/22867 is fixed
 		storage := expandArmServerStorage(d)
 
-		storageUpdateParameters := servers.ServerForUpdate{
-			Properties: &servers.ServerPropertiesForUpdate{
+		storageUpdateParameters := servers.ServerForPatch{
+			Properties: &servers.ServerPropertiesForPatch{
 				Storage: storage,
 			},
 		}
@@ -173,7 +173,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if d.HasChange("backup_retention_days") {
-		parameters.Properties.Backup = expandArmServerBackup(d)
+		parameters.Properties.Backup = expandArmServerBackupForPatch(d)
 	}
 
 	if d.HasChange("maintenance_window") {
@@ -181,7 +181,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if d.HasChange("sku_name") {
-		sku, err := expandFlexibleServerSku(d.Get("sku_name").(string))
+		sku, err := expandFlexibleServerSkuForPatch(d.Get("sku_name").(string))
 		if err != nil {
 			return fmt.Errorf("expanding `sku_name` for %s: %v", id, err)
 		}
@@ -193,7 +193,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if d.HasChange("high_availability") {
-		parameters.Properties.HighAvailability = expandFlexibleServerHighAvailability(d.Get("high_availability").([]interface{}), false)
+		parameters.Properties.HighAvailability = expandFlexibleServerHighAvailabilityForPatch(d.Get("high_availability").([]interface{}), false)
 	}
 
 	if d.HasChange("customer_managed_key") {
@@ -209,12 +209,12 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if d.HasChange("create_mode") {
-		createMode := servers.CreateModeForUpdate(d.Get("create_mode").(string))
+		createMode := servers.CreateModeForPatch(d.Get("create_mode").(string))
 		parameters.Properties.CreateMode = &createMode
 	}
 
 	if d.HasChange("version") {
-		version := servers.ServerVersion(d.Get("version").(string))
+		version := servers.PostgresMajorVersion(d.Get("version").(string))
 		parameters.Properties.Version = &version
 	}
 
@@ -236,7 +236,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 				Network:                    expandArmServerNetwork(d),
 			},
 		}
-		if err = client.CreateThenPoll(ctx, *id, loginParameters); err != nil {
+		if err = client.CreateOrUpdateThenPoll(ctx, *id, loginParameters); err != nil {
 			return fmt.Errorf("updating %s: %+v", id, err)
 		}
 	}
@@ -246,16 +246,12 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if requireFailover {
-		restartClient := meta.(*clients.Client).Postgres.ServerRestartClient
-
-		restartServerId := serverrestart.NewFlexibleServerID(id.SubscriptionId, id.ResourceGroupName, id.FlexibleServerName)
-		failoverMode := serverrestart.FailoverModePlannedFailover
-		restartParameters := serverrestart.RestartParameter{
+		restartParameters := servers.RestartParameter{
 			RestartWithFailover: pointer.To(true),
-			FailoverMode:        &failoverMode,
+			FailoverMode:        pointer.To(servers.FailoverModePlannedFailover),
 		}
 
-		if err = restartClient.ServersRestartThenPoll(ctx, restartServerId, restartParameters); err != nil {
+		if err = client.RestartThenPoll(ctx, *id, restartParameters); err != nil {
 			return fmt.Errorf("failing over %s: %+v", *id, err)
 		}
 	}

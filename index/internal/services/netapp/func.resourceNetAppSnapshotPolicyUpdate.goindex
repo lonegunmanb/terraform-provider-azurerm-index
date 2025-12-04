@@ -10,11 +10,11 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/capacitypools"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/snapshotpolicy"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/snapshotpolicies"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2025-06-01/volumes"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -29,25 +29,25 @@ func resourceNetAppSnapshotPolicyUpdate(d *pluginsdk.ResourceData, meta interfac
 	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	id, err := snapshotpolicy.ParseSnapshotPolicyID(d.Id())
+	id, err := snapshotpolicies.ParseSnapshotPolicyID(d.Id())
 	if err != nil {
 		return err
 	}
 
-	parameters := snapshotpolicy.SnapshotPolicyPatch{
-		Location: utils.String(azure.NormalizeLocation(d.Get("location").(string))),
-		Name:     utils.String(id.SnapshotPolicyName),
-		Properties: &snapshotpolicy.SnapshotPolicyProperties{
+	parameters := snapshotpolicies.SnapshotPolicyPatch{
+		Location: pointer.To(location.Normalize(d.Get("location").(string))),
+		Name:     pointer.To(id.SnapshotPolicyName),
+		Properties: &snapshotpolicies.SnapshotPolicyProperties{
 			HourlySchedule:  expandNetAppSnapshotPolicyHourlySchedule(d.Get("hourly_schedule").([]interface{})),
 			DailySchedule:   expandNetAppSnapshotPolicyDailySchedule(d.Get("daily_schedule").([]interface{})),
 			WeeklySchedule:  expandNetAppSnapshotPolicyWeeklySchedule(d.Get("weekly_schedule").([]interface{})),
 			MonthlySchedule: expandNetAppSnapshotPolicyMonthlySchedule(d.Get("monthly_schedule").([]interface{})),
-			Enabled:         utils.Bool(d.Get("enabled").(bool)),
+			Enabled:         pointer.To(d.Get("enabled").(bool)),
 		},
 		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
 	}
 
-	if err = client.SnapshotPoliciesUpdateThenPoll(ctx, *id, parameters); err != nil {
+	if err = client.UpdateThenPoll(ctx, *id, parameters); err != nil {
 		return fmt.Errorf("updating %s: %+v", id, err)
 	}
 
