@@ -27,9 +27,9 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceArmLoadBalancerRead(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceArmLoadBalancerUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).LoadBalancers.LoadBalancersClient
-	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
 	id, err := loadbalancers.ParseLoadBalancerID(d.Id())
@@ -40,51 +40,27 @@ func resourceArmLoadBalancerRead(d *pluginsdk.ResourceData, meta interface{}) er
 	// Casting because of a bug in provider ID generation due to a data issue that needs investigation.
 	resp, err := client.Get(ctx, loadbalancers.ProviderLoadBalancerId(*id), loadbalancers.GetOperationOptions{})
 	if err != nil {
-		if response.WasNotFound(resp.HttpResponse) {
-			log.Printf("[INFO] %s was not found - removing from state", *id)
-			d.SetId("")
-			return nil
-		}
 		return fmt.Errorf("retrieving %s: %+v", *id, err)
 	}
 
-	d.Set("name", id.LoadBalancerName)
-	d.Set("resource_group_name", id.ResourceGroupName)
-
-	if model := resp.Model; model != nil {
-		d.Set("location", location.NormalizeNilable(model.Location))
-		d.Set("edge_zone", flattenEdgeZone(model.ExtendedLocation))
-		if sku := model.Sku; sku != nil {
-			d.Set("sku", string(pointer.From(sku.Name)))
-			d.Set("sku_tier", string(pointer.From(sku.Tier)))
-		}
-
-		if props := model.Properties; props != nil {
-			if feipConfigs := props.FrontendIPConfigurations; feipConfigs != nil {
-				if err := d.Set("frontend_ip_configuration", flattenLoadBalancerFrontendIpConfiguration(feipConfigs)); err != nil {
-					return fmt.Errorf("flattening `frontend_ip_configuration`: %+v", err)
-				}
-
-				privateIpAddress := ""
-				privateIpAddresses := make([]string, 0)
-				for _, config := range *feipConfigs {
-					if feipProps := config.Properties; feipProps != nil {
-						if ip := feipProps.PrivateIPAddress; ip != nil {
-							if privateIpAddress == "" {
-								privateIpAddress = pointer.From(feipProps.PrivateIPAddress)
-							}
-
-							privateIpAddresses = append(privateIpAddresses, *feipProps.PrivateIPAddress)
-						}
-					}
-				}
-
-				d.Set("private_ip_address", privateIpAddress)
-				d.Set("private_ip_addresses", privateIpAddresses)
-			}
-		}
-
-		return tags.FlattenAndSet(d, model.Tags)
+	if resp.Model == nil {
+		return fmt.Errorf("updating %s: model was nil", *id)
 	}
-	return nil
+
+	model := *resp.Model
+
+	if d.HasChange("frontend_ip_configuration") {
+		model.Properties.FrontendIPConfigurations = expandAzureRmLoadBalancerFrontendIpConfigurations(d)
+	}
+
+	if d.HasChange("tags") {
+		model.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+	}
+
+	err = client.CreateOrUpdateThenPoll(ctx, loadbalancers.ProviderLoadBalancerId(*id), model)
+	if err != nil {
+		return fmt.Errorf("updating %s: %+v", id, err)
+	}
+
+	return resourceArmLoadBalancerRead(d, meta)
 }

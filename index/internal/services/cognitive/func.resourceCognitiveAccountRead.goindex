@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -97,9 +98,14 @@ func resourceCognitiveAccountRead(d *pluginsdk.ResourceData, meta interface{}) e
 			}
 			d.Set("dynamic_throttling_enabled", dynamicThrottlingEnabled)
 
-			d.Set("fqdns", utils.FlattenStringSlice(props.AllowedFqdnList))
+			d.Set("fqdns", pointer.From(props.AllowedFqdnList))
 
-			d.Set("project_management_enabled", pointer.From(props.AllowProjectManagement))
+			// Azure API issue: `AllowProjectManagement` not reset during the rollback, see: https://github.com/Azure/azure-rest-api-specs/issues/38678
+			allowProjectManagement := pointer.From(props.AllowProjectManagement)
+			if pointer.From(model.Kind) == "OpenAI" {
+				allowProjectManagement = false
+			}
+			d.Set("project_management_enabled", allowProjectManagement)
 
 			publicNetworkAccess := true
 			if props.PublicNetworkAccess != nil {

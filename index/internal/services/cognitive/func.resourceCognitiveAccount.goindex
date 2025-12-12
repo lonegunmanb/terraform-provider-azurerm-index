@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -63,7 +64,6 @@ func resourceCognitiveAccount() *pluginsdk.Resource {
 			"kind": {
 				Type:     pluginsdk.TypeString,
 				Required: true,
-				ForceNew: true,
 				ValidateFunc: validation.StringInSlice([]string{
 					"AIServices",
 					"Academic",
@@ -368,17 +368,17 @@ func resourceCognitiveAccount() *pluginsdk.Resource {
 						return err
 					}
 				}
-			} else if d.HasChange("project_management_enabled") {
+			} else if d.HasChange("project_management_enabled") && kind != "OpenAI" {
 				if err := d.ForceNew("project_management_enabled"); err != nil {
 					return err
 				}
 			}
 
-			if d.Get("dynamic_throttling_enabled").(bool) && utils.SliceContainsValue([]string{"OpenAI", "AIServices"}, kind) {
+			if d.Get("dynamic_throttling_enabled").(bool) && slices.Contains([]string{"OpenAI", "AIServices"}, kind) {
 				return errors.New("`dynamic_throttling_enabled` is currently not supported when `kind` is set to `OpenAI` or `AIServices`")
 			}
 
-			if bypass, ok := d.GetOk("network_acls.0.bypass"); ok && bypass != "" && !utils.SliceContainsValue([]string{"OpenAI", "AIServices", "TextAnalytics"}, kind) {
+			if bypass, ok := d.GetOk("network_acls.0.bypass"); ok && bypass != "" && !slices.Contains([]string{"OpenAI", "AIServices", "TextAnalytics"}, kind) {
 				return fmt.Errorf("`network_acls.bypass` cannot be set when `kind` is set to `%s`", kind)
 			}
 
@@ -397,6 +397,18 @@ func resourceCognitiveAccount() *pluginsdk.Resource {
 					}
 				}
 			}
+
+			if d.HasChange("kind") {
+				old, new := d.GetChange("kind")
+
+				// Only allow changing `kind` from/to `OpenAI` or `AIServices`, force new for all others
+				if !slices.Contains([]string{"OpenAI", "AIServices"}, new.(string)) || !slices.Contains([]string{"OpenAI", "AIServices"}, old.(string)) {
+					if err := d.ForceNew("kind"); err != nil {
+						return err
+					}
+				}
+			}
+
 			return nil
 		},
 	}

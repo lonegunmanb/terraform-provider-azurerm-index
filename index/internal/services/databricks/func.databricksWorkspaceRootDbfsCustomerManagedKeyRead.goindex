@@ -9,12 +9,11 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2024-05-01/workspaces"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
@@ -26,11 +25,6 @@ func databricksWorkspaceRootDbfsCustomerManagedKeyRead(d *pluginsdk.ResourceData
 	id, err := workspaces.ParseWorkspaceID(d.Id())
 	if err != nil {
 		return err
-	}
-
-	var keyVaultId string
-	if v, ok := d.GetOk("key_vault_id"); ok {
-		keyVaultId = v.(string)
 	}
 
 	resp, err := client.Get(ctx, *id)
@@ -45,15 +39,18 @@ func databricksWorkspaceRootDbfsCustomerManagedKeyRead(d *pluginsdk.ResourceData
 	}
 
 	if model := resp.Model; model != nil {
-		if model.Properties.Parameters != nil {
-			if props := model.Properties.Parameters.Encryption; props != nil {
-				if strings.EqualFold(string(*props.Value.KeySource), string(workspaces.KeySourceMicrosoftPointKeyvault)) && (props.Value.KeyName == nil || props.Value.Keyversion == nil || props.Value.Keyvaulturi == nil) {
-					d.SetId("")
-					return nil
-				}
+		if params := model.Properties.Parameters; params != nil {
+			if encryption := params.Encryption; encryption != nil {
+				if value := encryption.Value; value != nil {
+					if strings.EqualFold(string(pointer.From(value.KeySource)), string(workspaces.KeySourceDefault)) && value.Keyvaulturi == nil && value.KeyName == nil {
+						d.SetId("")
+						return nil
+					}
 
-				key, err := keyVaultParse.NewNestedItemID(*props.Value.Keyvaulturi, keyVaultParse.NestedItemTypeKey, *props.Value.KeyName, *props.Value.Keyversion)
-				if err == nil {
+					key, err := keyvault.NewNestedItemID(pointer.From(value.Keyvaulturi), keyvault.NestedItemTypeKey, pointer.From(value.KeyName), pointer.From(value.Keyversion))
+					if err != nil {
+						return err
+					}
 					d.Set("key_vault_key_id", key.ID())
 				}
 			}
@@ -61,7 +58,7 @@ func databricksWorkspaceRootDbfsCustomerManagedKeyRead(d *pluginsdk.ResourceData
 	}
 
 	d.Set("workspace_id", id.ID())
-	d.Set("key_vault_id", keyVaultId)
+	d.Set("key_vault_id", d.Get("key_vault_id").(string))
 
 	return nil
 }
