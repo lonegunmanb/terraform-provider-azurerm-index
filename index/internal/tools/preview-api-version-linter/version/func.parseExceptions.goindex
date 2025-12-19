@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/preview-api-version-linter/version
+import (
+	"fmt"
+	"net/mail"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/preview-api-version-linter/sdk"
+	"gopkg.in/yaml.v3"
+)
+func parseExceptions(yamlBytes []byte, isHistorical bool) ([]Version, error) {
+	exceptions := []versionException{}
+	if err := yaml.Unmarshal(yamlBytes, &exceptions); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal yaml: %w", err)
+	}
+
+	if !sort.SliceIsSorted(exceptions, func(i int, j int) bool {
+		if exceptions[i].Module != exceptions[j].Module {
+			return exceptions[i].Module < exceptions[j].Module
+		}
+		if exceptions[i].Service != exceptions[j].Service {
+			return exceptions[i].Service < exceptions[j].Service
+		}
+		return exceptions[i].Version < exceptions[j].Version
+	}) {
+		return nil, fmt.Errorf("entries has to be sorted alphabetically by module, service and version")
+	}
+
+	validModules := make(map[string]bool, len(sdk.SdkTypes))
+	for _, sdkType := range sdk.SdkTypes {
+		validModules[sdkType.Module] = true
+	}
+
+	versions := make([]Version, 0, len(exceptions))
+	errors := []string{}
+
+	for _, e := range exceptions {
+		e := trimSpaces(e)
+
+		if errs := validateVersionException(e, isHistorical, validModules); len(errs) > 0 {
+			errors = append(errors, errs...)
+		} else {
+			versions = append(versions, Version{
+				Module:  e.Module,
+				Service: e.Service,
+				Version: e.Version,
+			})
+		}
+	}
+
+	if len(errors) > 0 {
+		return nil, fmt.Errorf("- %s", strings.Join(errors, "\n- "))
+	}
+
+	return versions, nil
+}

@@ -1,0 +1,29 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/preview-api-version-linter/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/preview-api-version-linter/version"
+)
+func populatePreviewVersions(sdkType sdk.SdkType, previewServiceVersions map[version.Version]bool) error {
+	return filepath.WalkDir(filepath.FromSlash(VENDOR_DIR+"/"+sdkType.Module), func(path string, dir os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if dir.IsDir() {
+			matches := sdkType.ServiceAndVersionRegex.FindStringSubmatch(filepath.ToSlash(path))
+			if len(matches) == 3 {
+				previewServiceVersions[version.Version{
+					Module:  sdkType.Module,
+					Service: strings.ToLower(matches[1]),
+					Version: strings.ToLower(matches[2]),
+				}] = true
+			}
+		}
+		return nil
+	})
+}

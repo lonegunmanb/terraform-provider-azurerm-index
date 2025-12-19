@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/preview-api-version-linter/version
+import (
+	"fmt"
+	"net/mail"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/preview-api-version-linter/sdk"
+	"gopkg.in/yaml.v3"
+)
+func validateVersionException(e versionException, isHistorical bool, validModules map[string]bool) (errors []string) {
+	switch {
+	case e.Module == "":
+		errors = append(errors, "module is required")
+	case !validModules[e.Module]:
+		validModulesStr := make([]string, 0, len(validModules))
+		for k := range validModules {
+			validModulesStr = append(validModulesStr, k)
+		}
+		errors = append(errors, fmt.Sprintf("unsupported sdk module %q\nvalid modules are: %q", e.Module, strings.Join(validModulesStr, `", "`)))
+	case e.Service == "":
+		errors = append(errors, fmt.Sprintf("module %q: service is required", e.Module))
+	case e.Version == "":
+		errors = append(errors, fmt.Sprintf("module %q, service %q: version is required", e.Module, e.Service))
+	}
+
+	if len(errors) > 0 {
+		return
+	}
+
+	if !isHistorical {
+		if pointer.From(e.StableVersionTargetDate) == "" {
+			errors = append(errors, fmt.Sprintf("module %q, service %q, version %q: stableVersionTargetDate is required", e.Module, e.Service, e.Version))
+		} else if !validRFC3339DateOnly(pointer.From(e.StableVersionTargetDate)) {
+			errors = append(errors, fmt.Sprintf("module %q, service %q, version %q: invalid stableVersionTargetDate %q, has to be in YYYY-MM-DD format", e.Module, e.Service, e.Version, pointer.From(e.StableVersionTargetDate)))
+		}
+
+		if pointer.From(e.ResponsibleIndividual) == "" {
+			errors = append(errors, fmt.Sprintf("module %q, service %q, version %q: responsibleIndividual is required", e.Module, e.Service, e.Version))
+		} else if !validResponsibleIndividual(pointer.From(e.ResponsibleIndividual)) {
+			errors = append(errors, fmt.Sprintf("module %q, service %q, version %q: invalid responsibleIndividual %q, has to be an email or a `github.com/yourname` GitHub handle", e.Module, e.Service, e.Version, pointer.From(e.ResponsibleIndividual)))
+		}
+	}
+
+	return
+}
