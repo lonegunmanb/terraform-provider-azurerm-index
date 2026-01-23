@@ -13,11 +13,12 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	pool "github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pools"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/batch/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
@@ -34,7 +35,7 @@ func resourceBatchPoolUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 		return err
 	}
 
-	resp, err := client.Get(ctx, *id)
+	resp, err := client.PoolGet(ctx, *id)
 	if err != nil {
 		return fmt.Errorf("retrieving %s: %+v", *id, err)
 	}
@@ -48,7 +49,7 @@ func resourceBatchPoolUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 			}
 
 			log.Printf("[INFO] stopping the pending resize operation on this pool...")
-			if _, err = client.StopResize(ctx, *id); err != nil {
+			if _, err = client.PoolStopResize(ctx, *id); err != nil {
 				return fmt.Errorf("stopping resize operation for %s: %+v", *id, err)
 			}
 
@@ -113,12 +114,15 @@ func resourceBatchPoolUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 			}
 		}
 	}
-	certificates := d.Get("certificate").([]interface{})
-	certificateReferences, err := ExpandBatchPoolCertificateReferences(certificates)
-	if err != nil {
-		return fmt.Errorf("expanding `certificate`: %+v", err)
+
+	if !features.FivePointOh() {
+		certificates := d.Get("certificate").([]interface{})
+		certificateReferences, err := ExpandBatchPoolCertificateReferences(certificates)
+		if err != nil {
+			return fmt.Errorf("expanding `certificate`: %+v", err)
+		}
+		parameters.Properties.Certificates = certificateReferences
 	}
-	parameters.Properties.Certificates = certificateReferences
 
 	if err := validateBatchPoolCrossFieldRules(parameters.Properties); err != nil {
 		return err
@@ -141,7 +145,7 @@ func resourceBatchPoolUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 		parameters.Properties.TargetNodeCommunicationMode = pointer.To(pool.NodeCommunicationMode(d.Get("target_node_communication_mode").(string)))
 	}
 
-	result, err := client.Update(ctx, *id, parameters, pool.UpdateOperationOptions{})
+	result, err := client.PoolUpdate(ctx, *id, parameters, pool.PoolUpdateOperationOptions{})
 	if err != nil {
 		return fmt.Errorf("updating %s: %+v", *id, err)
 	}

@@ -14,12 +14,12 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/blobservice"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/fileservice"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
-	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
@@ -28,10 +28,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	keyVaultsClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
-	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
-	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
-	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
@@ -43,22 +39,30 @@ import (
 	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
 	"github.com/jackofallops/giovanni/storage/2023-11-03/queue/queues"
 )
-func flattenAccountCustomerManagedKey(input *storageaccounts.Encryption, env environments.Environment) []interface{} {
-	output := make([]interface{}, 0)
+func flattenAccountCustomerManagedKey(input *storageaccounts.Encryption) ([]any, error) {
+	output := make([]any, 0)
 
-	if input != nil && input.KeySource != nil && *input.KeySource == storageaccounts.KeySourceMicrosoftPointKeyvault {
-		userAssignedIdentityId := ""
+	if input != nil && pointer.From(input.KeySource) == storageaccounts.KeySourceMicrosoftPointKeyvault {
+		cmk := make(map[string]any)
+
 		if props := input.Identity; props != nil {
-			userAssignedIdentityId = pointer.From(props.UserAssignedIdentity)
+			cmk["user_assigned_identity_id"] = pointer.From(props.UserAssignedIdentity)
 		}
 
-		customerManagedKey := flattenCustomerManagedKey(input.Keyvaultproperties, env.KeyVault, env.ManagedHSM)
-		output = append(output, map[string]interface{}{
-			"key_vault_key_id":          customerManagedKey.keyVaultKeyUri,
-			"managed_hsm_key_id":        customerManagedKey.managedHsmKeyUri,
-			"user_assigned_identity_id": userAssignedIdentityId,
-		})
+		if props := input.Keyvaultproperties; props != nil {
+			keyID, err := keyvault.NewNestedItemID(pointer.From(props.Keyvaulturi), keyvault.NestedItemTypeKey, pointer.From(props.Keyname), pointer.From(props.Keyversion))
+			if err != nil {
+				return output, err
+			}
+			cmk["key_vault_key_id"] = keyID.ID()
+
+			if !features.FivePointOh() && keyID.IsManagedHSM() {
+				cmk["managed_hsm_key_id"] = keyID.ID()
+			}
+		}
+
+		output = append(output, cmk)
 	}
 
-	return output
+	return output, nil
 }

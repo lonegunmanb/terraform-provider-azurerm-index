@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/networksecurityperimeteraccessrules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/networksecurityperimeterprofiles"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (NetworkSecurityPerimeterAccessRuleResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:     pluginsdk.TypeString,
+			Required: true,
+			ValidateFunc: validation.StringMatch(
+				regexp.MustCompile(`(^[a-zA-Z0-9]+[a-zA-Z0-9_.-]{0,78}[a-zA-Z0-9_]+$)|(^[a-zA-Z0-9]$)`),
+				"`name` must be between 1 and 80 characters long, start with a letter or number, end with a letter, number, or underscore, and may contain only letters, numbers, underscores (_), periods (.), or hyphens (-).",
+			),
+			ForceNew: true,
+		},
+
+		"network_security_perimeter_profile_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ValidateFunc: networksecurityperimeteraccessrules.ValidateProfileID,
+			ForceNew:     true,
+		},
+
+		"direction": {
+			Type:     pluginsdk.TypeString,
+			Required: true,
+			ValidateFunc: validation.StringInSlice(
+				networksecurityperimeteraccessrules.PossibleValuesForAccessRuleDirection(),
+				false,
+			),
+			ForceNew: true,
+		},
+
+		"address_prefixes": {
+			Type: pluginsdk.TypeList,
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: validation.IsCIDR,
+			},
+			Optional:     true,
+			MinItems:     1,
+			ExactlyOneOf: []string{"address_prefixes", "fqdns", "service_tags", "subscription_ids"},
+		},
+
+		"fqdns": {
+			Type: pluginsdk.TypeList,
+			Elem: &pluginsdk.Schema{
+				Type: pluginsdk.TypeString,
+			},
+			Optional:     true,
+			MinItems:     1,
+			ExactlyOneOf: []string{"address_prefixes", "fqdns", "service_tags", "subscription_ids"},
+		},
+
+		"service_tags": {
+			Type: pluginsdk.TypeList,
+			Elem: &pluginsdk.Schema{
+				Type: pluginsdk.TypeString,
+			},
+			Optional:     true,
+			MinItems:     1,
+			ExactlyOneOf: []string{"address_prefixes", "fqdns", "service_tags", "subscription_ids"},
+		},
+
+		"subscription_ids": {
+			Type: pluginsdk.TypeList,
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: commonids.ValidateSubscriptionID,
+			},
+			Optional:     true,
+			MinItems:     1,
+			ExactlyOneOf: []string{"address_prefixes", "fqdns", "service_tags", "subscription_ids"},
+		},
+	}
+}

@@ -5,8 +5,8 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/trafficmanager/2022-04-01/endpoints"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/trafficmanager/2022-04-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/trafficmanager/2022-04-01/trafficmanagers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
@@ -26,9 +26,9 @@ func resourceAzureEndpointCreate(d *pluginsdk.ResourceData, meta interface{}) er
 		return fmt.Errorf("parsing `profile_id`: %+v", err)
 	}
 
-	id := endpoints.NewEndpointTypeID(profileId.SubscriptionId, profileId.ResourceGroupName, profileId.TrafficManagerProfileName, endpoints.EndpointTypeAzureEndpoints, d.Get("name").(string))
+	id := trafficmanagers.NewEndpointTypeID(profileId.SubscriptionId, profileId.ResourceGroupName, profileId.TrafficManagerProfileName, trafficmanagers.EndpointTypeAzureEndpoints, d.Get("name").(string))
 
-	existing, err := client.Get(ctx, id)
+	existing, err := client.EndpointsGet(ctx, id)
 	if err != nil {
 		if !response.WasNotFound(existing.HttpResponse) {
 			return fmt.Errorf("checking for presence of existing %s: %v", id, err)
@@ -39,17 +39,17 @@ func resourceAzureEndpointCreate(d *pluginsdk.ResourceData, meta interface{}) er
 		return tf.ImportAsExistsError("azurerm_traffic_manager_azure_endpoint", id.ID())
 	}
 
-	status := endpoints.EndpointStatusEnabled
+	status := trafficmanagers.EndpointStatusEnabled
 	if !d.Get("enabled").(bool) {
-		status = endpoints.EndpointStatusDisabled
+		status = trafficmanagers.EndpointStatusDisabled
 	}
 
-	params := endpoints.Endpoint{
+	params := trafficmanagers.Endpoint{
 		Name: pointer.To(id.EndpointName),
-		Type: pointer.To(fmt.Sprintf("Microsoft.Network/trafficManagerProfiles/%s", endpoints.EndpointTypeAzureEndpoints)),
-		Properties: &endpoints.EndpointProperties{
+		Type: pointer.To(fmt.Sprintf("Microsoft.Network/trafficManagerProfiles/%s", trafficmanagers.EndpointTypeAzureEndpoints)),
+		Properties: &trafficmanagers.EndpointProperties{
 			CustomHeaders:    expandEndpointCustomHeaderConfig(d.Get("custom_header").([]interface{})),
-			AlwaysServe:      pointer.To(endpoints.AlwaysServeDisabled),
+			AlwaysServe:      pointer.To(trafficmanagers.AlwaysServeDisabled),
 			EndpointStatus:   &status,
 			TargetResourceId: pointer.To(d.Get("target_resource_id").(string)),
 			Subnets:          expandEndpointSubnetConfig(d.Get("subnet").([]interface{})),
@@ -57,7 +57,7 @@ func resourceAzureEndpointCreate(d *pluginsdk.ResourceData, meta interface{}) er
 	}
 
 	if alwaysServe := d.Get("always_serve_enabled").(bool); alwaysServe {
-		params.Properties.AlwaysServe = pointer.To(endpoints.AlwaysServeEnabled)
+		params.Properties.AlwaysServe = pointer.To(trafficmanagers.AlwaysServeEnabled)
 	}
 
 	if priority := d.Get("priority").(int); priority != 0 {
@@ -77,7 +77,7 @@ func resourceAzureEndpointCreate(d *pluginsdk.ResourceData, meta interface{}) er
 		params.Properties.GeoMapping = &geoMappings
 	}
 
-	if _, err := client.CreateOrUpdate(ctx, id, params); err != nil {
+	if _, err := client.EndpointsCreateOrUpdate(ctx, id, params); err != nil {
 		return fmt.Errorf("creating %s: %+v", id, err)
 	}
 

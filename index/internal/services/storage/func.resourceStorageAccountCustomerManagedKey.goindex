@@ -7,13 +7,13 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -46,38 +46,10 @@ func resourceStorageAccountCustomerManagedKey() *pluginsdk.Resource {
 				ValidateFunc: commonids.ValidateStorageAccountID,
 			},
 
-			"key_vault_id": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
-				ValidateFunc: commonids.ValidateKeyVaultID,
-				ExactlyOneOf: []string{"managed_hsm_key_id", "key_vault_id", "key_vault_uri"},
-			},
-
-			"key_vault_uri": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
-				ValidateFunc: validation.IsURLWithHTTPS,
-				ExactlyOneOf: []string{"managed_hsm_key_id", "key_vault_id", "key_vault_uri"},
-				Computed:     true,
-			},
-
-			"managed_hsm_key_id": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
-				ValidateFunc: validation.Any(validate.ManagedHSMDataPlaneVersionedKeyID, validate.ManagedHSMDataPlaneVersionlessKeyID),
-				ExactlyOneOf: []string{"managed_hsm_key_id", "key_vault_id", "key_vault_uri"},
-			},
-
-			"key_name": {
+			"key_vault_key_id": {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
-				ValidateFunc: validation.StringIsNotEmpty,
-			},
-
-			"key_version": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
-				ValidateFunc: validation.StringIsNotEmpty,
+				ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeKey),
 			},
 
 			"user_assigned_identity_id": {
@@ -93,6 +65,59 @@ func resourceStorageAccountCustomerManagedKey() *pluginsdk.Resource {
 				RequiredWith: []string{"user_assigned_identity_id"},
 			},
 		},
+	}
+
+	if !features.FivePointOh() {
+		resource.Schema["key_vault_key_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ExactlyOneOf: []string{"managed_hsm_key_id", "key_vault_id", "key_vault_uri", "key_vault_key_id"},
+			ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeKey),
+		}
+
+		resource.Schema["key_vault_uri"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: validation.IsURLWithHTTPS,
+			ExactlyOneOf: []string{"managed_hsm_key_id", "key_vault_id", "key_vault_uri", "key_vault_key_id"},
+			Deprecated:   "`key_vault_uri` has been deprecated in favour of `key_vault_key_id` and will be removed in v5.0 of the AzureRM provider",
+		}
+
+		resource.Schema["key_name"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			Deprecated:   "`key_name` has been deprecated in favour of `key_vault_key_id` and will be removed in v5.0 of the AzureRM provider",
+		}
+
+		resource.Schema["key_version"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			Deprecated:   "`key_version` has been deprecated in favour of `key_vault_key_id` and will be removed in v5.0 of the AzureRM provider",
+		}
+
+		resource.Schema["managed_hsm_key_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeKey),
+			ExactlyOneOf: []string{"managed_hsm_key_id", "key_vault_id", "key_vault_uri", "key_vault_key_id"},
+			Deprecated:   "`managed_hsm_key_id` has been deprecated in favour of `key_vault_key_id` and will be removed in v5.0 of the AzureRM provider",
+		}
+
+		resource.Schema["key_vault_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: commonids.ValidateKeyVaultID,
+			ExactlyOneOf: []string{"managed_hsm_key_id", "key_vault_id", "key_vault_uri", "key_vault_key_id"},
+			Deprecated:   "`key_vault_id` has been deprecated in favour of `key_vault_key_id` and will be removed in v5.0 of the AzureRM provider",
+		}
 	}
 
 	return resource

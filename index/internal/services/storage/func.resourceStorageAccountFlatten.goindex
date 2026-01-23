@@ -14,12 +14,12 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/blobservice"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/fileservice"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
-	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
@@ -28,10 +28,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	keyVaultsClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
-	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
-	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
-	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
@@ -48,7 +44,6 @@ func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceDat
 	storageUtils := meta.(*clients.Client).Storage
 	client := storageClient.StorageAccounts
 	dataPlaneAvailable := meta.(*clients.Client).Features.Storage.DataPlaneAvailable
-	env := meta.(*clients.Client).Account.Environment
 	storageDomainSuffix, ok := meta.(*clients.Client).Account.Environment.Storage.DomainSuffix()
 	if !ok {
 		return fmt.Errorf("could not determine Storage domain suffix for environment %q", meta.(*clients.Client).Account.Environment.Name)
@@ -206,7 +201,11 @@ func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceDat
 		d.Set("queue_encryption_key_type", queueEncryptionKeyType)
 		d.Set("table_encryption_key_type", tableEncryptionKeyType)
 
-		customerManagedKey := flattenAccountCustomerManagedKey(props.Encryption, env)
+		customerManagedKey, err := flattenAccountCustomerManagedKey(props.Encryption)
+		if err != nil {
+			return fmt.Errorf("flattening `customer_managed_key`: %+v", err)
+		}
+
 		if err := d.Set("customer_managed_key", customerManagedKey); err != nil {
 			return fmt.Errorf("setting `customer_managed_key`: %+v", err)
 		}

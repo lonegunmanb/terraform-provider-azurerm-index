@@ -13,11 +13,12 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	pool "github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pools"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/batch/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
@@ -32,17 +33,15 @@ func resourceBatchPoolCreate(d *pluginsdk.ResourceData, meta interface{}) error 
 
 	id := pool.NewPoolID(subscriptionId, d.Get("resource_group_name").(string), d.Get("account_name").(string), d.Get("name").(string))
 
-	if d.IsNewResource() {
-		existing, err := client.Get(ctx, id)
-		if err != nil {
-			if !response.WasNotFound(existing.HttpResponse) {
-				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
-			}
-		}
-
+	existing, err := client.PoolGet(ctx, id)
+	if err != nil {
 		if !response.WasNotFound(existing.HttpResponse) {
-			return tf.ImportAsExistsError("azurerm_batch_pool", id.ID())
+			return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
 		}
+	}
+
+	if !response.WasNotFound(existing.HttpResponse) {
+		return tf.ImportAsExistsError("azurerm_batch_pool", id.ID())
 	}
 
 	parameters := pool.Pool{
@@ -104,12 +103,14 @@ func resourceBatchPoolCreate(d *pluginsdk.ResourceData, meta interface{}) error 
 		return deploymentErr
 	}
 
-	if v, ok := d.GetOk("certificate"); ok {
-		certificateReferences, err := ExpandBatchPoolCertificateReferences(v.([]interface{}))
-		if err != nil {
-			return fmt.Errorf("expanding `certificate`: %+v", err)
+	if !features.FivePointOh() {
+		if v, ok := d.GetOk("certificate"); ok {
+			certificateReferences, err := ExpandBatchPoolCertificateReferences(v.([]interface{}))
+			if err != nil {
+				return fmt.Errorf("expanding `certificate`: %+v", err)
+			}
+			parameters.Properties.Certificates = certificateReferences
 		}
-		parameters.Properties.Certificates = certificateReferences
 	}
 
 	if err := validateBatchPoolCrossFieldRules(parameters.Properties); err != nil {
@@ -135,17 +136,20 @@ func resourceBatchPoolCreate(d *pluginsdk.ResourceData, meta interface{}) error 
 		parameters.Properties.TargetNodeCommunicationMode = pointer.To(pool.NodeCommunicationMode(v.(string)))
 	}
 
-	_, err = client.Create(ctx, id, parameters, pool.CreateOperationOptions{})
+	_, err = client.PoolCreate(ctx, id, parameters, pool.PoolCreateOperationOptions{})
 	if err != nil {
 		return fmt.Errorf("creating %s: %+v", id, err)
 	}
 
-	read, err := client.Get(ctx, id)
+	read, err := client.PoolGet(ctx, id)
 	if err != nil {
 		return fmt.Errorf("retrieving %s: %+v", id, err)
 	}
 
 	d.SetId(id.ID())
+	if err := pluginsdk.SetResourceIdentityData(d, &id); err != nil {
+		return err
+	}
 
 	// if the pool is not Steady after the create operation, wait for it to be Steady
 	if model := read.Model; model != nil {

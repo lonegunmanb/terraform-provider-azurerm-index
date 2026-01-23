@@ -7,13 +7,13 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/storageaccounts"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -21,7 +21,7 @@ import (
 func resourceStorageAccountCustomerManagedKeyRead(d *pluginsdk.ResourceData, meta interface{}) error {
 	storageClient := meta.(*clients.Client).Storage.ResourceManager.StorageAccounts
 	keyVaultsClient := meta.(*clients.Client).KeyVault
-	env := meta.(*clients.Client).Account.Environment
+
 	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -45,36 +45,63 @@ func resourceStorageAccountCustomerManagedKeyRead(d *pluginsdk.ResourceData, met
 	enabled := false
 	if model := resp.Model; model != nil {
 		if props := model.Properties; props != nil {
-			if encryption := props.Encryption; encryption != nil && encryption.KeySource != nil && *encryption.KeySource == storageaccounts.KeySourceMicrosoftPointKeyvault {
+			if encryption := props.Encryption; encryption != nil && pointer.From(encryption.KeySource) == storageaccounts.KeySourceMicrosoftPointKeyvault {
 				enabled = true
 
-				customerManagedKey := flattenCustomerManagedKey(encryption.Keyvaultproperties, env.KeyVault, env.ManagedHSM)
-				d.Set("key_name", customerManagedKey.keyName)
-				d.Set("key_version", customerManagedKey.keyVersion)
-				d.Set("key_vault_uri", customerManagedKey.keyVaultBaseUrl)
-				d.Set("managed_hsm_key_id", customerManagedKey.managedHsmKeyUri)
-
-				federatedIdentityClientID := ""
-				userAssignedIdentity := ""
-				if identityProps := encryption.Identity; identityProps != nil {
-					federatedIdentityClientID = pointer.From(identityProps.FederatedIdentityClientId)
-					userAssignedIdentity = pointer.From(identityProps.UserAssignedIdentity)
-				}
-				// now we have the key vault uri we can look up the ID
-				// we can't look up the ID when using federated identity as the key will be under different tenant
-				keyVaultID := ""
-				if federatedIdentityClientID == "" && customerManagedKey.keyVaultBaseUrl != "" {
-					subscriptionResourceId := commonids.NewSubscriptionID(id.SubscriptionId)
-					tmpKeyVaultID, err := keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, subscriptionResourceId, customerManagedKey.keyVaultBaseUrl)
-					if err != nil {
-						return fmt.Errorf("retrieving Key Vault ID from the Base URI %q: %+v", customerManagedKey.keyVaultBaseUrl, err)
+				if features.FivePointOh() {
+					if kvProps := encryption.Keyvaultproperties; kvProps != nil {
+						keyID, err := keyvault.NewNestedItemID(pointer.From(kvProps.Keyvaulturi), keyvault.NestedItemTypeKey, pointer.From(kvProps.Keyname), pointer.From(kvProps.Keyversion))
+						if err != nil {
+							return err
+						}
+						d.Set("key_vault_key_id", keyID.ID())
 					}
-					keyVaultID = pointer.From(tmpKeyVaultID)
-				}
-				d.Set("key_vault_id", keyVaultID)
 
-				d.Set("user_assigned_identity_id", userAssignedIdentity)
-				d.Set("federated_identity_client_id", federatedIdentityClientID)
+					if identityProps := encryption.Identity; identityProps != nil {
+						d.Set("user_assigned_identity_id", identityProps.UserAssignedIdentity)
+						d.Set("federated_identity_client_id", identityProps.FederatedIdentityClientId)
+					}
+				} else {
+					var keyID *keyvault.NestedItemID
+					if kvProps := encryption.Keyvaultproperties; kvProps != nil {
+						keyId, err := keyvault.NewNestedItemID(pointer.From(kvProps.Keyvaulturi), keyvault.NestedItemTypeKey, pointer.From(kvProps.Keyname), pointer.From(kvProps.Keyversion))
+						if err != nil {
+							return err
+						}
+
+						d.Set("key_vault_key_id", keyId.ID())
+						d.Set("key_name", kvProps.Keyname)
+						d.Set("key_version", kvProps.Keyversion)
+						d.Set("key_vault_uri", kvProps.Keyvaulturi)
+
+						if keyId.IsManagedHSM() {
+							d.Set("managed_hsm_key_id", keyId.ID())
+						}
+
+						keyID = keyId
+					}
+
+					federatedIdentityClientID := ""
+					userAssignedIdentity := ""
+					if identityProps := encryption.Identity; identityProps != nil {
+						federatedIdentityClientID = pointer.From(identityProps.FederatedIdentityClientId)
+						userAssignedIdentity = pointer.From(identityProps.UserAssignedIdentity)
+					}
+					// now we have the key vault uri we can look up the ID
+					// we can't look up the ID when using federated identity as the key will be under different tenant
+					keyVaultID := ""
+					if federatedIdentityClientID == "" && keyID != nil && !keyID.IsManagedHSM() {
+						subscriptionResourceId := commonids.NewSubscriptionID(id.SubscriptionId)
+						tmpKeyVaultID, err := keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, subscriptionResourceId, keyID.KeyVaultBaseURL)
+						if err != nil {
+							return fmt.Errorf("retrieving Key Vault ID from the Base URI %q: %+v", keyID.KeyVaultBaseURL, err)
+						}
+						keyVaultID = pointer.From(tmpKeyVaultID)
+					}
+					d.Set("key_vault_id", keyVaultID)
+					d.Set("user_assigned_identity_id", userAssignedIdentity)
+					d.Set("federated_identity_client_id", federatedIdentityClientID)
+				}
 			}
 		}
 	}

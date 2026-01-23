@@ -61,12 +61,25 @@ func resourceBackupProtectionPolicyFileShareCreateUpdate(d *pluginsdk.ResourceDa
 		TimeZone:       pointer.To(d.Get("timezone").(string)),
 		WorkLoadType:   pointer.To(protectionpolicies.WorkloadTypeAzureFileShare),
 		SchedulePolicy: expandBackupProtectionPolicyFileShareSchedule(d, times),
-		RetentionPolicy: &protectionpolicies.LongTermRetentionPolicy{ // SimpleRetentionPolicy only has duration property ¯\_(ツ)_/¯
+	}
+
+	if d.Get("backup_tier").(string) == "vault-standard" {
+		AzureFileShareProtectionPolicyProperties.VaultRetentionPolicy = &protectionpolicies.VaultRetentionPolicy{
+			SnapshotRetentionInDays: int64(d.Get("snapshot_retention_in_days").(int)),
+			VaultRetention: &protectionpolicies.LongTermRetentionPolicy{
+				DailySchedule:   expandBackupProtectionPolicyFileShareRetentionDaily(d, times),
+				WeeklySchedule:  expandBackupProtectionPolicyFileShareRetentionWeekly(d, times),
+				MonthlySchedule: expandBackupProtectionPolicyFileShareRetentionMonthly(d, times),
+				YearlySchedule:  expandBackupProtectionPolicyFileShareRetentionYearly(d, times),
+			},
+		}
+	} else {
+		AzureFileShareProtectionPolicyProperties.RetentionPolicy = &protectionpolicies.LongTermRetentionPolicy{
 			DailySchedule:   expandBackupProtectionPolicyFileShareRetentionDaily(d, times),
 			WeeklySchedule:  expandBackupProtectionPolicyFileShareRetentionWeekly(d, times),
 			MonthlySchedule: expandBackupProtectionPolicyFileShareRetentionMonthly(d, times),
 			YearlySchedule:  expandBackupProtectionPolicyFileShareRetentionYearly(d, times),
-		},
+		}
 	}
 
 	policy := protectionpolicies.ProtectionPolicyResource{
