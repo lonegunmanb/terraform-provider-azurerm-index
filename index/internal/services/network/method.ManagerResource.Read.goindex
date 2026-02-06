@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/networkmanagers"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
@@ -19,6 +20,7 @@ import (
 )
 func (r ManagerResource) Read() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
 			client := metadata.Client.Network.NetworkManagers
 			id, err := networkmanagers.ParseNetworkManagerID(metadata.ResourceData.Id())
@@ -52,6 +54,10 @@ func (r ManagerResource) Read() sdk.ResourceFunc {
 			scope = flattenNetworkManagerScope(properties.NetworkManagerScopes)
 			scopeAccesses = flattenNetworkManagerScopeAccesses(properties.NetworkManagerScopeAccesses)
 
+			if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+				return err
+			}
+
 			return metadata.Encode(&ManagerModel{
 				CrossTenantScopes: flattenNetworkManagerCrossTenantScopes(properties.NetworkManagerScopes.CrossTenantScopes),
 				Description:       description,
@@ -63,6 +69,5 @@ func (r ManagerResource) Read() sdk.ResourceFunc {
 				Tags:              utils.FlattenPtrMapStringString(resp.Model.Tags),
 			})
 		},
-		Timeout: 5 * time.Minute,
 	}
 }

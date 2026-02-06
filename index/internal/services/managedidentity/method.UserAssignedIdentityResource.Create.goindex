@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedidentity/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
 func (r UserAssignedIdentityResource) Create() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
@@ -41,9 +42,15 @@ func (r UserAssignedIdentityResource) Create() sdk.ResourceFunc {
 			}
 
 			payload := identities.Identity{
-				Location:   location.Normalize(config.Location),
-				Tags:       tags.Expand(config.Tags),
-				Properties: &identities.UserAssignedIdentityProperties{},
+				Location: location.Normalize(config.Location),
+				Tags:     tags.Expand(config.Tags),
+				Properties: &identities.UserAssignedIdentityProperties{
+					IsolationScope: pointer.To(identities.IsolationScopeNone),
+				},
+			}
+
+			if config.IsolationScope != "" {
+				payload.Properties.IsolationScope = pointer.ToEnum[identities.IsolationScope](config.IsolationScope)
 			}
 
 			if _, err := client.UserAssignedIdentitiesCreateOrUpdate(ctx, id, payload); err != nil {
