@@ -1,7 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -9,14 +8,12 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstanceencryptionprotectors"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstancekeys"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	keyVaultParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
-	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
-	mhsmParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
-	managedhsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -27,7 +24,7 @@ func resourceMsSqlManagedInstanceTransparentDataEncryptionDelete(d *pluginsdk.Re
 	// and SystemManaged. For safety, when this resource is deleted, we're resetting the key type
 	// to service managed to prevent accidental lockout if someone were to delete the keys from key vault
 
-	encryptionProtectorClient := meta.(*clients.Client).MSSQLManagedInstance.ManagedInstanceEncryptionProtectorClient
+	client := meta.(*clients.Client).MSSQLManagedInstance.ManagedInstanceEncryptionProtectorClient
 	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -38,19 +35,16 @@ func resourceMsSqlManagedInstanceTransparentDataEncryptionDelete(d *pluginsdk.Re
 
 	managedInstanceId := commonids.NewSqlManagedInstanceID(id.SubscriptionId, id.ResourceGroup, id.ManagedInstanceName)
 
-	managedInstanceKeyName := ""
-
-	// Service managed doesn't require a key name
 	encryptionProtector := managedinstanceencryptionprotectors.ManagedInstanceEncryptionProtector{
 		Properties: &managedinstanceencryptionprotectors.ManagedInstanceEncryptionProtectorProperties{
 			ServerKeyType: managedinstanceencryptionprotectors.ServerKeyTypeServiceManaged,
-			ServerKeyName: &managedInstanceKeyName,
+			ServerKeyName: pointer.To(""),
 		},
 	}
 
-	err = encryptionProtectorClient.CreateOrUpdateThenPoll(ctx, managedInstanceId, encryptionProtector)
+	err = client.CreateOrUpdateThenPoll(ctx, managedInstanceId, encryptionProtector)
 	if err != nil {
-		return fmt.Errorf("creating/updating %s: %+v", id, err)
+		return fmt.Errorf("deleting %s: %+v", id, err)
 	}
 
 	return nil

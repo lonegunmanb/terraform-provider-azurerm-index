@@ -1,7 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -9,14 +8,12 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/encryptionprotectors"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serverkeys"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	keyVaultParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
-	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
-	mhsmParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
 	mssqlValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
@@ -24,7 +21,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceMsSqlTransparentDataEncryption() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	r := &pluginsdk.Resource{
 		Create: resourceMsSqlTransparentDataEncryptionCreateUpdate,
 		Read:   resourceMsSqlTransparentDataEncryptionRead,
 		Update: resourceMsSqlTransparentDataEncryptionCreateUpdate,
@@ -57,17 +54,9 @@ func resourceMsSqlTransparentDataEncryption() *pluginsdk.Resource {
 			},
 
 			"key_vault_key_id": {
-				Type:          pluginsdk.TypeString,
-				Optional:      true,
-				ValidateFunc:  keyVaultValidate.NestedItemId,
-				ConflictsWith: []string{"managed_hsm_key_id"},
-			},
-
-			"managed_hsm_key_id": {
-				Type:          pluginsdk.TypeString,
-				Optional:      true,
-				ValidateFunc:  validate.ManagedHSMDataPlaneVersionedKeyID,
-				ConflictsWith: []string{"key_vault_key_id"},
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey),
 			},
 
 			"auto_rotation_enabled": {
@@ -77,4 +66,47 @@ func resourceMsSqlTransparentDataEncryption() *pluginsdk.Resource {
 			},
 		},
 	}
+
+	if !features.FivePointOh() {
+		r.Schema["key_vault_key_id"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			DiffSuppressFunc: func(_, oldValue, newValue string, d *schema.ResourceData) bool {
+				if newValue == "" {
+					// If using `managed_hsm_key_id`, `key_vault_key_id` will also be set
+					// ignore diff if the 2 are equal.
+					raw := d.GetRawConfig().AsValueMap()["managed_hsm_key_id"]
+					if raw.IsKnown() && !raw.IsNull() {
+						return raw.AsString() == oldValue
+					}
+				}
+
+				return false
+			},
+			ValidateFunc:  keyvault.ValidateNestedItemID(keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey),
+			ConflictsWith: []string{"managed_hsm_key_id"},
+		}
+
+		r.Schema["managed_hsm_key_id"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			DiffSuppressFunc: func(_, oldValue, newValue string, d *schema.ResourceData) bool {
+				if newValue == "" {
+					// If using `key_vault_key_id` with MHSM key, `managed_hsm_key_id` will also be set
+					// ignore diff if the 2 are equal.
+					raw := d.GetRawConfig().AsValueMap()["key_vault_key_id"]
+					if raw.IsKnown() && !raw.IsNull() {
+						return raw.AsString() == oldValue
+					}
+				}
+
+				return false
+			},
+			ValidateFunc:  keyvault.ValidateNestedItemID(keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey),
+			ConflictsWith: []string{"key_vault_key_id"},
+			Deprecated:    "`managed_hsm_key_id` has been deprecated in favour of `key_vault_key_id` and will be removed in v5.0 of the AzureRM provider",
+		}
+	}
+
+	return r
 }

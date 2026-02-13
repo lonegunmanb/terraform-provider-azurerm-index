@@ -8,14 +8,13 @@ import (
 	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
 	keyvaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
-	keyvaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyvaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -94,16 +93,16 @@ func resourceArmCdnEndpointCustomDomain() *pluginsdk.Resource {
 						}, false),
 						Default: string(cdn.MinimumTLSVersionTLS12),
 					},
+
+					"key_vault_secret_id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeAny),
+					},
 				},
 			},
 			ConflictsWith: []string{"cdn_managed_https"},
 		},
-	}
-
-	schema["user_managed_https"].Elem.(*pluginsdk.Resource).Schema["key_vault_secret_id"] = &pluginsdk.Schema{
-		Type:         pluginsdk.TypeString,
-		Required:     true,
-		ValidateFunc: keyvaultValidate.NestedItemIdWithOptionalVersion,
 	}
 
 	if !features.FivePointOh() {
@@ -117,6 +116,7 @@ func resourceArmCdnEndpointCustomDomain() *pluginsdk.Resource {
 			}, false),
 			Default: string(cdn.MinimumTLSVersionTLS12),
 		}
+
 		schema["user_managed_https"].Elem.(*pluginsdk.Resource).Schema["tls_version"] = &pluginsdk.Schema{
 			Type:     pluginsdk.TypeString,
 			Optional: true,

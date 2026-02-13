@@ -1,7 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -9,21 +8,19 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstanceencryptionprotectors"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstancekeys"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	keyVaultParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
-	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
-	mhsmParser "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
-	managedhsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceMsSqlManagedInstanceTransparentDataEncryption() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	r := &pluginsdk.Resource{
 		Create: resourceMsSqlManagedInstanceTransparentDataEncryptionCreateUpdate,
 		Read:   resourceMsSqlManagedInstanceTransparentDataEncryptionRead,
 		Update: resourceMsSqlManagedInstanceTransparentDataEncryptionCreateUpdate,
@@ -49,19 +46,13 @@ func resourceMsSqlManagedInstanceTransparentDataEncryption() *pluginsdk.Resource
 				ForceNew:     true,
 				ValidateFunc: validate.ManagedInstanceID,
 			},
+
 			"key_vault_key_id": {
-				Type:          pluginsdk.TypeString,
-				Optional:      true,
-				ValidateFunc:  keyVaultValidate.NestedItemId,
-				ConflictsWith: []string{"managed_hsm_key_id"},
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey),
 			},
 
-			"managed_hsm_key_id": {
-				Type:          pluginsdk.TypeString,
-				Optional:      true,
-				ValidateFunc:  managedhsmValidate.ManagedHSMDataPlaneVersionedKeyID,
-				ConflictsWith: []string{"key_vault_key_id"},
-			},
 			"auto_rotation_enabled": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
@@ -69,4 +60,46 @@ func resourceMsSqlManagedInstanceTransparentDataEncryption() *pluginsdk.Resource
 			},
 		},
 	}
+
+	if !features.FivePointOh() {
+		r.Schema["key_vault_key_id"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			DiffSuppressFunc: func(_, oldValue, newValue string, d *schema.ResourceData) bool {
+				if newValue == "" {
+					// If using `managed_hsm_key_id`, `key_vault_key_id` will also be set
+					// ignore diff if the 2 are equal.
+					raw := d.GetRawConfig().AsValueMap()["managed_hsm_key_id"]
+					if raw.IsKnown() && !raw.IsNull() {
+						return raw.AsString() == oldValue
+					}
+				}
+
+				return false
+			},
+			ValidateFunc:  keyvault.ValidateNestedItemID(keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey),
+			ConflictsWith: []string{"managed_hsm_key_id"},
+		}
+
+		r.Schema["managed_hsm_key_id"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			DiffSuppressFunc: func(_, oldValue, newValue string, d *schema.ResourceData) bool {
+				if newValue == "" {
+					// If using `key_vault_key_id` with MHSM key, `managed_hsm_key_id` will also be set
+					// ignore diff if the 2 are equal.
+					raw := d.GetRawConfig().AsValueMap()["key_vault_key_id"]
+					if raw.IsKnown() && !raw.IsNull() {
+						return raw.AsString() == oldValue
+					}
+				}
+
+				return false
+			},
+			ValidateFunc:  keyvault.ValidateNestedItemID(keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey),
+			ConflictsWith: []string{"key_vault_key_id"},
+		}
+	}
+
+	return r
 }

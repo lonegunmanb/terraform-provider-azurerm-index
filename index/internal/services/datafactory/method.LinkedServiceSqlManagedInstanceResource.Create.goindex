@@ -1,0 +1,91 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/linkedservices"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r LinkedServiceSqlManagedInstanceResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.DataFactory.LinkedServicesClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var config LinkedServiceSqlManagedInstanceModel
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			dataFactoryId, err := factories.ParseFactoryID(config.DataFactoryID)
+			if err != nil {
+				return err
+			}
+
+			id := linkedservices.NewLinkedServiceID(subscriptionId, dataFactoryId.ResourceGroupName, dataFactoryId.FactoryName, config.Name)
+
+			existing, err := client.Get(ctx, id, linkedservices.DefaultGetOperationOptions())
+			if err != nil && !response.WasNotFound(existing.HttpResponse) {
+				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+			}
+
+			if !response.WasNotFound(existing.HttpResponse) {
+				return tf.ImportAsExistsError(r.ResourceType(), id.ID())
+			}
+
+			sqlMILinkedService := &linkedservices.AzureSqlMILinkedService{
+				Description: pointer.To(config.Description),
+				Parameters:  expandLinkedServiceSqlManagedInstanceParameters(config.Parameters),
+				Annotations: expandLinkedServiceSqlManagedInstanceAnnotations(config.Annotations),
+				TypeProperties: linkedservices.AzureSqlMILinkedServiceTypeProperties{
+					Password: expandLinkedServiceSqlManagedInstanceKeyVaultPassword(config.KeyVaultPassword),
+				},
+			}
+
+			if config.ConnectionString != "" {
+				sqlMILinkedService.TypeProperties.ConnectionString = pointer.To(interface{}(config.ConnectionString))
+			}
+
+			if len(config.KeyVaultConnectionString) > 0 {
+				sqlMILinkedService.TypeProperties.ConnectionString = pointer.To(expandLinkedServiceSqlManagedInstanceKeyVaultConnectionString(config.KeyVaultConnectionString))
+			}
+
+			if config.ServicePrincipalID != "" {
+				sqlMILinkedService.TypeProperties.ServicePrincipalId = pointer.To(interface{}(config.ServicePrincipalID))
+			}
+
+			if config.ServicePrincipalKey != "" {
+				secureString := expandLinkedServiceSqlManagedInstanceServicePrincipalKey(config.ServicePrincipalKey)
+				sqlMILinkedService.TypeProperties.ServicePrincipalKey = secureString
+				sqlMILinkedService.TypeProperties.ServicePrincipalCredential = secureString
+			}
+
+			if config.Tenant != "" {
+				sqlMILinkedService.TypeProperties.Tenant = pointer.To(interface{}(config.Tenant))
+			}
+
+			sqlMILinkedService.ConnectVia = expandLinkedServiceSqlManagedInstanceIntegrationRuntimeName(config.IntegrationRuntimeName)
+
+			linkedService := linkedservices.LinkedServiceResource{
+				Properties: sqlMILinkedService,
+			}
+
+			if _, err := client.CreateOrUpdate(ctx, id, linkedService, linkedservices.DefaultCreateOrUpdateOperationOptions()); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
+}

@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/privatedns
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -20,7 +21,9 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourcePrivateDnsZoneFlatten(d *pluginsdk.ResourceData, id *privatezones.PrivateDnsZoneId, privateZone *privatezones.PrivateZone, recordSet *privatedns.RecordSet) error {
+func resourcePrivateDnsZoneFlatten(ctx context.Context, d *pluginsdk.ResourceData, meta any, id *privatezones.PrivateDnsZoneId, privateZone *privatezones.PrivateZone, includeResource bool) error {
+	recordSetsClient := meta.(*clients.Client).PrivateDns.RecordSetsClient
+
 	d.Set("name", id.PrivateDnsZoneName)
 	d.Set("resource_group_name", id.ResourceGroupName)
 
@@ -36,8 +39,16 @@ func resourcePrivateDnsZoneFlatten(d *pluginsdk.ResourceData, id *privatezones.P
 			return err
 		}
 
-		if err := d.Set("soa_record", flattenPrivateDNSZoneSOARecord(recordSet)); err != nil {
-			return fmt.Errorf("setting `soa_record`: %+v", err)
+		if includeResource {
+			recordSetID := privatedns.NewRecordTypeID(id.SubscriptionId, id.ResourceGroupName, id.PrivateDnsZoneName, privatedns.RecordTypeSOA, "@")
+			resp, err := recordSetsClient.RecordSetsGet(ctx, recordSetID)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %v", recordSetID, err)
+			}
+
+			if err := d.Set("soa_record", flattenPrivateDNSZoneSOARecord(resp.Model)); err != nil {
+				return fmt.Errorf("setting `soa_record`: %+v", err)
+			}
 		}
 	}
 

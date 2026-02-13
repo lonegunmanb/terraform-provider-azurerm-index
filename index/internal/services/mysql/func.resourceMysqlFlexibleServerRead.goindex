@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2023-12-30/servers"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
 	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
@@ -48,75 +49,5 @@ func resourceMysqlFlexibleServerRead(d *pluginsdk.ResourceData, meta interface{}
 		return fmt.Errorf("retrieving %s: %+v", *id, err)
 	}
 
-	d.Set("name", id.FlexibleServerName)
-	d.Set("resource_group_name", id.ResourceGroupName)
-
-	if model := resp.Model; model != nil {
-		d.Set("location", location.NormalizeNilable(&model.Location))
-		if props := model.Properties; props != nil {
-			d.Set("administrator_login", props.AdministratorLogin)
-			d.Set("zone", props.AvailabilityZone)
-			d.Set("version", string(pointer.From(props.Version)))
-			d.Set("fqdn", props.FullyQualifiedDomainName)
-			d.Set("source_server_id", props.SourceServerResourceId)
-
-			if network := props.Network; network != nil {
-				d.Set("delegated_subnet_id", network.DelegatedSubnetResourceId)
-				d.Set("private_dns_zone_id", network.PrivateDnsZoneResourceId)
-				d.Set("public_network_access", string(pointer.From(network.PublicNetworkAccess)))
-
-				if !features.FivePointOh() {
-					d.Set("public_network_access_enabled", pointer.From(network.PublicNetworkAccess) == servers.EnableStatusEnumEnabled)
-				}
-			}
-
-			cmk, err := flattenFlexibleServerDataEncryption(props.DataEncryption, meta)
-			if err != nil {
-				return fmt.Errorf("flattening `customer_managed_key`: %+v", err)
-			}
-			if err := d.Set("customer_managed_key", cmk); err != nil {
-				return fmt.Errorf("setting `customer_managed_key`: %+v", err)
-			}
-
-			identity, err := flattenFlexibleServerIdentity(model.Identity)
-			if err != nil {
-				return fmt.Errorf("flattening `identity`: %+v", err)
-			}
-			if err := d.Set("identity", identity); err != nil {
-				return fmt.Errorf("setting `identity`: %+v", err)
-			}
-
-			if err := d.Set("maintenance_window", flattenArmServerMaintenanceWindow(props.MaintenanceWindow)); err != nil {
-				return fmt.Errorf("setting `maintenance_window`: %+v", err)
-			}
-
-			if err := d.Set("storage", flattenArmServerStorage(props.Storage)); err != nil {
-				return fmt.Errorf("setting `storage`: %+v", err)
-			}
-
-			if backup := props.Backup; backup != nil {
-				d.Set("backup_retention_days", backup.BackupRetentionDays)
-				d.Set("geo_redundant_backup_enabled", *backup.GeoRedundantBackup == servers.EnableStatusEnumEnabled)
-			}
-
-			if err := d.Set("high_availability", flattenFlexibleServerHighAvailability(props.HighAvailability)); err != nil {
-				return fmt.Errorf("setting `high_availability`: %+v", err)
-			}
-			d.Set("replication_role", string(pointer.From(props.ReplicationRole)))
-			d.Set("replica_capacity", props.ReplicaCapacity)
-		}
-		sku, err := flattenFlexibleServerSku(model.Sku)
-		if err != nil {
-			return fmt.Errorf("flattening `sku_name`: %+v", err)
-		}
-		d.Set("sku_name", sku)
-
-		d.Set("administrator_password_wo_version", d.Get("administrator_password_wo_version").(int))
-
-		if err := tags.FlattenAndSet(d, model.Tags); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return resourceMysqlFlexibleServerFlatten(d, id, resp.Model, meta)
 }
