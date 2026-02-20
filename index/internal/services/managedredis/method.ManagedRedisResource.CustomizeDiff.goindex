@@ -36,6 +36,10 @@ func (r ManagedRedisResource) CustomizeDiff() sdk.ResourceFunc {
 				return err
 			}
 
+			if metadata.ResourceDiff.Id() == "" && len(model.DefaultDatabase) == 0 {
+				return fmt.Errorf("`default_database` must be provided when creating a new resource")
+			}
+
 			if len(model.DefaultDatabase) > 0 {
 				dbModel := model.DefaultDatabase[0]
 
@@ -62,6 +66,19 @@ func (r ManagedRedisResource) CustomizeDiff() sdk.ResourceFunc {
 								return fmt.Errorf("invalid clustering_policy %q, when using RediSearch module, clustering_policy must be set to EnterpriseCluster", dbModel.ClusteringPolicy)
 							}
 						}
+					}
+				}
+			}
+
+			if metadata.ResourceDiff.HasChanges("sku_name") {
+				if resId := metadata.ResourceDiff.Id(); resId != "" {
+					clusterId, err := redisenterprise.ParseRedisEnterpriseID(resId)
+					if err != nil {
+						return err
+					}
+					clusterClient := metadata.Client.ManagedRedis.Client
+					if !isSkuAllowedForScaling(ctx, clusterClient, clusterId, model.SkuName) {
+						metadata.ResourceDiff.ForceNew("sku_name")
 					}
 				}
 			}

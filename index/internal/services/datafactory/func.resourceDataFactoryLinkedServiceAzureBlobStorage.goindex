@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -17,7 +18,7 @@ import (
 	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
 )
 func resourceDataFactoryLinkedServiceAzureBlobStorage() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	resource := &pluginsdk.Resource{
 		Create: resourceDataFactoryLinkedServiceBlobStorageCreateUpdate,
 		Read:   resourceDataFactoryLinkedServiceBlobStorageRead,
 		Update: resourceDataFactoryLinkedServiceBlobStorageCreateUpdate,
@@ -90,8 +91,7 @@ func resourceDataFactoryLinkedServiceAzureBlobStorage() *pluginsdk.Resource {
 				ExactlyOneOf: []string{"connection_string", "connection_string_insecure", "sas_uri", "service_endpoint"},
 			},
 
-			// TODO for @favoretti: rename this to 'sas_token_linked_key_vault_key' for 3.4.0
-			"key_vault_sas_token": {
+			"sas_token_linked_key_vault_key": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
 				MaxItems: 1,
@@ -208,4 +208,52 @@ func resourceDataFactoryLinkedServiceAzureBlobStorage() *pluginsdk.Resource {
 			},
 		},
 	}
+
+	if !features.FivePointOh() {
+		resource.Schema["sas_token_linked_key_vault_key"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeList,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"key_vault_sas_token"},
+			MaxItems:      1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"linked_service_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"secret_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+				},
+			},
+		}
+		resource.Schema["key_vault_sas_token"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeList,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"sas_token_linked_key_vault_key"},
+			Deprecated:    "the `key_vault_sas_token` property has been deprecated in favour of the `sas_token_linked_key_vault_key` property and will be removed in v5.0 of the AzureRM Provider",
+			MaxItems:      1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"linked_service_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"secret_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+				},
+			},
+		}
+	}
+
+	return resource
 }

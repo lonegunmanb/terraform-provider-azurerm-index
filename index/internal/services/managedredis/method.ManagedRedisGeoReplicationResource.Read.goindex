@@ -2,6 +2,7 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/services/manage
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -9,7 +10,9 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-07-01/databases"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-07-01/redisenterprise"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis/databaselink"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 )
@@ -42,12 +45,14 @@ func (r ManagedRedisGeoReplicationResource) Read() sdk.ResourceFunc {
 				if props := model.Properties; props != nil && props.GeoReplication != nil {
 					state.LinkedManagedRedisIds = make([]string, 0, len(pointer.From(props.GeoReplication.LinkedDatabases)))
 					for _, db := range pointer.From(props.GeoReplication.LinkedDatabases) {
-						cId, err := toClusterId(pointer.From(db.Id))
-						if err != nil {
-							return err
-						}
-						if !resourceids.Match(cId, clusterId) {
-							state.LinkedManagedRedisIds = append(state.LinkedManagedRedisIds, cId.ID())
+						if pointer.From(db.State) == databases.LinkStateLinked {
+							cId, err := toClusterId(pointer.From(db.Id))
+							if err != nil {
+								return err
+							}
+							if !resourceids.Match(cId, clusterId) {
+								state.LinkedManagedRedisIds = append(state.LinkedManagedRedisIds, cId.ID())
+							}
 						}
 					}
 				}

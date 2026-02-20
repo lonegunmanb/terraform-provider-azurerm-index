@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall
+import (
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-09-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/firewallpolicyrulecollectiongroups"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func resourceFirewallPolicyRuleCollectionGroupSetFlatten(d *pluginsdk.ResourceData, id *firewallpolicyrulecollectiongroups.RuleCollectionGroupId, model *firewallpolicyrulecollectiongroups.FirewallPolicyRuleCollectionGroup) error {
+	d.Set("name", id.RuleCollectionGroupName)
+	d.Set("firewall_policy_id", firewallpolicies.NewFirewallPolicyID(id.SubscriptionId, id.ResourceGroupName, id.FirewallPolicyName).ID())
+
+	if model != nil {
+		if props := model.Properties; props != nil {
+			d.Set("priority", props.Priority)
+
+			applicationRuleCollections, networkRuleCollections, natRuleCollections, err := flattenFirewallPolicyRuleCollection(props.RuleCollections)
+			if err != nil {
+				return fmt.Errorf("flattening Firewall Policy Rule Collections: %+v", err)
+			}
+
+			if err := d.Set("application_rule_collection", applicationRuleCollections); err != nil {
+				return fmt.Errorf("setting `application_rule_collection`: %+v", err)
+			}
+			if err := d.Set("network_rule_collection", networkRuleCollections); err != nil {
+				return fmt.Errorf("setting `network_rule_collection`: %+v", err)
+			}
+			if err := d.Set("nat_rule_collection", natRuleCollections); err != nil {
+				return fmt.Errorf("setting `nat_rule_collection`: %+v", err)
+			}
+		}
+	}
+
+	return pluginsdk.SetResourceIdentityData(d, id)
+}

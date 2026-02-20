@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/natgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceNatGatewayFlatten(d *pluginsdk.ResourceData, id *natgateways.NatGatewayId, model *natgateways.NatGateway) error {
+	d.Set("name", id.NatGatewayName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model != nil {
+		d.Set("location", location.NormalizeNilable(model.Location))
+		sku := ""
+		if model.Sku != nil {
+			sku = string(pointer.From(model.Sku.Name))
+		}
+		d.Set("sku_name", sku)
+		d.Set("zones", zones.FlattenUntyped(model.Zones))
+		if props := model.Properties; props != nil {
+			d.Set("idle_timeout_in_minutes", props.IdleTimeoutInMinutes)
+			d.Set("resource_guid", props.ResourceGuid)
+		}
+		if err := tags.FlattenAndSet(d, model.Tags); err != nil {
+			return err
+		}
+	}
+
+	return pluginsdk.SetResourceIdentityData(d, id)
+}

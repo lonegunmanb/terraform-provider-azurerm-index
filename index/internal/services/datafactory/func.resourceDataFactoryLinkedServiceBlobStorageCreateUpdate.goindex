@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -56,14 +57,21 @@ func resourceDataFactoryLinkedServiceBlobStorageCreateUpdate(d *pluginsdk.Resour
 	}
 
 	if v, ok := d.GetOk("sas_uri"); ok {
-		if sasToken, ok := d.GetOk("key_vault_sas_token"); ok {
-			blobStorageProperties.SasURI = pointer.To(v.(string))
-			blobStorageProperties.SasToken = expandAzureKeyVaultSecretReference(sasToken.([]interface{}))
-		} else {
-			blobStorageProperties.SasURI = &datafactory.SecureString{
-				Value: pointer.To(v.(string)),
-				Type:  datafactory.TypeSecureString,
+		blobStorageProperties.SasURI = &datafactory.SecureString{
+			Value: pointer.To(v.(string)),
+			Type:  datafactory.TypeSecureString,
+		}
+
+		if !features.FivePointOh() {
+			if sasToken, ok := d.GetOk("key_vault_sas_token"); ok {
+				blobStorageProperties.SasToken = expandAzureKeyVaultSecretReference(sasToken.([]interface{}))
+				blobStorageProperties.SasURI = pointer.To(v.(string))
 			}
+		}
+
+		if sasToken, ok := d.GetOk("sas_token_linked_key_vault_key"); ok {
+			blobStorageProperties.SasToken = expandAzureKeyVaultSecretReference(sasToken.([]interface{}))
+			blobStorageProperties.SasURI = pointer.To(v.(string))
 		}
 	}
 

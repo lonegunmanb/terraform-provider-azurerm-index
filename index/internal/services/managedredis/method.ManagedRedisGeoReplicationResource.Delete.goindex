@@ -2,6 +2,7 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/services/manage
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -9,7 +10,9 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-07-01/databases"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/redisenterprise/2025-07-01/redisenterprise"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/managedredis/databaselink"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 )
@@ -35,14 +38,20 @@ func (r ManagedRedisGeoReplicationResource) Delete() sdk.ResourceFunc {
 				fromDbIds := flattenLinkedDatabases(existing.Model.Properties.GeoReplication.LinkedDatabases)
 				toDbIds := []string{dbId.ID()}
 
-				dbIdsToUnlink := databaselink.DbIdsToUnlink(fromDbIds, toDbIds)
+				dbIdsToUnlink, intermediateDbIds, _ := databaselink.LinkUnlink(fromDbIds, toDbIds)
 
-				if len(dbIdsToUnlink) > 0 {
-					params := databases.ForceUnlinkParameters{
-						Ids: dbIdsToUnlink,
+				for _, inv := range databaselink.ForceUnlinkInvocations(intermediateDbIds, dbIdsToUnlink) {
+					id, err := databases.ParseDatabaseID(inv.Id)
+					if err != nil {
+						return err
 					}
-					if err := client.ForceUnlinkThenPoll(ctx, dbId, params); err != nil {
-						return fmt.Errorf("force unlink %s: %+v", dbId, err)
+
+					params := databases.ForceUnlinkParameters{
+						Ids: inv.Ids,
+					}
+
+					if err := client.ForceUnlinkThenPoll(ctx, *id, params); err != nil {
+						return fmt.Errorf("force unlink %s: %+v", *id, err)
 					}
 				}
 			}

@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -19,7 +20,7 @@ import (
 	"github.com/jackofallops/kermit/sdk/datafactory/2018-06-01/datafactory" // nolint: staticcheck
 )
 func resourceDataFactoryLinkedServiceAzureDatabricks() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	resource := &pluginsdk.Resource{
 		Create: resourceDataFactoryLinkedServiceDatabricksCreateUpdate,
 		Read:   resourceDataFactoryLinkedServiceDatabricksRead,
 		Update: resourceDataFactoryLinkedServiceDatabricksCreateUpdate,
@@ -53,12 +54,11 @@ func resourceDataFactoryLinkedServiceAzureDatabricks() *pluginsdk.Resource {
 			},
 
 			// Authentication types
-			"msi_work_space_resource_id": {
-				// TODO: rename this to `msi_workspace_id` in v4.0
+			"msi_workspace_id": {
 				Type:         pluginsdk.TypeString,
 				Optional:     true,
 				ValidateFunc: workspaces.ValidateWorkspaceID,
-				ExactlyOneOf: []string{"access_token", "msi_work_space_resource_id", "key_vault_password"},
+				ExactlyOneOf: []string{"access_token", "msi_workspace_id", "key_vault_password"},
 			},
 
 			"access_token": {
@@ -66,7 +66,7 @@ func resourceDataFactoryLinkedServiceAzureDatabricks() *pluginsdk.Resource {
 				Optional:     true,
 				Sensitive:    true,
 				ValidateFunc: validation.StringIsNotEmpty,
-				ExactlyOneOf: []string{"access_token", "msi_work_space_resource_id", "key_vault_password"},
+				ExactlyOneOf: []string{"access_token", "msi_workspace_id", "key_vault_password"},
 			},
 
 			"key_vault_password": {
@@ -75,21 +75,20 @@ func resourceDataFactoryLinkedServiceAzureDatabricks() *pluginsdk.Resource {
 				MaxItems: 1,
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
-						// TODO use LinkedServiceDataSetName and NestedItemName validate here and in other linked service resources
 						"linked_service_name": {
 							Type:         pluginsdk.TypeString,
 							Required:     true,
-							ValidateFunc: validation.StringIsNotEmpty,
+							ValidateFunc: validate.LinkedServiceDatasetName,
 						},
 
 						"secret_name": {
 							Type:         pluginsdk.TypeString,
 							Required:     true,
-							ValidateFunc: validation.StringIsNotEmpty,
+							ValidateFunc: validate.LinkedServiceDatasetName,
 						},
 					},
 				},
-				ExactlyOneOf: []string{"access_token", "msi_work_space_resource_id", "key_vault_password"},
+				ExactlyOneOf: []string{"access_token", "msi_workspace_id", "key_vault_password"},
 			},
 
 			"description": {
@@ -249,4 +248,28 @@ func resourceDataFactoryLinkedServiceAzureDatabricks() *pluginsdk.Resource {
 			},
 		},
 	}
+
+	if !features.FivePointOh() {
+		resource.Schema["access_token"].ExactlyOneOf = []string{"access_token", "msi_work_space_resource_id", "key_vault_password", "msi_workspace_id"}
+		resource.Schema["key_vault_password"].ExactlyOneOf = []string{"access_token", "msi_work_space_resource_id", "key_vault_password", "msi_workspace_id"}
+
+		resource.Schema["msi_workspace_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: workspaces.ValidateWorkspaceID,
+			ExactlyOneOf: []string{"access_token", "msi_work_space_resource_id", "key_vault_password", "msi_workspace_id"},
+		}
+
+		resource.Schema["msi_work_space_resource_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Computed:     true,
+			ValidateFunc: workspaces.ValidateWorkspaceID,
+			ExactlyOneOf: []string{"access_token", "msi_work_space_resource_id", "key_vault_password", "msi_workspace_id"},
+			Deprecated:   "The `msi_work_space_resource_id` property is deprecated in favour of the `msi_workspace_id` property and will be removed in v5.0 of the AzureRM Provider",
+		}
+	}
+
+	return resource
 }
