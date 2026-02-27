@@ -9,8 +9,9 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backupinstances"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-09-01/backupinstanceresources"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-09-01/backupvaultresources"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-09-01/basebackuppolicyresources"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/databases"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2017-12-01/servers"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -28,12 +29,12 @@ func resourceDataProtectionBackupInstancePostgreSQLCreateUpdate(d *schema.Resour
 	defer cancel()
 
 	name := d.Get("name").(string)
-	vaultId, _ := backupinstances.ParseBackupVaultID(d.Get("vault_id").(string))
+	vaultId, _ := backupvaultresources.ParseBackupVaultID(d.Get("vault_id").(string))
 
-	id := backupinstances.NewBackupInstanceID(subscriptionId, vaultId.ResourceGroupName, vaultId.BackupVaultName, name)
+	id := backupinstanceresources.NewBackupInstanceID(subscriptionId, vaultId.ResourceGroupName, vaultId.BackupVaultName, name)
 
 	if d.IsNewResource() {
-		existing, err := client.Get(ctx, id)
+		existing, err := client.BackupInstancesGet(ctx, id)
 		if err != nil {
 			if !response.WasNotFound(existing.HttpResponse) {
 				return fmt.Errorf("checking for existing DataProtection BackupInstance (%q): %+v", id, err)
@@ -47,11 +48,11 @@ func resourceDataProtectionBackupInstancePostgreSQLCreateUpdate(d *schema.Resour
 	databaseId, _ := databases.ParseDatabaseID(d.Get("database_id").(string))
 	location := location.Normalize(d.Get("location").(string))
 	serverId := servers.NewServerID(databaseId.SubscriptionId, databaseId.ResourceGroupName, databaseId.ServerName)
-	policyId, _ := backuppolicies.ParseBackupPolicyID(d.Get("backup_policy_id").(string))
+	policyId, _ := basebackuppolicyresources.ParseBackupPolicyID(d.Get("backup_policy_id").(string))
 
-	parameters := backupinstances.BackupInstanceResource{
-		Properties: &backupinstances.BackupInstance{
-			DataSourceInfo: backupinstances.Datasource{
+	parameters := backupinstanceresources.BackupInstanceResource{
+		Properties: &backupinstanceresources.BackupInstance{
+			DataSourceInfo: backupinstanceresources.Datasource{
 				DatasourceType:   pointer.To("Microsoft.DBforPostgreSQL/servers/databases"),
 				ObjectType:       pointer.To("Datasource"),
 				ResourceID:       databaseId.ID(),
@@ -60,7 +61,7 @@ func resourceDataProtectionBackupInstancePostgreSQLCreateUpdate(d *schema.Resour
 				ResourceType:     pointer.To("Microsoft.DBforPostgreSQL/servers/databases"),
 				ResourceUri:      pointer.To(""),
 			},
-			DataSourceSetInfo: &backupinstances.DatasourceSet{
+			DataSourceSetInfo: &backupinstanceresources.DatasourceSet{
 				DatasourceType:   pointer.To("Microsoft.DBForPostgreSQL/servers"),
 				ObjectType:       pointer.To("DatasourceSet"),
 				ResourceID:       serverId.ID(),
@@ -70,22 +71,22 @@ func resourceDataProtectionBackupInstancePostgreSQLCreateUpdate(d *schema.Resour
 				ResourceUri:      pointer.To(""),
 			},
 			FriendlyName: pointer.To(id.BackupInstanceName),
-			PolicyInfo: backupinstances.PolicyInfo{
+			PolicyInfo: backupinstanceresources.PolicyInfo{
 				PolicyId: policyId.ID(),
 			},
 		},
 	}
 
 	if v, ok := d.GetOk("database_credential_key_vault_secret_id"); ok {
-		parameters.Properties.DatasourceAuthCredentials = backupinstances.SecretStoreBasedAuthCredentials{
-			SecretStoreResource: &backupinstances.SecretStoreResource{
+		parameters.Properties.DatasourceAuthCredentials = backupinstanceresources.SecretStoreBasedAuthCredentials{
+			SecretStoreResource: &backupinstanceresources.SecretStoreResource{
 				Uri:             pointer.To(v.(string)),
-				SecretStoreType: backupinstances.SecretStoreTypeAzureKeyVault,
+				SecretStoreType: backupinstanceresources.SecretStoreTypeAzureKeyVault,
 			},
 		}
 	}
 
-	err := client.CreateOrUpdateThenPoll(ctx, id, parameters, backupinstances.DefaultCreateOrUpdateOperationOptions())
+	err := client.BackupInstancesCreateOrUpdateThenPoll(ctx, id, parameters, backupinstanceresources.DefaultBackupInstancesCreateOrUpdateOperationOptions())
 	if err != nil {
 		return fmt.Errorf("creating/updating %s: %+v", id, err)
 	}
@@ -95,8 +96,8 @@ func resourceDataProtectionBackupInstancePostgreSQLCreateUpdate(d *schema.Resour
 		return fmt.Errorf("internal-error: context had no deadline")
 	}
 	stateConf := &pluginsdk.StateChangeConf{
-		Pending:    []string{string(backupinstances.StatusConfiguringProtection), "UpdatingProtection"},
-		Target:     []string{string(backupinstances.StatusProtectionConfigured)},
+		Pending:    []string{string(backupinstanceresources.StatusConfiguringProtection), "UpdatingProtection"},
+		Target:     []string{string(backupinstanceresources.StatusProtectionConfigured)},
 		Refresh:    policyProtectionStateRefreshFunc(ctx, client, id),
 		MinTimeout: 1 * time.Minute,
 		Timeout:    time.Until(deadline),

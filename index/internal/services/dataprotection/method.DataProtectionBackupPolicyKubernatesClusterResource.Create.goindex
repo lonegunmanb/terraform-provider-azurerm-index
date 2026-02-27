@@ -10,7 +10,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-09-01/basebackuppolicyresources"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -28,8 +28,8 @@ func (r DataProtectionBackupPolicyKubernatesClusterResource) Create() sdk.Resour
 			client := metadata.Client.DataProtection.BackupPolicyClient
 			subscriptionId := metadata.Client.Account.SubscriptionId
 
-			id := backuppolicies.NewBackupPolicyID(subscriptionId, model.ResourceGroupName, model.VaultName, model.Name)
-			existing, err := client.Get(ctx, id)
+			id := basebackuppolicyresources.NewBackupPolicyID(subscriptionId, model.ResourceGroupName, model.VaultName, model.Name)
+			existing, err := client.BackupPoliciesGet(ctx, id)
 			if err != nil {
 				if !response.WasNotFound(existing.HttpResponse) {
 					return fmt.Errorf("checking for existing %s: %+v", id, err)
@@ -45,21 +45,21 @@ func (r DataProtectionBackupPolicyKubernatesClusterResource) Create() sdk.Resour
 				return err
 			}
 
-			policyRules := make([]backuppolicies.BasePolicyRule, 0)
+			policyRules := make([]basebackuppolicyresources.BasePolicyRule, 0)
 			policyRules = append(policyRules, expandBackupPolicyKubernetesClusterAzureBackupRuleArray(model.BackupRepeatingTimeIntervals, model.TimeZone, taggingCriteria)...)
 			if v := expandBackupPolicyKubernetesClusterDefaultRetentionRule(model.DefaultRetentionRule); v != nil {
 				policyRules = append(policyRules, pointer.From(v))
 			}
 			policyRules = append(policyRules, expandBackupPolicyKubernetesClusterAzureRetentionRules(model.RetentionRule)...)
 
-			parameters := backuppolicies.BaseBackupPolicyResource{
-				Properties: &backuppolicies.BackupPolicy{
+			parameters := basebackuppolicyresources.BaseBackupPolicyResource{
+				Properties: &basebackuppolicyresources.BackupPolicy{
 					PolicyRules:     policyRules,
 					DatasourceTypes: []string{"Microsoft.ContainerService/managedClusters"},
 				},
 			}
 
-			if _, err := client.CreateOrUpdate(ctx, id, parameters); err != nil {
+			if _, err := client.BackupPoliciesCreateOrUpdate(ctx, id, parameters); err != nil {
 				return fmt.Errorf("creating/updating DataProtection BackupPolicy (%q): %+v", id, err)
 			}
 

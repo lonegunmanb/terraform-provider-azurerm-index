@@ -23,6 +23,8 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
 	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
@@ -35,11 +37,25 @@ func expandApplicationGatewaySslProfiles(d *pluginsdk.ResourceData, gatewayID st
 	vs := d.Get("ssl_profile").([]interface{})
 	results := make([]applicationgateways.ApplicationGatewaySslProfile, 0)
 
-	for _, raw := range vs {
+	for i, raw := range vs {
 		v := raw.(map[string]interface{})
 
 		name := v["name"].(string)
-		verifyClientCertIssuerDn := v["verify_client_cert_issuer_dn"].(bool)
+
+		verifyClientCertIssuerDn := false
+		if !features.FivePointOh() {
+			rawVerifyClientCertIssuerDn, _ := d.GetRawConfigAt(sdk.ConstructCtyPath(fmt.Sprintf("ssl_profile.%d.verify_client_cert_issuer_dn", i)))
+			if !rawVerifyClientCertIssuerDn.IsNull() {
+				verifyClientCertIssuerDn = v["verify_client_cert_issuer_dn"].(bool)
+			} else {
+				rawVerifyClientCertIssuerDn, _ := d.GetRawConfigAt(sdk.ConstructCtyPath(fmt.Sprintf("ssl_profile.%d.verify_client_certificate_issuer_dn", i)))
+				if !rawVerifyClientCertIssuerDn.IsNull() {
+					verifyClientCertIssuerDn = v["verify_client_certificate_issuer_dn"].(bool)
+				}
+			}
+		} else {
+			verifyClientCertIssuerDn = v["verify_client_certificate_issuer_dn"].(bool)
+		}
 		verifyClientCertificateRevocation := applicationgateways.ApplicationGatewayClientRevocationOptionsNone
 		if v["verify_client_certificate_revocation"].(string) != "" {
 			verifyClientCertificateRevocation = applicationgateways.ApplicationGatewayClientRevocationOptions(v["verify_client_certificate_revocation"].(string))

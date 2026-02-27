@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachinegroups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
@@ -45,70 +46,5 @@ func resourceMsSqlVirtualMachineRead(d *pluginsdk.ResourceData, meta interface{}
 		}
 		return fmt.Errorf("reading %s: %+v", id, err)
 	}
-
-	if model := resp.Model; model != nil {
-		if props := model.Properties; props != nil {
-			d.Set("virtual_machine_id", props.VirtualMachineResourceId)
-			sqlLicenseType := ""
-			if licenceType := props.SqlServerLicenseType; licenceType != nil {
-				sqlLicenseType = string(*licenceType)
-			}
-			d.Set("sql_license_type", sqlLicenseType)
-			if err := d.Set("auto_backup", flattenSqlVirtualMachineAutoBackup(props.AutoBackupSettings, d)); err != nil {
-				return fmt.Errorf("setting `auto_backup`: %+v", err)
-			}
-
-			if err := d.Set("auto_patching", flattenSqlVirtualMachineAutoPatching(props.AutoPatchingSettings)); err != nil {
-				return fmt.Errorf("setting `auto_patching`: %+v", err)
-			}
-
-			if err := d.Set("assessment", flattenSqlVirtualMachineAssessmentSettings(props.AssessmentSettings)); err != nil {
-				return fmt.Errorf("setting `assessment`: %+v", err)
-			}
-
-			if err := d.Set("key_vault_credential", flattenSqlVirtualMachineKeyVaultCredential(props.KeyVaultCredentialSettings, d)); err != nil {
-				return fmt.Errorf("setting `key_vault_credential`: %+v", err)
-			}
-
-			if mgmtSettings := props.ServerConfigurationsManagementSettings; mgmtSettings != nil {
-				if cfgs := mgmtSettings.AdditionalFeaturesServerConfigurations; cfgs != nil {
-					d.Set("r_services_enabled", mgmtSettings.AdditionalFeaturesServerConfigurations.IsRServicesEnabled)
-				}
-				if scus := mgmtSettings.SqlConnectivityUpdateSettings; scus != nil {
-					d.Set("sql_connectivity_port", mgmtSettings.SqlConnectivityUpdateSettings.Port)
-					d.Set("sql_connectivity_type", pointer.From(mgmtSettings.SqlConnectivityUpdateSettings.ConnectivityType))
-				}
-
-				d.Set("sql_instance", flattenSqlVirtualMachineSQLInstance(mgmtSettings.SqlInstanceSettings))
-			}
-
-			// `storage_configuration.0.storage_workload_type` is in a different spot than the rest of the `storage_configuration`
-			// so we'll grab that here and pass it along
-			storageWorkloadType := ""
-			if props.ServerConfigurationsManagementSettings != nil && props.ServerConfigurationsManagementSettings.SqlWorkloadTypeUpdateSettings != nil && props.ServerConfigurationsManagementSettings.SqlWorkloadTypeUpdateSettings.SqlWorkloadType != nil {
-				storageWorkloadType = string(*props.ServerConfigurationsManagementSettings.SqlWorkloadTypeUpdateSettings.SqlWorkloadType)
-			}
-
-			if err := d.Set("storage_configuration", flattenSqlVirtualMachineStorageConfigurationSettings(props.StorageConfigurationSettings, storageWorkloadType)); err != nil {
-				return fmt.Errorf("setting `storage_configuration`: %+v", err)
-			}
-
-			sqlVirtualMachineGroupId := ""
-			if props.SqlVirtualMachineGroupResourceId != nil {
-				parsedId, err := sqlvirtualmachinegroups.ParseSqlVirtualMachineGroupIDInsensitively(*props.SqlVirtualMachineGroupResourceId)
-				if err != nil {
-					return err
-				}
-
-				// get correct casing for subscription in id due to https://github.com/Azure/azure-rest-api-specs/issues/25211
-				sqlVirtualMachineGroupId = sqlvirtualmachinegroups.NewSqlVirtualMachineGroupID(id.SubscriptionId, parsedId.ResourceGroupName, parsedId.SqlVirtualMachineGroupName).ID()
-			}
-			d.Set("sql_virtual_machine_group_id", sqlVirtualMachineGroupId)
-
-			if err := tags.FlattenAndSet(d, model.Tags); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return resourceMssqlVirtualMachineSetFlatten(d, id, resp.Model)
 }

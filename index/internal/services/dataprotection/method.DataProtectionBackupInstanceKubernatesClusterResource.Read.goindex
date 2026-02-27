@@ -10,8 +10,9 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backupinstances"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-09-01/backupinstanceresources"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-09-01/backupvaultresources"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-09-01/basebackuppolicyresources"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	resourceParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
@@ -23,12 +24,12 @@ func (r DataProtectionBackupInstanceKubernatesClusterResource) Read() sdk.Resour
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
 			client := metadata.Client.DataProtection.BackupInstanceClient
 
-			id, err := backupinstances.ParseBackupInstanceID(metadata.ResourceData.Id())
+			id, err := backupinstanceresources.ParseBackupInstanceID(metadata.ResourceData.Id())
 			if err != nil {
 				return err
 			}
 
-			resp, err := client.Get(ctx, *id)
+			resp, err := client.BackupInstancesGet(ctx, *id)
 			if err != nil {
 				if response.WasNotFound(resp.HttpResponse) {
 					return metadata.MarkAsGone(*id)
@@ -37,7 +38,7 @@ func (r DataProtectionBackupInstanceKubernatesClusterResource) Read() sdk.Resour
 				return fmt.Errorf("retrieving %s: %+v", *id, err)
 			}
 
-			vaultId := backupinstances.NewBackupVaultID(id.SubscriptionId, id.ResourceGroupName, id.BackupVaultName)
+			vaultId := backupvaultresources.NewBackupVaultID(id.SubscriptionId, id.ResourceGroupName, id.BackupVaultName)
 
 			state := BackupInstanceKubernatesClusterModel{
 				Name:    id.BackupInstanceName,
@@ -54,7 +55,7 @@ func (r DataProtectionBackupInstanceKubernatesClusterResource) Read() sdk.Resour
 					if policyParameters := properties.PolicyInfo.PolicyParameters; policyParameters != nil {
 						if dataStorePara := policyParameters.DataStoreParametersList; dataStorePara != nil {
 							if dsp := pointer.From(dataStorePara); len(dsp) > 0 {
-								if parameter, ok := dsp[0].(backupinstances.AzureOperationalStoreParameters); ok && parameter.ResourceGroupId != nil {
+								if parameter, ok := dsp[0].(backupinstanceresources.AzureOperationalStoreParameters); ok && parameter.ResourceGroupId != nil {
 									resourceGroupId, err := resourceParse.ResourceGroupID(*parameter.ResourceGroupId)
 									if err != nil {
 										return err

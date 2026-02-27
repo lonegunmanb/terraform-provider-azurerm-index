@@ -1,0 +1,79 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/workloads
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/workloads/2024-09-01/sapvirtualinstances"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/workloads/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (WorkloadsSAPThreeTierVirtualInstanceResource) flatten(metadata sdk.ResourceMetaData, id *sapvirtualinstances.SapVirtualInstanceId, model *sapvirtualinstances.SAPVirtualInstance) error {
+	subscriptionId := metadata.Client.Account.SubscriptionId
+
+	state := WorkloadsSAPThreeTierVirtualInstanceModel{
+		Name:              id.SapVirtualInstanceName,
+		ResourceGroupName: id.ResourceGroupName,
+	}
+
+	if model != nil {
+		state.Location = location.Normalize(model.Location)
+
+		identity, err := identity.FlattenUserAssignedMapToModel(model.Identity)
+		if err != nil {
+			return fmt.Errorf("flattening `identity`: %+v", err)
+		}
+		state.Identity = pointer.From(identity)
+
+		if props := model.Properties; props != nil {
+			state.Environment = string(props.Environment)
+			state.ManagedResourcesNetworkAccessType = string(pointer.From(props.ManagedResourcesNetworkAccessType))
+			state.SapProduct = string(props.SapProduct)
+			state.Tags = pointer.From(model.Tags)
+
+			if config := props.Configuration; config != nil {
+				if v, ok := config.(sapvirtualinstances.DeploymentWithOSConfiguration); ok {
+					state.AppLocation = location.Normalize(pointer.From(v.AppLocation))
+
+					if osSapConfiguration := v.OsSapConfiguration; osSapConfiguration != nil {
+						state.SapFqdn = pointer.From(osSapConfiguration.SapFqdn)
+					}
+
+					if configuration := v.InfrastructureConfiguration; configuration != nil {
+						if threeTierConfiguration, threeTierConfigurationExists := configuration.(sapvirtualinstances.ThreeTierConfiguration); threeTierConfigurationExists {
+							threeTierConfig, err := flattenThreeTierConfiguration(threeTierConfiguration, metadata.ResourceData, subscriptionId)
+							if err != nil {
+								return err
+							}
+							state.ThreeTierConfiguration = threeTierConfig
+						}
+					}
+				}
+			}
+
+			if v := props.ManagedResourceGroupConfiguration; v != nil {
+				state.ManagedResourceGroupName = pointer.From(v.Name)
+			}
+		}
+	}
+
+	if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+		return err
+	}
+
+	return metadata.Encode(&state)
+}

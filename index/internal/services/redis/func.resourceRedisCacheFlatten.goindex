@@ -1,0 +1,133 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redis
+import (
+	"context"
+	"fmt"
+	"log"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redis/2024-11-01/redispatchschedules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redis/2024-11-01/redisresources"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redis/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redis/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceRedisCacheFlatten(ctx context.Context, metaClient *clients.Client, d *pluginsdk.ResourceData, id *redisresources.RediId, redis *redisresources.RedisResource, fetchCompleteData bool) error {
+	client := metaClient.Redis.RedisResourcesClient
+	patchSchedulesClient := metaClient.Redis.PatchSchedulesClient
+
+	d.Set("name", id.RedisName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+	if redis != nil {
+		redisIdentity, err := identity.FlattenSystemAndUserAssignedMap(redis.Identity)
+		if err != nil {
+			return fmt.Errorf("flattening `identity`: %+v", err)
+		}
+		if err := d.Set("identity", redisIdentity); err != nil {
+			return fmt.Errorf("setting `identity`: %+v", err)
+		}
+
+		d.Set("location", location.Normalize(redis.Location))
+		d.Set("zones", zones.FlattenUntyped(redis.Zones))
+
+		props := redis.Properties
+		d.Set("capacity", int(props.Sku.Capacity))
+		d.Set("family", string(props.Sku.Family))
+		d.Set("sku_name", string(props.Sku.Name))
+		d.Set("ssl_port", props.SslPort)
+		d.Set("hostname", props.HostName)
+		d.Set("port", props.Port)
+		d.Set("non_ssl_port_enabled", props.EnableNonSslPort)
+
+		minimumTlsVersion := string(redisresources.TlsVersionOnePointTwo)
+		if props.MinimumTlsVersion != nil {
+			minimumTlsVersion = string(*props.MinimumTlsVersion)
+		}
+		d.Set("minimum_tls_version", minimumTlsVersion)
+
+		shardCount := 0
+		if props.ShardCount != nil {
+			shardCount = int(*props.ShardCount)
+		}
+		d.Set("shard_count", shardCount)
+		d.Set("private_static_ip_address", props.StaticIP)
+
+		subnetId := ""
+		if props.SubnetId != nil {
+			parsed, err := commonids.ParseSubnetIDInsensitively(*props.SubnetId)
+			if err != nil {
+				return err
+			}
+
+			subnetId = parsed.ID()
+		}
+		d.Set("subnet_id", subnetId)
+
+		publicNetworkAccessEnabled := true
+		if props.PublicNetworkAccess != nil {
+			publicNetworkAccessEnabled = *props.PublicNetworkAccess == redisresources.PublicNetworkAccessEnabled
+		}
+		d.Set("public_network_access_enabled", publicNetworkAccessEnabled)
+		d.Set("replicas_per_master", props.ReplicasPerMaster)
+		d.Set("replicas_per_primary", props.ReplicasPerPrimary)
+		d.Set("redis_version", props.RedisVersion)
+		d.Set("tenant_settings", flattenTenantSettings(props.TenantSettings))
+
+		redisConfiguration, err := flattenRedisConfiguration(d, props.RedisConfiguration)
+		if err != nil {
+			return fmt.Errorf("flattening `redis_configuration`: %+v", err)
+		}
+		if err := d.Set("redis_configuration", redisConfiguration); err != nil {
+			return fmt.Errorf("setting `redis_configuration`: %+v", err)
+		}
+
+		if fetchCompleteData {
+			keysResp, err := client.RedisListKeys(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("listing keys for %s: %+v", *id, err)
+			}
+
+			d.Set("primary_connection_string", getRedisConnectionString(*props.HostName, *props.SslPort, *keysResp.Model.PrimaryKey, true))
+			d.Set("secondary_connection_string", getRedisConnectionString(*props.HostName, *props.SslPort, *keysResp.Model.SecondaryKey, true))
+			d.Set("primary_access_key", keysResp.Model.PrimaryKey)
+			d.Set("secondary_access_key", keysResp.Model.SecondaryKey)
+			d.Set("access_keys_authentication_enabled", !pointer.From(props.DisableAccessKeyAuthentication))
+
+			patchSchedulesRedisId := redispatchschedules.NewRediID(id.SubscriptionId, id.ResourceGroupName, id.RedisName)
+			schedule, err := patchSchedulesClient.PatchSchedulesGet(ctx, patchSchedulesRedisId)
+			var patchSchedule []interface{}
+			if err == nil {
+				patchSchedule = flattenRedisPatchSchedules(*schedule.Model)
+			}
+			if err = d.Set("patch_schedule", patchSchedule); err != nil {
+				return fmt.Errorf("setting `patch_schedule`: %+v", err)
+			}
+		}
+
+		if err := tags.FlattenAndSet(d, redis.Tags); err != nil {
+			return fmt.Errorf("setting `tags`: %+v", err)
+		}
+	}
+
+	return pluginsdk.SetResourceIdentityData(d, id)
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/virtualnetworkgateways"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -48,8 +49,17 @@ func resourceVirtualNetworkGatewayUpdate(d *pluginsdk.ResourceData, meta interfa
 
 	payload := existing.Model
 
-	if d.HasChange("enable_bgp") {
-		payload.Properties.EnableBgp = pointer.To(d.Get("enable_bgp").(bool))
+	if !features.FivePointOh() && d.HasChanges("enable_bgp", "bgp_enabled") {
+		enableBgp := false
+		if d.HasChange("enable_bgp") && !d.GetRawConfig().AsValueMap()["enable_bgp"].IsNull() {
+			enableBgp = d.Get("enable_bgp").(bool)
+		}
+		if d.HasChange("bgp_enabled") && !d.GetRawConfig().AsValueMap()["bgp_enabled"].IsNull() {
+			enableBgp = d.Get("bgp_enabled").(bool)
+		}
+		payload.Properties.EnableBgp = pointer.To(enableBgp)
+	} else if d.HasChange("bgp_enabled") {
+		payload.Properties.EnableBgp = pointer.To(d.Get("bgp_enabled").(bool))
 	}
 
 	if d.HasChange("active_active") {

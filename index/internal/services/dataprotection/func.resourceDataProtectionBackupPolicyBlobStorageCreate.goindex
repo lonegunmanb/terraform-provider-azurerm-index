@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2024-04-01/backuppolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-09-01/basebackuppolicyresources"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
@@ -25,10 +25,10 @@ func resourceDataProtectionBackupPolicyBlobStorageCreate(d *schema.ResourceData,
 	defer cancel()
 
 	name := d.Get("name").(string)
-	vaultId, _ := backuppolicies.ParseBackupVaultID(d.Get("vault_id").(string))
-	id := backuppolicies.NewBackupPolicyID(subscriptionId, vaultId.ResourceGroupName, vaultId.BackupVaultName, name)
+	vaultId, _ := basebackuppolicyresources.ParseBackupVaultID(d.Get("vault_id").(string))
+	id := basebackuppolicyresources.NewBackupPolicyID(subscriptionId, vaultId.ResourceGroupName, vaultId.BackupVaultName, name)
 
-	existing, err := client.Get(ctx, id)
+	existing, err := client.BackupPoliciesGet(ctx, id)
 	if err != nil {
 		if !response.WasNotFound(existing.HttpResponse) {
 			return fmt.Errorf("checking for existing DataProtection BackupPolicy (%q): %+v", id, err)
@@ -38,11 +38,11 @@ func resourceDataProtectionBackupPolicyBlobStorageCreate(d *schema.ResourceData,
 		return tf.ImportAsExistsError("azurerm_data_protection_backup_policy_blob_storage", id.ID())
 	}
 
-	policyRules := make([]backuppolicies.BasePolicyRule, 0)
+	policyRules := make([]basebackuppolicyresources.BasePolicyRule, 0)
 	// expand the default operational retention rule when the operational default duration is specified
 	operationalDefaultDuration := d.Get("operational_default_retention_duration").(string)
 	if operationalDefaultDuration != "" {
-		policyRules = append(policyRules, expandBackupPolicyBlobStorageDefaultRetentionRuleArray(operationalDefaultDuration, backuppolicies.DataStoreTypesOperationalStore))
+		policyRules = append(policyRules, expandBackupPolicyBlobStorageDefaultRetentionRuleArray(operationalDefaultDuration, basebackuppolicyresources.DataStoreTypesOperationalStore))
 	}
 
 	// expand the default vault retention rule when the vault default duration is specified
@@ -52,7 +52,7 @@ func resourceDataProtectionBackupPolicyBlobStorageCreate(d *schema.ResourceData,
 			return err
 		}
 		policyRules = append(policyRules, expandBackupPolicyBlobStorageAzureBackupRuleArray(d.Get("backup_repeating_time_intervals").([]interface{}), d.Get("time_zone").(string), taggingCriteria)...)
-		policyRules = append(policyRules, expandBackupPolicyBlobStorageDefaultRetentionRuleArray(v.(string), backuppolicies.DataStoreTypesVaultStore))
+		policyRules = append(policyRules, expandBackupPolicyBlobStorageDefaultRetentionRuleArray(v.(string), basebackuppolicyresources.DataStoreTypesVaultStore))
 	}
 
 	// expand the vault retention rule when the vault retention rules are specified, the operational backup cannot specify retention rules.
@@ -60,14 +60,14 @@ func resourceDataProtectionBackupPolicyBlobStorageCreate(d *schema.ResourceData,
 		policyRules = append(policyRules, expandBackupPolicyBlobStorageAzureRetentionRuleArray(d.Get("retention_rule").([]interface{}))...)
 	}
 
-	parameters := backuppolicies.BaseBackupPolicyResource{
-		Properties: &backuppolicies.BackupPolicy{
+	parameters := basebackuppolicyresources.BaseBackupPolicyResource{
+		Properties: &basebackuppolicyresources.BackupPolicy{
 			PolicyRules:     policyRules,
 			DatasourceTypes: []string{"Microsoft.Storage/storageAccounts/blobServices"},
 		},
 	}
 
-	if _, err := client.CreateOrUpdate(ctx, id, parameters); err != nil {
+	if _, err := client.BackupPoliciesCreateOrUpdate(ctx, id, parameters); err != nil {
 		return fmt.Errorf("creating/updating DataProtection BackupPolicy (%q): %+v", id, err)
 	}
 

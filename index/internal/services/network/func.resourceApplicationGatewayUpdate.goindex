@@ -23,6 +23,8 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
 	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
@@ -60,8 +62,17 @@ func resourceApplicationGatewayUpdate(d *pluginsdk.ResourceData, meta interface{
 		payload.Properties = &applicationgateways.ApplicationGatewayPropertiesFormat{}
 	}
 
-	if d.HasChange("enable_http2") {
-		payload.Properties.EnableHTTP2 = pointer.To(d.Get("enable_http2").(bool))
+	if !features.FivePointOh() && d.HasChanges("enable_http2", "http2_enabled") {
+		enableHttp2 := false
+		if d.HasChange("enable_http2") && !d.GetRawConfig().AsValueMap()["enable_http2"].IsNull() {
+			enableHttp2 = d.Get("enable_http2").(bool)
+		}
+		if d.HasChange("http2_enabled") && !d.GetRawConfig().AsValueMap()["http2_enabled"].IsNull() {
+			enableHttp2 = d.Get("http2_enabled").(bool)
+		}
+		payload.Properties.EnableHTTP2 = pointer.To(enableHttp2)
+	} else if d.HasChange("http2_enabled") {
+		payload.Properties.EnableHTTP2 = pointer.To(d.Get("http2_enabled").(bool))
 	}
 
 	if d.HasChange("trusted_root_certificate") {
