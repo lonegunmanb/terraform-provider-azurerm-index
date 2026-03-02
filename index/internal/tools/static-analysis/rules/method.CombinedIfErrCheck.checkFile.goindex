@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/static-analysis/rules
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+func (r CombinedIfErrCheck) checkFile(path string) (errors []error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return []error{fmt.Errorf("opening %s: %+v", path, err)}
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var prevLine string
+	var prevLineNum int
+
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+
+		if prevLine != "" {
+			if matchIfErrNil.MatchString(line) {
+				errors = append(errors, fmt.Errorf(
+					"%s:%d: '_, err' assignment should be combined with the following 'if err != nil' into a single 'if' init statement: %s",
+					path, prevLineNum, strings.TrimSpace(prevLine),
+				))
+			}
+			prevLine = ""
+			prevLineNum = 0
+		}
+
+		// Check if this line is a "_, err :=" or "_, err =" that could be combined
+		if matchUnderscoreErr.MatchString(line) && !matchMultiReturn.MatchString(line) && !matchForRange.MatchString(line) {
+			prevLine = line
+			prevLineNum = lineNum
+		}
+	}
+
+	return
+}

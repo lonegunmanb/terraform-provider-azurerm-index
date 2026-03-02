@@ -1,0 +1,28 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/static-analysis/rules
+import (
+	"fmt"
+	"reflect"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider"
+)
+func checkModelObject(resourceType string, modelObj interface{}) (errors []error) {
+	modelType := reflect.TypeOf(modelObj)
+	if modelType == nil {
+		// TODO: uncomment the following error once all typed resources return a proper model from ModelObject().
+		// Currently 16 resources use metadata.ResourceData directly and return nil here. These need to be
+		// migrated to use metadata.Decode/Encode with a typed model struct before this check can be enforced.
+		// return []error{fmt.Errorf("%q cannot be bit checked, ModelObject returned nil", resourceType)}
+		return nil
+	}
+
+	if modelType.Kind() != reflect.Ptr {
+		return []error{fmt.Errorf("%q cannot be bit checked, ModelObject did not return a pointer", resourceType)}
+	}
+
+	model := modelType.Elem()
+	if model.Kind() != reflect.Struct {
+		return []error{fmt.Errorf("%q ModelObject is not a pointer to a struct", resourceType)}
+	}
+
+	return checkForBits(model)
+}
