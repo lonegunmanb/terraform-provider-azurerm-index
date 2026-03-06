@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2026-01-01/accessconnector"
@@ -23,8 +24,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
-	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
 	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -178,14 +177,14 @@ func resourceDatabricksWorkspaceCreate(d *pluginsdk.ResourceData, meta interface
 
 	if servicesKeyId != "" {
 		setEncrypt = true
-		key, err := keyVaultParse.ParseNestedItemID(servicesKeyId)
+		key, err := keyvault.ParseNestedItemID(servicesKeyId, keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey)
 		if err != nil {
 			return err
 		}
 
 		// make sure the key vault exists
-		if _, err = keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, servicesResourceSubscriptionId, key.KeyVaultBaseUrl); err != nil {
-			return fmt.Errorf("retrieving the Resource ID for the customer-managed keys for managed services Key Vault in subscription %q at URL %q: %+v", servicesResourceSubscriptionId, key.KeyVaultBaseUrl, err)
+		if _, err = keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, servicesResourceSubscriptionId, key.KeyVaultBaseURL); err != nil {
+			return fmt.Errorf("retrieving the Resource ID for the customer-managed keys for managed services Key Vault in subscription %q at URL %q: %+v", servicesResourceSubscriptionId, key.KeyVaultBaseURL, err)
 		}
 
 		encrypt.Entities.ManagedServices = &workspaces.EncryptionV2{
@@ -193,7 +192,7 @@ func resourceDatabricksWorkspaceCreate(d *pluginsdk.ResourceData, meta interface
 			KeyVaultProperties: &workspaces.EncryptionV2KeyVaultProperties{
 				KeyName:     key.Name,
 				KeyVersion:  key.Version,
-				KeyVaultUri: key.KeyVaultBaseUrl,
+				KeyVaultUri: key.KeyVaultBaseURL,
 			},
 		}
 	}
@@ -211,14 +210,14 @@ func resourceDatabricksWorkspaceCreate(d *pluginsdk.ResourceData, meta interface
 
 	if diskKeyId != "" {
 		setEncrypt = true
-		key, err := keyVaultParse.ParseNestedItemID(diskKeyId)
+		key, err := keyvault.ParseNestedItemID(diskKeyId, keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey)
 		if err != nil {
 			return err
 		}
 
 		// make sure the key vault exists
-		if _, err = keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, diskResourceSubscriptionId, key.KeyVaultBaseUrl); err != nil {
-			return fmt.Errorf("retrieving the Resource ID for the customer-managed keys for managed disk Key Vault in subscription %q at URL %q: %+v", diskResourceSubscriptionId, key.KeyVaultBaseUrl, err)
+		if _, err = keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, diskResourceSubscriptionId, key.KeyVaultBaseURL); err != nil {
+			return fmt.Errorf("retrieving the Resource ID for the customer-managed keys for managed disk Key Vault in subscription %q at URL %q: %+v", diskResourceSubscriptionId, key.KeyVaultBaseURL, err)
 		}
 
 		encrypt.Entities.ManagedDisk = &workspaces.ManagedDiskEncryption{
@@ -226,7 +225,7 @@ func resourceDatabricksWorkspaceCreate(d *pluginsdk.ResourceData, meta interface
 			KeyVaultProperties: workspaces.ManagedDiskEncryptionKeyVaultProperties{
 				KeyName:     key.Name,
 				KeyVersion:  key.Version,
-				KeyVaultUri: key.KeyVaultBaseUrl,
+				KeyVaultUri: key.KeyVaultBaseURL,
 			},
 		}
 	}
