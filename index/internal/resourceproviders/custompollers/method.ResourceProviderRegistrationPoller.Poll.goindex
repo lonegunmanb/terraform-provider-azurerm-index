@@ -8,7 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/resources/2022-09-01/providers"
 	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 )
-func (p *resourceProviderUnregistrationPoller) Poll(ctx context.Context) (*pollers.PollResult, error) {
+func (p *ResourceProviderRegistrationPoller) Poll(ctx context.Context) (*pollers.PollResult, error) {
 	resp, err := p.client.Get(ctx, p.id, providers.DefaultGetOperationOptions())
 	if err != nil {
 		return nil, fmt.Errorf("retrieving %s: %+v", p.id, err)
@@ -19,11 +19,16 @@ func (p *resourceProviderUnregistrationPoller) Poll(ctx context.Context) (*polle
 		registrationState = *model.RegistrationState
 	}
 
-	if strings.EqualFold(registrationState, "Unregistered") {
-		return &pollers.PollResult{
-			Status:       pollers.PollingStatusSucceeded,
-			PollInterval: 10 * time.Second,
-		}, nil
+	if strings.EqualFold(registrationState, p.targetState) {
+		if p.continuousTargetOccurrence == p.currentOccurrenceCount {
+			return &pollers.PollResult{
+				Status:       pollers.PollingStatusSucceeded,
+				PollInterval: 10 * time.Second,
+			}, nil
+		}
+		p.currentOccurrenceCount += 1
+	} else {
+		p.currentOccurrenceCount = 0
 	}
 
 	// Processing

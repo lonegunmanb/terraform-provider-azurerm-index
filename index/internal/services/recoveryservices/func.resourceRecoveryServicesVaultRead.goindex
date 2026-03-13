@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationvaultsetting"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	keyvaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -89,12 +90,14 @@ func resourceRecoveryServicesVaultRead(d *pluginsdk.ResourceData, meta interface
 			return fmt.Errorf("retrieving %s: %+v", cfgId, err)
 		}
 
-		softDeleteEnabled := false
-		if cfg.Model != nil && cfg.Model.Properties != nil && cfg.Model.Properties.SoftDeleteFeatureState != nil {
-			softDeleteEnabled = *cfg.Model.Properties.SoftDeleteFeatureState == backupresourcevaultconfigs.SoftDeleteFeatureStateEnabled
+		if !features.FivePointOh() {
+			softDeleteEnabled := true
+			if cfg.Model != nil && cfg.Model.Properties != nil && cfg.Model.Properties.SoftDeleteFeatureState != nil {
+				state := *cfg.Model.Properties.SoftDeleteFeatureState
+				softDeleteEnabled = state == backupresourcevaultconfigs.SoftDeleteFeatureStateAlwaysON || state == backupresourcevaultconfigs.SoftDeleteFeatureStateEnabled
+			}
+			d.Set("soft_delete_enabled", softDeleteEnabled)
 		}
-
-		d.Set("soft_delete_enabled", softDeleteEnabled)
 
 		flattenIdentity, err := identity.FlattenSystemAndUserAssignedMap(model.Identity)
 		if err != nil {

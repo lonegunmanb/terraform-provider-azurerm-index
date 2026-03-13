@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/purview
+import (
+	"bytes"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/purview/2021-12-01/account"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourcePurviewAccountIdentitySchema() *schema.Schema {
+	customSchema := commonschema.SystemAssignedUserAssignedIdentityRequired()
+
+	// remove UserAssigned from type validation, it is not supported in API
+	customSchema.Elem.(*schema.Resource).Schema["type"].ValidateFunc = validation.StringInSlice([]string{
+		string(identity.TypeSystemAssigned),
+		string(identity.TypeSystemAssignedUserAssigned),
+	}, false)
+
+	// API is returning lower-case IDs which cause false diff report if mixed case was used by client.
+	// Change the Set hash function to hash lower case always, which will suppress this invalid diff.
+	customSchema.Elem.(*schema.Resource).Schema["identity_ids"].Set = resourcePurviewAccountIdentityIdsSetHash
+
+	return customSchema
+}

@@ -1,11 +1,106 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/bot
 import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
 	"github.com/jackofallops/kermit/sdk/botservice/2021-05-01-preview/botservice"
 )
 func (r AzureBotServiceResource) Create() sdk.ResourceFunc {
-	return r.base.createFunc(r.ResourceType(), string(botservice.KindAzurebot))
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Bot.BotClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var config BotServiceModel
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := parse.NewBotServiceID(subscriptionId, config.ResourceGroupName, config.Name)
+
+			existing, err := client.Get(ctx, id.ResourceGroup, id.Name)
+			if err != nil {
+				if !utils.ResponseWasNotFound(existing.Response) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+			}
+			if !utils.ResponseWasNotFound(existing.Response) {
+				return tf.ImportAsExistsError(r.ResourceType(), id.ID())
+			}
+
+			displayName := config.DisplayName
+			if displayName == "" {
+				displayName = id.Name
+			}
+
+			publicNetworkEnabled := botservice.PublicNetworkAccessEnabled
+			if !config.PublicNetworkAccessEnabled {
+				publicNetworkEnabled = botservice.PublicNetworkAccessDisabled
+			}
+
+			props := botservice.Bot{
+				Location: pointer.To(config.Location),
+				Sku: &botservice.Sku{
+					Name: botservice.SkuName(config.Sku),
+				},
+				Kind: botservice.KindAzurebot,
+				Properties: &botservice.BotProperties{
+					DisplayName:                       pointer.To(displayName),
+					Endpoint:                          pointer.To(config.Endpoint),
+					MsaAppID:                          pointer.To(config.MicrosoftAppId),
+					DeveloperAppInsightKey:            pointer.To(config.DeveloperAppInsightsKey),
+					DeveloperAppInsightsAPIKey:        pointer.To(config.DeveloperAppInsightsApiKey),
+					DeveloperAppInsightsApplicationID: pointer.To(config.DeveloperAppInsightsApplicationId),
+					DisableLocalAuth:                  pointer.To(!config.LocalAuthenticationEnabled),
+					IsCmekEnabled:                     pointer.To(false),
+					CmekKeyVaultURL:                   pointer.To(config.CmkKeyVaultKeyUrl),
+					LuisAppIds:                        &config.LuisAppIds,
+					LuisKey:                           pointer.To(config.LuisKey),
+					PublicNetworkAccess:               publicNetworkEnabled,
+					IsStreamingSupported:              pointer.To(config.StreamingEndpointEnabled),
+					IconURL:                           pointer.To(config.IconUrl),
+				},
+				Tags: tags.Expand(config.Tags),
+			}
+
+			if config.CmkKeyVaultKeyUrl != "" {
+				props.Properties.IsCmekEnabled = pointer.To(true)
+			}
+
+			if config.MicrosoftAppType != "" {
+				props.Properties.MsaAppType = botservice.MsaAppType(config.MicrosoftAppType)
+			}
+
+			if config.MicrosoftAppTenantId != "" {
+				props.Properties.MsaAppTenantID = pointer.To(config.MicrosoftAppTenantId)
+			}
+
+			if config.MicrosoftAppMsiId != "" {
+				props.Properties.MsaAppMSIResourceID = pointer.To(config.MicrosoftAppMsiId)
+			}
+
+			if _, err := client.Create(ctx, id.ResourceGroup, id.Name, props); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			return nil
+		},
+	}
 }
