@@ -9,12 +9,11 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
 	keyVaultSuppress "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/suppress"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -32,13 +31,6 @@ func resourceAppServiceCertificateCreateUpdate(d *pluginsdk.ResourceData, meta i
 	log.Printf("[INFO] preparing arguments for App Service Certificate creation.")
 
 	id := parse.NewCertificateID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
-	location := location.Normalize(d.Get("location").(string))
-	pfxBlob := d.Get("pfx_blob").(string)
-	password := d.Get("password").(string)
-	customizedKeyVaultId := d.Get("key_vault_id").(string)
-	keyVaultSecretId := d.Get("key_vault_secret_id").(string)
-	appServicePlanId := d.Get("app_service_plan_id").(string)
-	t := d.Get("tags").(map[string]interface{})
 
 	if d.IsNewResource() {
 		existing, err := client.Get(ctx, id.ResourceGroup, id.Name)
@@ -55,17 +47,17 @@ func resourceAppServiceCertificateCreateUpdate(d *pluginsdk.ResourceData, meta i
 
 	certificate := web.Certificate{
 		CertificateProperties: &web.CertificateProperties{
-			Password: pointer.To(password),
+			Password: pointer.To(d.Get("password").(string)),
 		},
-		Location: pointer.To(location),
-		Tags:     tags.Expand(t),
+		Location: pointer.To(location.Normalize(d.Get("location").(string))),
+		Tags:     tags.Expand(d.Get("tags").(map[string]interface{})),
 	}
 
-	if appServicePlanId != "" {
+	if appServicePlanId := d.Get("app_service_plan_id").(string); appServicePlanId != "" {
 		certificate.ServerFarmID = &appServicePlanId
 	}
 
-	if pfxBlob != "" {
+	if pfxBlob := d.Get("pfx_blob").(string); pfxBlob != "" {
 		decodedPfxBlob, err := base64.StdEncoding.DecodeString(pfxBlob)
 		if err != nil {
 			return fmt.Errorf("could not decode PFX blob: %+v", err)
@@ -73,17 +65,17 @@ func resourceAppServiceCertificateCreateUpdate(d *pluginsdk.ResourceData, meta i
 		certificate.PfxBlob = &decodedPfxBlob
 	}
 
-	if keyVaultSecretId != "" {
-		parsedSecretId, err := keyVaultParse.ParseOptionallyVersionedNestedItemID(keyVaultSecretId)
+	if keyVaultSecretId := d.Get("key_vault_secret_id").(string); keyVaultSecretId != "" {
+		parsedSecretId, err := keyvault.ParseNestedItemID(keyVaultSecretId, keyvault.VersionTypeAny, keyvault.NestedItemTypeAny)
 		if err != nil {
 			return err
 		}
 
 		var keyVaultId *string
-		if customizedKeyVaultId != "" {
+		if customizedKeyVaultId := d.Get("key_vault_id").(string); customizedKeyVaultId != "" {
 			keyVaultId = pointer.To(customizedKeyVaultId)
 		} else {
-			keyVaultBaseUrl := parsedSecretId.KeyVaultBaseUrl
+			keyVaultBaseUrl := parsedSecretId.KeyVaultBaseURL
 
 			subscriptionResourceId := commonids.NewSubscriptionID(subscriptionId)
 			keyVaultId, err = keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, subscriptionResourceId, keyVaultBaseUrl)

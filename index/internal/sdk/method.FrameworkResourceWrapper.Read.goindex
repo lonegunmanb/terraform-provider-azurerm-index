@@ -7,10 +7,12 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/list"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 func (r *FrameworkResourceWrapper) Read(ctx context.Context, request resource.ReadRequest, response *resource.ReadResponse) {
@@ -40,6 +42,15 @@ func (r *FrameworkResourceWrapper) Read(ctx context.Context, request resource.Re
 	r.FrameworkWrappedResource.Read(ctx, request, response, r.ResourceMetadata, state)
 	if response.Diagnostics.HasError() {
 		return
+	}
+
+	if warnings := response.Diagnostics.Warnings(); len(warnings) > 0 {
+		// Determine whether a `Resource removed from state` warning exists, if it does, return
+		for _, warning := range warnings {
+			if warning.Summary() == removedSummary {
+				return
+			}
+		}
 	}
 
 	r.ResourceMetadata.EncodeRead(ctx, response, state)

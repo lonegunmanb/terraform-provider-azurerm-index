@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -15,43 +16,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceAutomationModuleCreateUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
-	client := meta.(*clients.Client).Automation.Module
-	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
-	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
-	defer cancel()
-
-	log.Printf("[INFO] preparing arguments for AzureRM Automation Module creation.")
-
-	id := module.NewModuleID(subscriptionId, d.Get("resource_group_name").(string), d.Get("automation_account_name").(string), d.Get("name").(string))
-
-	if d.IsNewResource() {
-		existing, err := client.Get(ctx, id)
-		if err != nil {
-			if !response.WasNotFound(existing.HttpResponse) {
-				return fmt.Errorf("checking for presence of existing %s: %s", id, err)
-			}
-		}
-
-		// for existing global module do update instead of raising ImportAsExistsError
-		isGlobal := existing.Model != nil && existing.Model.Properties != nil && existing.Model.Properties.IsGlobal != nil && *existing.Model.Properties.IsGlobal
-		if !response.WasNotFound(existing.HttpResponse) && !isGlobal {
-			return tf.ImportAsExistsError("azurerm_automation_module", id.ID())
-		}
-	}
-
-	parameters := module.ModuleCreateOrUpdateParameters{
-		Properties: module.ModuleCreateOrUpdateProperties{
-			ContentLink: expandModuleLink(d),
-		},
-	}
-
-	if _, err := client.CreateOrUpdate(ctx, id, parameters); err != nil {
-		return err
-	}
-
-	// the API returns 'done' but it's not actually finished provisioning yet
-	// tracking issue: https://github.com/Azure/azure-rest-api-specs/pull/25435
+func waitForModuleProvisioningCompletion(ctx context.Context, client *module.ModuleClient, id module.ModuleId, timeout time.Duration) error {
 	stateConf := &pluginsdk.StateChangeConf{
 		Pending: []string{
 			string(module.ModuleProvisioningStateActivitiesStored),
@@ -72,10 +37,11 @@ func resourceAutomationModuleCreateUpdate(d *pluginsdk.ResourceData, meta interf
 			string(module.ModuleProvisioningStateSucceeded),
 		},
 		MinTimeout: 30 * time.Second,
+		Timeout:    timeout,
 		Refresh: func() (interface{}, string, error) {
-			resp, err2 := client.Get(ctx, id)
-			if err2 != nil {
-				return resp, "Error", fmt.Errorf("retrieving %s: %+v", id, err2)
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				return resp, "Error", fmt.Errorf("retrieving %s: %+v", id, err)
 			}
 
 			provisioningState := "Unknown"
@@ -93,17 +59,10 @@ func resourceAutomationModuleCreateUpdate(d *pluginsdk.ResourceData, meta interf
 			return resp, provisioningState, nil
 		},
 	}
-	if d.IsNewResource() {
-		stateConf.Timeout = d.Timeout(pluginsdk.TimeoutCreate)
-	} else {
-		stateConf.Timeout = d.Timeout(pluginsdk.TimeoutUpdate)
-	}
 
 	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
 		return fmt.Errorf("waiting for %s to finish provisioning: %+v", id, err)
 	}
 
-	d.SetId(id.ID())
-
-	return resourceAutomationModuleRead(d, meta)
+	return nil
 }
