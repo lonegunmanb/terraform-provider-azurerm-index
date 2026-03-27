@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2025-07-01/managedenvironmentsstorages"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r ContainerAppEnvironmentStorageDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ContainerApps.StorageClient
+
+			var state ContainerAppEnvironmentStorageDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return err
+			}
+
+			envId, err := managedenvironmentsstorages.ParseManagedEnvironmentID(state.ContainerAppEnvironmentId)
+			if err != nil {
+				return err
+			}
+
+			id := managedenvironmentsstorages.NewStorageID(envId.SubscriptionId, envId.ResourceGroupName, envId.ManagedEnvironmentName, state.Name)
+
+			existing, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("reading %s: %+v", id, err)
+			}
+
+			state.Name = id.StorageName
+			state.ContainerAppEnvironmentId = envId.ID()
+
+			if model := existing.Model; model != nil {
+				if props := model.Properties; props != nil {
+					if azureFile := props.AzureFile; azureFile != nil {
+						state.AccountName = pointer.From(azureFile.AccountName)
+						if azureFile.AccessMode != nil {
+							state.AccessMode = string(*azureFile.AccessMode)
+						}
+						state.ShareName = pointer.From(azureFile.ShareName)
+					} else if nfsAzureFile := props.NfsAzureFile; nfsAzureFile != nil {
+						state.NfsServerUrl = pointer.From(nfsAzureFile.Server)
+						if nfsAzureFile.AccessMode != nil {
+							state.AccessMode = string(*nfsAzureFile.AccessMode)
+						}
+						state.ShareName = pointer.From(nfsAzureFile.ShareName)
+					}
+				}
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&state)
+		},
+	}
+}
