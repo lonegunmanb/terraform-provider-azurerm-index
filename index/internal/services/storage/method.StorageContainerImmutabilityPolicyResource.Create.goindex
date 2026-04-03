@@ -8,7 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2023-05-01/blobcontainers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-06-01/immutabilitypolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
@@ -19,7 +19,7 @@ func (r StorageContainerImmutabilityPolicyResource) Create() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Timeout: 10 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
-			client := metadata.Client.Storage.ResourceManager.BlobContainers
+			client := metadata.Client.Storage.ResourceManager.ImmutabilityPolicies
 
 			var model ContainerImmutabilityPolicyModel
 			if err := metadata.Decode(&model); err != nil {
@@ -33,7 +33,7 @@ func (r StorageContainerImmutabilityPolicyResource) Create() sdk.ResourceFunc {
 
 			id := parse.NewStorageContainerImmutabilityPolicyID(containerId.SubscriptionId, containerId.ResourceGroupName, containerId.StorageAccountName, "default", containerId.ContainerName, "default")
 
-			existing, err := client.GetImmutabilityPolicy(ctx, *containerId, blobcontainers.DefaultGetImmutabilityPolicyOperationOptions())
+			existing, err := client.BlobContainersGetImmutabilityPolicy(ctx, *containerId, immutabilitypolicies.DefaultBlobContainersGetImmutabilityPolicyOperationOptions())
 			if err != nil {
 				if !response.WasNotFound(existing.HttpResponse) {
 					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
@@ -43,15 +43,15 @@ func (r StorageContainerImmutabilityPolicyResource) Create() sdk.ResourceFunc {
 				return metadata.ResourceRequiresImport(r.ResourceType(), id)
 			}
 
-			input := blobcontainers.ImmutabilityPolicy{
-				Properties: blobcontainers.ImmutabilityPolicyProperty{
+			input := immutabilitypolicies.ImmutabilityPolicy{
+				Properties: immutabilitypolicies.ImmutabilityPolicyProperty{
 					AllowProtectedAppendWrites:            pointer.To(model.ProtectedAppendWritesEnabled),
 					AllowProtectedAppendWritesAll:         pointer.To(model.ProtectedAppendWritesAllEnabled),
 					ImmutabilityPeriodSinceCreationInDays: pointer.To(model.ImmutabilityPeriodInDays),
 				},
 			}
 
-			resp, err := client.CreateOrUpdateImmutabilityPolicy(ctx, *containerId, input, blobcontainers.DefaultCreateOrUpdateImmutabilityPolicyOperationOptions())
+			resp, err := client.BlobContainersCreateOrUpdateImmutabilityPolicy(ctx, *containerId, input, immutabilitypolicies.DefaultBlobContainersCreateOrUpdateImmutabilityPolicyOperationOptions())
 			if err != nil {
 				return fmt.Errorf("creating %s: %+v", id, err)
 			}
@@ -65,11 +65,11 @@ func (r StorageContainerImmutabilityPolicyResource) Create() sdk.ResourceFunc {
 					return fmt.Errorf("preparing to lock %s: model was nil", id)
 				}
 
-				options := blobcontainers.LockImmutabilityPolicyOperationOptions{
+				options := immutabilitypolicies.BlobContainersLockImmutabilityPolicyOperationOptions{
 					IfMatch: resp.Model.Etag,
 				}
 
-				if _, err = client.LockImmutabilityPolicy(ctx, *containerId, options); err != nil {
+				if _, err = client.BlobContainersLockImmutabilityPolicy(ctx, *containerId, options); err != nil {
 					return fmt.Errorf("locking %s: %+v", id, err)
 				}
 			}

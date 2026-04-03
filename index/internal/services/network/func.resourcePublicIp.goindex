@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -102,10 +103,7 @@ func resourcePublicIp() *pluginsdk.Resource {
 				ForceNew: true,
 				Default:  string(publicipaddresses.PublicIPAddressSkuNameStandard),
 				// https://azure.microsoft.com/en-us/updates/upgrade-to-standard-sku-public-ip-addresses-in-azure-by-30-september-2025-basic-sku-will-be-retired/
-				ValidateFunc: validation.StringInSlice([]string{
-					string(publicipaddresses.PublicIPAddressSkuNameBasic),
-					string(publicipaddresses.PublicIPAddressSkuNameStandard),
-				}, false),
+				ValidateFunc: validation.StringInSlice(publicipaddresses.PossibleValuesForPublicIPAddressSkuName(), false),
 			},
 
 			"sku_tier": {
@@ -175,6 +173,22 @@ func resourcePublicIp() *pluginsdk.Resource {
 		},
 
 		CustomizeDiff: pluginsdk.CustomDiffWithAll(
+			pluginsdk.CustomizeDiffShim(func(_ context.Context, d *pluginsdk.ResourceDiff, _ interface{}) error {
+				sku := d.Get("sku").(string)
+				if strings.EqualFold(sku, string(publicipaddresses.PublicIPAddressSkuNameBasic)) && d.HasChanges("name", "resource_group_name", "location", "allocation_method", "edge_zone", "ip_version", "sku", "sku_tier", "public_ip_prefix_id", "ip_tags", "zones") {
+					return errors.New(publicIPBasicSkuCreateDeprecationMessage)
+				}
+
+				return nil
+			}),
+			pluginsdk.CustomizeDiffShim(func(_ context.Context, d *pluginsdk.ResourceDiff, _ interface{}) error {
+				skuTier := d.Get("sku_tier").(string)
+				sku := d.Get("sku").(string)
+				if strings.EqualFold(skuTier, string(publicipaddresses.PublicIPAddressSkuTierGlobal)) && !strings.EqualFold(sku, string(publicipaddresses.PublicIPAddressSkuNameStandard)) {
+					return errors.New("`sku` must be set to `Standard` when `sku_tier` is set to `Global`")
+				}
+				return nil
+			}),
 			pluginsdk.ForceNewIfChange("domain_name_label_scope", func(ctx context.Context, old, new, meta interface{}) bool {
 				return old.(string) != "" || new.(string) == ""
 			}),

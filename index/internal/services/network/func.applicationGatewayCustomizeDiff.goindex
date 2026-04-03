@@ -89,5 +89,65 @@ func applicationGatewayCustomizeDiff(ctx context.Context, d *pluginsdk.ResourceD
 		}
 	}
 
+	for _, raw := range d.Get("backend").([]interface{}) {
+		v := raw.(map[string]interface{})
+		if v["host_name"].(string) != "" && strings.EqualFold(v["protocol"].(string), string(applicationgateways.ApplicationGatewayProtocolTcp)) {
+			return fmt.Errorf("`host_name` cannot be set when `protocol` is `Tcp` for `backend` %q", v["name"].(string))
+		}
+	}
+
+	for _, raw := range d.Get("backend_http_settings").(*pluginsdk.Set).List() {
+		v := raw.(map[string]interface{})
+		if v["host_name"].(string) != "" && v["pick_host_name_from_backend_address"].(bool) {
+			return fmt.Errorf("only one of `host_name` or `pick_host_name_from_backend_address` can be set for `backend_http_settings` %q", v["name"].(string))
+		}
+	}
+
+	for _, raw := range d.Get("listener").(*pluginsdk.Set).List() {
+		v := raw.(map[string]interface{})
+		if v["host_names"].(*pluginsdk.Set).Len() > 0 && strings.EqualFold(v["protocol"].(string), string(applicationgateways.ApplicationGatewayProtocolTcp)) {
+			return fmt.Errorf("`host_names` cannot be set when `protocol` is `Tcp` for `listener` %q", v["name"].(string))
+		}
+		if strings.EqualFold(v["protocol"].(string), string(applicationgateways.ApplicationGatewayProtocolTls)) && v["ssl_certificate_name"].(string) == "" {
+			return fmt.Errorf("`ssl_certificate_name` must be set when `protocol` is `Tls` for `listener` %q", v["name"].(string))
+		}
+	}
+
+	for _, raw := range d.Get("probe").(*schema.Set).List() {
+		v := raw.(map[string]interface{})
+		protocol := v["protocol"].(string)
+		isHTTPProtocol := strings.EqualFold(protocol, string(applicationgateways.ApplicationGatewayProtocolHTTP)) || strings.EqualFold(protocol, string(applicationgateways.ApplicationGatewayProtocolHTTPS))
+		isTcpTlsProtocol := strings.EqualFold(protocol, string(applicationgateways.ApplicationGatewayProtocolTcp)) || strings.EqualFold(protocol, string(applicationgateways.ApplicationGatewayProtocolTls))
+
+		hasHost := v["host"].(string) != ""
+		hasPickHost := v["pick_host_name_from_backend_http_settings"].(bool)
+		if isHTTPProtocol && (hasHost == hasPickHost) {
+			return fmt.Errorf("exactly one of `host` or `pick_host_name_from_backend_http_settings` must be set when `protocol` is `Http` or `Https` for `probe` %q", v["name"].(string))
+		}
+
+		if isHTTPProtocol && v["path"].(string) == "" {
+			return fmt.Errorf("`path` must be specified when `protocol` is `Http` or `Https` for `probe` %q", v["name"].(string))
+		}
+
+		if isTcpTlsProtocol {
+			hasPath := v["path"].(string) != ""
+			matchConfigs := v["match"].([]interface{})
+			hasMatch := len(matchConfigs) > 0 && matchConfigs[0] != nil
+			if hasHost || hasPickHost || hasPath || hasMatch {
+				return fmt.Errorf("`host`, `pick_host_name_from_backend_http_settings`, `path`, and `match` cannot be set when `protocol` is `Tcp` or `Tls` for `probe` %q", v["name"].(string))
+			}
+		}
+
+		if v["proxy_protocol_header_enabled"].(bool) && !isTcpTlsProtocol {
+			return fmt.Errorf("`proxy_protocol_header_enabled` can only be set when `protocol` is `Tcp` or `Tls` for `probe` %q", v["name"].(string))
+		}
+
+		timeout := v["timeout"].(int)
+		interval := v["interval"].(int)
+		if timeout > interval {
+			return fmt.Errorf("`timeout` must not be greater than `interval` for `probe` %q", v["name"].(string))
+		}
+	}
+
 	return nil
 }

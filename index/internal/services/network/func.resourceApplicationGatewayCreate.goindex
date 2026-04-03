@@ -98,7 +98,7 @@ func resourceApplicationGatewayCreate(d *pluginsdk.ResourceData, meta interface{
 
 	httpListeners, err := expandApplicationGatewayHTTPListeners(d, id.ID())
 	if err != nil {
-		return fmt.Errorf("fail to expand `http_listener`: %+v", err)
+		return fmt.Errorf("expanding `http_listener`: %+v", err)
 	}
 
 	rewriteRuleSets, err := expandApplicationGatewayRewriteRuleSets(d)
@@ -115,16 +115,19 @@ func resourceApplicationGatewayCreate(d *pluginsdk.ResourceData, meta interface{
 			TrustedRootCertificates:       trustedRootCertificates,
 			CustomErrorConfigurations:     expandApplicationGatewayCustomErrorConfigurations(d.Get("custom_error_configuration").([]interface{})),
 			BackendAddressPools:           expandApplicationGatewayBackendAddressPools(d),
-			BackendHTTPSettingsCollection: expandApplicationGatewayBackendHTTPSettings(d, id.ID()),
+			BackendHTTPSettingsCollection: expandApplicationGatewayBackendHTTPSettings(d.Get("backend_http_settings").(*schema.Set).List(), id.ID()),
+			BackendSettingsCollection:     expandApplicationGatewayBackendSettings(d.Get("backend").([]interface{}), id),
 			EnableHTTP2:                   pointer.To(http2Enabled),
 			FrontendIPConfigurations:      expandApplicationGatewayFrontendIPConfigurations(d, id.ID()),
 			FrontendPorts:                 expandApplicationGatewayFrontendPorts(d),
 			GatewayIPConfigurations:       gatewayIPConfigurations,
 			GlobalConfiguration:           globalConfiguration,
 			HTTPListeners:                 httpListeners,
+			Listeners:                     expandApplicationGatewayListeners(d.Get("listener").(*schema.Set).List(), id),
 			PrivateLinkConfigurations:     expandApplicationGatewayPrivateLinkConfigurations(d),
-			Probes:                        expandApplicationGatewayProbes(d),
+			Probes:                        expandApplicationGatewayProbes(d.Get("probe").(*schema.Set).List()),
 			RequestRoutingRules:           requestRoutingRules,
+			RoutingRules:                  expandApplicationGatewayRoutingRules(d.Get("routing_rule").(*pluginsdk.Set).List(), id),
 			RedirectConfigurations:        redirectConfigurations,
 			Sku:                           expandApplicationGatewaySku(d),
 			SslCertificates:               sslCertificates,
@@ -157,35 +160,6 @@ func resourceApplicationGatewayCreate(d *pluginsdk.ResourceData, meta interface{
 		}
 
 		gateway.Identity = expandedIdentity
-	}
-
-	// validation (todo these should probably be moved into their respective expand functions, which would then return an error?)
-	for _, backendHttpSettings := range *gateway.Properties.BackendHTTPSettingsCollection {
-		if props := backendHttpSettings.Properties; props != nil {
-			if props.HostName == nil || props.PickHostNameFromBackendAddress == nil {
-				continue
-			}
-
-			if *props.HostName != "" && *props.PickHostNameFromBackendAddress {
-				return fmt.Errorf("only one of `host_name` or `pick_host_name_from_backend_address` can be set")
-			}
-		}
-	}
-
-	for _, probe := range *gateway.Properties.Probes {
-		if props := probe.Properties; props != nil {
-			if props.Host == nil || props.PickHostNameFromBackendHTTPSettings == nil {
-				continue
-			}
-
-			if *props.Host == "" && !*props.PickHostNameFromBackendHTTPSettings {
-				return fmt.Errorf("one of `host` or `pick_host_name_from_backend_http_settings` must be set")
-			}
-
-			if *props.Host != "" && *props.PickHostNameFromBackendHTTPSettings {
-				return fmt.Errorf("only one of `host` or `pick_host_name_from_backend_http_settings` can be set")
-			}
-		}
 	}
 
 	if _, ok := d.GetOk("waf_configuration"); ok {

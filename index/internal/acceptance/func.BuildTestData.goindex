@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/acceptance
 import (
 	"fmt"
+	"hash/fnv"
 	"math"
 	"math/rand"
 	"os"
@@ -8,11 +9,28 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/vcr"
 )
 func BuildTestData(t *testing.T, resourceType string, resourceLabel string) TestData {
+	var randomInt int
+	var randomString string
+	if os.Getenv("TC_TEST_VIA_VCR") != "" {
+		// In VCR mode, seed from the test name so all random values are
+		// stable across runs. Both values share the same rng so they are
+		// deterministic relative to each other as well.
+		h := fnv.New64a()
+		h.Write([]byte(t.Name()))
+		rng := rand.New(rand.NewSource(int64(h.Sum64())))
+		randomInt = vcrRandTimeInt(t.Name())
+		randomString = vcrRandString(rng, 5)
+	} else {
+		randomInt = RandTimeInt()
+		randomString = randString(5)
+	}
+
 	testData := TestData{
-		RandomInteger:   RandTimeInt(),
-		RandomString:    randString(5),
+		RandomInteger:   randomInt,
+		RandomString:    randomString,
 		ResourceName:    fmt.Sprintf("%s.%s", resourceType, resourceLabel),
 		EnvironmentName: EnvironmentName(),
 		MetadataURL:     os.Getenv("ARM_METADATA_HOSTNAME"),

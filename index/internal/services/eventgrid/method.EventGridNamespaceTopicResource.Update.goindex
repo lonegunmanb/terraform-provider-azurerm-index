@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventgrid
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2025-02-15/namespaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2025-02-15/namespacetopics"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r EventGridNamespaceTopicResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.EventGrid.NamespaceTopicsClient
+
+			var model EventGridNamespaceTopicResourceModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id, err := namespacetopics.ParseNamespaceTopicID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			payload := namespacetopics.NamespaceTopicUpdateParameters{
+				Properties: &namespacetopics.NamespaceTopicUpdateParameterProperties{},
+			}
+
+			if metadata.ResourceData.HasChange("event_retention_in_days") {
+				payload.Properties.EventRetentionInDays = pointer.To(model.EventRetentionInDays)
+			}
+
+			if err = client.UpdateThenPoll(ctx, *id, payload); err != nil {
+				return fmt.Errorf("updating %s: %+v", id, err)
+			}
+
+			return nil
+		},
+	}
+}

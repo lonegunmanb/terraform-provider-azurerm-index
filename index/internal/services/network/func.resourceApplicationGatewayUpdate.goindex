@@ -91,6 +91,10 @@ func resourceApplicationGatewayUpdate(d *pluginsdk.ResourceData, meta interface{
 		payload.Properties.RequestRoutingRules = requestRoutingRules
 	}
 
+	if d.HasChange("routing_rule") {
+		payload.Properties.RoutingRules = expandApplicationGatewayRoutingRules(d.Get("routing_rule").(*pluginsdk.Set).List(), *id)
+	}
+
 	if d.HasChange("url_path_map") {
 		urlPathMaps, err := expandApplicationGatewayURLPathMaps(d, id.ID())
 		if err != nil {
@@ -144,10 +148,14 @@ func resourceApplicationGatewayUpdate(d *pluginsdk.ResourceData, meta interface{
 	if d.HasChange("http_listener") {
 		httpListeners, err := expandApplicationGatewayHTTPListeners(d, id.ID())
 		if err != nil {
-			return fmt.Errorf("fail to expand `http_listener`: %+v", err)
+			return fmt.Errorf("expanding `http_listener`: %+v", err)
 		}
 
 		payload.Properties.HTTPListeners = httpListeners
+	}
+
+	if d.HasChange("listener") {
+		payload.Properties.Listeners = expandApplicationGatewayListeners(d.Get("listener").(*schema.Set).List(), *id)
 	}
 
 	if d.HasChange("rewrite_rule_set") {
@@ -176,7 +184,11 @@ func resourceApplicationGatewayUpdate(d *pluginsdk.ResourceData, meta interface{
 	}
 
 	if d.HasChange("backend_http_settings") {
-		payload.Properties.BackendHTTPSettingsCollection = expandApplicationGatewayBackendHTTPSettings(d, id.ID())
+		payload.Properties.BackendHTTPSettingsCollection = expandApplicationGatewayBackendHTTPSettings(d.Get("backend_http_settings").(*schema.Set).List(), id.ID())
+	}
+
+	if d.HasChange("backend") {
+		payload.Properties.BackendSettingsCollection = expandApplicationGatewayBackendSettings(d.Get("backend").([]interface{}), *id)
 	}
 
 	if d.HasChange("frontend_ip_configuration") {
@@ -192,7 +204,9 @@ func resourceApplicationGatewayUpdate(d *pluginsdk.ResourceData, meta interface{
 	}
 
 	if d.HasChange("probe") {
-		payload.Properties.Probes = expandApplicationGatewayProbes(d)
+		probes := expandApplicationGatewayProbes(d.Get("probe").(*schema.Set).List())
+
+		payload.Properties.Probes = probes
 	}
 
 	if d.HasChange("sku") {
@@ -225,39 +239,6 @@ func resourceApplicationGatewayUpdate(d *pluginsdk.ResourceData, meta interface{
 		}
 
 		payload.Identity = expandedIdentity
-	}
-
-	// validation (todo these should probably be moved into their respective expand functions, which would then return an error?)
-	if payload.Properties != nil && payload.Properties.BackendHTTPSettingsCollection != nil {
-		for _, backendHttpSettings := range *payload.Properties.BackendHTTPSettingsCollection {
-			if props := backendHttpSettings.Properties; props != nil {
-				if props.HostName == nil || props.PickHostNameFromBackendAddress == nil {
-					continue
-				}
-
-				if *props.HostName != "" && *props.PickHostNameFromBackendAddress {
-					return fmt.Errorf("only one of `host_name` or `pick_host_name_from_backend_address` can be set")
-				}
-			}
-		}
-	}
-
-	if payload.Properties != nil && payload.Properties.Probes != nil {
-		for _, probe := range *payload.Properties.Probes {
-			if props := probe.Properties; props != nil {
-				if props.Host == nil || props.PickHostNameFromBackendHTTPSettings == nil {
-					continue
-				}
-
-				if *props.Host == "" && !*props.PickHostNameFromBackendHTTPSettings {
-					return fmt.Errorf("one of `host` or `pick_host_name_from_backend_http_settings` must be set")
-				}
-
-				if *props.Host != "" && *props.PickHostNameFromBackendHTTPSettings {
-					return fmt.Errorf("only one of `host` or `pick_host_name_from_backend_http_settings` can be set")
-				}
-			}
-		}
 	}
 
 	if d.HasChange("waf_configuration") {

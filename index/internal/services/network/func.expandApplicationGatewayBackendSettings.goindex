@@ -1,0 +1,80 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/applicationgateways"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func expandApplicationGatewayBackendSettings(input []interface{}, appGwID applicationgateways.ApplicationGatewayId) *[]applicationgateways.ApplicationGatewayBackendSettings {
+	results := make([]applicationgateways.ApplicationGatewayBackendSettings, 0)
+
+	for _, raw := range input {
+		v := raw.(map[string]interface{})
+
+		setting := applicationgateways.ApplicationGatewayBackendSettings{
+			Name: pointer.To(v["name"].(string)),
+			Properties: &applicationgateways.ApplicationGatewayBackendSettingsPropertiesFormat{
+				Port:                         pointer.To(int64(v["port"].(int))),
+				Protocol:                     pointer.ToEnum[applicationgateways.ApplicationGatewayProtocol](v["protocol"].(string)),
+				Timeout:                      pointer.To(int64(v["timeout_in_seconds"].(int))),
+				EnableL4ClientIPPreservation: pointer.To(v["client_ip_preservation_enabled"].(bool)),
+			},
+		}
+
+		if hostName := v["host_name"].(string); hostName != "" {
+			setting.Properties.HostName = pointer.To(hostName)
+		}
+
+		if trustedRootCertNames := v["trusted_root_certificate_names"].([]interface{}); len(trustedRootCertNames) != 0 {
+			trustedRootCertSubResources := make([]applicationgateways.SubResource, 0)
+
+			for _, rawTrustedRootCertName := range trustedRootCertNames {
+				trustedRootCertSubResource := applicationgateways.SubResource{
+					Id: pointer.To(parse.NewTrustedRootCertificateID(appGwID.SubscriptionId, appGwID.ResourceGroupName, appGwID.ApplicationGatewayName, rawTrustedRootCertName.(string)).ID()),
+				}
+
+				trustedRootCertSubResources = append(trustedRootCertSubResources, trustedRootCertSubResource)
+			}
+
+			setting.Properties.TrustedRootCertificates = &trustedRootCertSubResources
+		}
+
+		if probeName := v["probe_name"].(string); probeName != "" {
+			setting.Properties.Probe = &applicationgateways.SubResource{
+				Id: pointer.To(parse.NewProbeID(appGwID.SubscriptionId, appGwID.ResourceGroupName, appGwID.ApplicationGatewayName, probeName).ID()),
+			}
+		}
+
+		results = append(results, setting)
+	}
+
+	return &results
+}

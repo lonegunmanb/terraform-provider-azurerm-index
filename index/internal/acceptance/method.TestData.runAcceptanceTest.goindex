@@ -2,6 +2,7 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/acceptance
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/hashicorp/go-version"
@@ -13,10 +14,20 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/testclient"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/types"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/provider/framework"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/vcr"
 )
 func (td TestData) runAcceptanceTest(t *testing.T, testCase resource.TestCase) {
+	testclient.RegisterTestT(t)
+	defer testclient.UnregisterTestT()
+
+	if os.Getenv("TC_TEST_VIA_VCR") != "" {
+		defer func(testName string) {
+			_ = vcr.StopRecorder(testName)
+		}(t.Name())
+	}
+
 	testCase.ExternalProviders = td.externalProviders()
-	testCase.ProtoV5ProviderFactories = framework.ProtoV5ProviderFactoriesInit(context.Background(), "azurerm", "azurerm-alt")
+	testCase.ProtoV5ProviderFactories = framework.ProtoV5ProviderFactoriesInitWithTestName(context.Background(), t.Name(), "azurerm", "azurerm-alt")
 
 	resource.ParallelTest(t, testCase)
 }

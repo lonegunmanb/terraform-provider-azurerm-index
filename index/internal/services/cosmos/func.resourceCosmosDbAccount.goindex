@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/cosmos-db/mgmt/2021-10-15/documentdb" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/cosmosdb/2024-08-15/cosmosdb"
@@ -22,15 +22,12 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/customermanagedkeys"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
-	keyVaultSuppress "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/suppress"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
-	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -245,20 +242,10 @@ func resourceCosmosDbAccount() *pluginsdk.Resource {
 			},
 
 			"key_vault_key_id": {
-				Type:             pluginsdk.TypeString,
-				Optional:         true,
-				ForceNew:         true,
-				DiffSuppressFunc: keyVaultSuppress.DiffSuppressIgnoreKeyVaultKeyVersion,
-				ValidateFunc:     keyVaultValidate.VersionlessNestedItemId,
-				ConflictsWith:    []string{"managed_hsm_key_id"},
-			},
-
-			"managed_hsm_key_id": {
-				Type:          pluginsdk.TypeString,
-				Optional:      true,
-				ForceNew:      true,
-				ValidateFunc:  managedHsmValidate.ManagedHSMDataPlaneVersionlessKeyID,
-				ConflictsWith: []string{"key_vault_key_id"},
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeVersionless, keyvault.NestedItemTypeKey),
 			},
 
 			"consistency_policy": {
@@ -686,6 +673,49 @@ func resourceCosmosDbAccount() *pluginsdk.Resource {
 			Optional:     true,
 			Default:      string(cosmosdb.MinimalTlsVersionTlsOneTwo),
 			ValidateFunc: validation.StringInSlice(cosmosdb.PossibleValuesForMinimalTlsVersion(), false),
+		}
+
+		resource.Schema["managed_hsm_key_id"] = &pluginsdk.Schema{
+			Type:                  pluginsdk.TypeString,
+			Optional:              true,
+			DiffSuppressOnRefresh: true,
+			DiffSuppressFunc: func(_, oldValue, newValue string, d *schema.ResourceData) bool {
+				if newValue == "" {
+					// If using `key_vault_key_id`, `managed_hsm_key_id` will also be set
+					// ignore diff if the 2 are equal.
+					raw := d.GetRawConfig().AsValueMap()["key_vault_key_id"]
+					if raw.IsKnown() && !raw.IsNull() {
+						return raw.AsString() == oldValue
+					}
+				}
+
+				return false
+			},
+			ForceNew:      true,
+			ValidateFunc:  keyvault.ValidateNestedItemID(keyvault.VersionTypeVersionless, keyvault.NestedItemTypeKey),
+			ConflictsWith: []string{"key_vault_key_id"},
+			Deprecated:    "`managed_hsm_key_id` has been deprecated in favour of `key_vault_key_id` and will be removed in v5.0 of the AzureRM provider",
+		}
+
+		resource.Schema["key_vault_key_id"] = &pluginsdk.Schema{
+			Type:                  pluginsdk.TypeString,
+			Optional:              true,
+			ForceNew:              true,
+			ValidateFunc:          keyvault.ValidateNestedItemID(keyvault.VersionTypeVersionless, keyvault.NestedItemTypeKey),
+			DiffSuppressOnRefresh: true,
+			DiffSuppressFunc: func(_, oldValue, newValue string, d *schema.ResourceData) bool {
+				if newValue == "" {
+					// If using `managed_hsm_key_id`, `key_vault_key_id` will also be set
+					// ignore diff if the 2 are equal.
+					raw := d.GetRawConfig().AsValueMap()["managed_hsm_key_id"]
+					if raw.IsKnown() && !raw.IsNull() {
+						return raw.AsString() == oldValue
+					}
+				}
+
+				return false
+			},
+			ConflictsWith: []string{"managed_hsm_key_id"},
 		}
 	}
 

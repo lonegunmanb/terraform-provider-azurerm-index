@@ -18,7 +18,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func buildClient(ctx context.Context, p *schema.Provider, d *schema.ResourceData, authConfig *auth.Credentials) (*clients.Client, diag.Diagnostics) {
+func buildClient(ctx context.Context, p *schema.Provider, d *schema.ResourceData, authConfig *auth.Credentials, testName string) (*clients.Client, diag.Diagnostics) {
 	providerRegistrations := d.Get("resource_provider_registrations").(string)
 
 	// TODO: Remove in v5.0
@@ -79,6 +79,7 @@ func buildClient(ctx context.Context, p *schema.Provider, d *schema.ResourceData
 		StorageUseAzureAD:           d.Get("storage_use_azuread").(bool),
 		SubscriptionID:              d.Get("subscription_id").(string),
 		TerraformVersion:            p.TerraformVersion,
+		TestName:                    testName,
 
 		// this field is intentionally not exposed in the provider block, since it's only used for
 		// platform level tracing
@@ -103,8 +104,11 @@ func buildClient(ctx context.Context, p *schema.Provider, d *schema.ResourceData
 	ctx2, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
-	if err = resourceproviders.EnsureRegistered(ctx2, client.Resource.ResourceProvidersClient, subscriptionId, requiredResourceProviders); err != nil {
-		return nil, diag.FromErr(err)
+	// Skip this if we're running VCR, it creates too much noise in the cassette
+	if os.Getenv("TC_TEST_VIA_VCR") == "" {
+		if err = resourceproviders.EnsureRegistered(ctx2, client.Resource.ResourceProvidersClient, subscriptionId, requiredResourceProviders); err != nil {
+			return nil, diag.FromErr(err)
+		}
 	}
 
 	return client, nil

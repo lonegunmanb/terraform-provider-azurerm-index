@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storagesync/2020-03-01/registeredserverresource"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storagesync/2020-03-01/storagesyncservicesresource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
@@ -38,39 +40,6 @@ func resourceStorageSyncRead(d *pluginsdk.ResourceData, meta interface{}) error 
 		}
 		return fmt.Errorf("retrieving %s: %+v", *id, err)
 	}
-	d.Set("name", id.StorageSyncServiceName)
-	d.Set("resource_group_name", id.ResourceGroupName)
-	if model := resp.Model; model != nil {
-		d.Set("location", location.Normalize(model.Location))
 
-		if props := model.Properties; props != nil {
-			d.Set("incoming_traffic_policy", string(pointer.From(props.IncomingTrafficPolicy)))
-		}
-
-		if err = tags.FlattenAndSet(d, model.Tags); err != nil {
-			return fmt.Errorf("setting `tags`: %+v", err)
-		}
-	}
-
-	storageSyncId := registeredserverresource.NewStorageSyncServiceID(id.SubscriptionId, id.ResourceGroupName, id.StorageSyncServiceName)
-	registeredServersResp, err := registeredServerClient.RegisteredServersListByStorageSyncService(ctx, storageSyncId)
-	if err != nil {
-		if !response.WasNotFound(registeredServersResp.HttpResponse) {
-			return fmt.Errorf("retrieving registered servers for %s: %+v", id, err)
-		}
-	}
-
-	if model := registeredServersResp.Model; model != nil && model.Value != nil {
-		registeredServers := make([]interface{}, 0)
-		for _, registeredServer := range *model.Value {
-			if registeredServer.Id != nil {
-				registeredServers = append(registeredServers, *registeredServer.Id)
-			}
-		}
-		if err = d.Set("registered_servers", registeredServers); err != nil {
-			return fmt.Errorf("setting `registered_servers`: %+v", err)
-		}
-	}
-
-	return nil
+	return resourceStorageSyncFlatten(ctx, d, id, resp.Model, registeredServerClient, true)
 }

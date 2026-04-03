@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-07-01/basebackuppolicyresources"
+	azValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenBackupPolicyDataLakeStoragePolicyRules(input []basebackuppolicyresources.BasePolicyRule) (string, []BackupPolicyDataLakeStorageRetentionRule, []string, string) {
+	var taggingCriteria []basebackuppolicyresources.TaggingCriteria
+	var nonDefaultRetentionRules []basebackuppolicyresources.AzureRetentionRule
+	var backupSchedule []string
+	var timeZone string
+	var defaultRetentionDuration string
+	retentionRules := make([]BackupPolicyDataLakeStorageRetentionRule, 0)
+
+	for _, item := range input {
+		switch rule := item.(type) {
+		case basebackuppolicyresources.AzureBackupRule:
+			if trigger, ok := rule.Trigger.(basebackuppolicyresources.ScheduleBasedTriggerContext); ok {
+				backupSchedule = trigger.Schedule.RepeatingTimeIntervals
+				timeZone = pointer.From(trigger.Schedule.TimeZone)
+				taggingCriteria = trigger.TaggingCriteria
+			}
+		case basebackuppolicyresources.AzureRetentionRule:
+			if pointer.From(rule.IsDefault) {
+				if v := rule.Lifecycles; len(v) > 0 {
+					if deleteOption, ok := v[0].DeleteAfter.(basebackuppolicyresources.AbsoluteDeleteOption); ok {
+						defaultRetentionDuration = deleteOption.Duration
+					}
+				}
+			} else {
+				nonDefaultRetentionRules = append(nonDefaultRetentionRules, rule)
+			}
+		}
+	}
+
+	for _, rule := range nonDefaultRetentionRules {
+		result := BackupPolicyDataLakeStorageRetentionRule{
+			Name: rule.Name,
+		}
+
+		for _, criteria := range taggingCriteria {
+			if strings.EqualFold(criteria.TagInfo.TagName, rule.Name) {
+				flattenBackupPolicyDataLakeStorageCriteriaIntoRule(criteria.Criteria, &result)
+				break
+			}
+		}
+
+		if v := rule.Lifecycles; len(v) > 0 {
+			if deleteOption, ok := v[0].DeleteAfter.(basebackuppolicyresources.AbsoluteDeleteOption); ok {
+				result.Duration = deleteOption.Duration
+			}
+		}
+
+		retentionRules = append(retentionRules, result)
+	}
+
+	return defaultRetentionDuration, retentionRules, backupSchedule, timeZone
+}

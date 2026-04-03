@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -35,6 +36,16 @@ func resourceKustoAttachedDatabaseConfiguration() *pluginsdk.Resource {
 		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
 			_, err := attacheddatabaseconfigurations.ParseAttachedDatabaseConfigurationID(id)
 			return err
+		}),
+
+		CustomizeDiff: pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			databaseName := diff.Get("database_name").(string)
+			databaseNameOverride := diff.Get("database_name_override").(string)
+
+			if databaseName == "*" && databaseNameOverride != "" {
+				return fmt.Errorf("cannot set `database_name_override` when `database_name` is set to `*` (all databases)")
+			}
+			return nil
 		}),
 
 		Timeouts: &pluginsdk.ResourceTimeout{
@@ -77,6 +88,20 @@ func resourceKustoAttachedDatabaseConfiguration() *pluginsdk.Resource {
 				ValidateFunc: commonids.ValidateKustoClusterID,
 			},
 
+			"database_name_override": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ValidateFunc:  validate.DatabaseName,
+				ConflictsWith: []string{"database_name_prefix"},
+			},
+
+			"database_name_prefix": {
+				Type:          pluginsdk.TypeString,
+				Optional:      true,
+				ValidateFunc:  validate.DatabaseName,
+				ConflictsWith: []string{"database_name_override"},
+			},
+
 			"attached_database_names": {
 				Type:     pluginsdk.TypeList,
 				Computed: true,
@@ -107,6 +132,22 @@ func resourceKustoAttachedDatabaseConfiguration() *pluginsdk.Resource {
 						},
 
 						"external_tables_to_include": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"functions_to_exclude": {
+							Type:     pluginsdk.TypeSet,
+							Optional: true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"functions_to_include": {
 							Type:     pluginsdk.TypeSet,
 							Optional: true,
 							Elem: &pluginsdk.Schema{
