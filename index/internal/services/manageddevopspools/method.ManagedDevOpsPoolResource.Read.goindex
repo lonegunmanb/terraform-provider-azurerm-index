@@ -1,0 +1,98 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2025-02-01/projects"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (ManagedDevOpsPoolResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ManagedDevOpsPools.PoolsClient
+
+			id, err := pools.ParsePoolID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			state := ManagedDevOpsPoolModel{
+				Name:              id.PoolName,
+				ResourceGroupName: id.ResourceGroupName,
+			}
+
+			if model := resp.Model; model != nil {
+				state.Location = location.Normalize(model.Location)
+				state.Tags = pointer.From(model.Tags)
+
+				if model.Identity != nil {
+					flattenedIdentity, err := identity.FlattenUserAssignedMapToModel(model.Identity)
+					if err != nil {
+						return fmt.Errorf("flattening `identity`: %+v", err)
+					}
+					state.Identity = *flattenedIdentity
+				}
+
+				if props := model.Properties; props != nil {
+					devCenterProjectId, err := projects.ParseProjectID(props.DevCenterProjectResourceId)
+					if err != nil {
+						return fmt.Errorf("parsing `dev_center_project_id`: %+v", err)
+					}
+
+					state.DevCenterProjectId = devCenterProjectId.ID()
+					state.MaximumConcurrency = props.MaximumConcurrency
+
+					if agentProfile := props.AgentProfile; agentProfile != nil {
+						if stateful, ok := agentProfile.(pools.Stateful); ok {
+							state.StatefulAgent = flattenStatefulAgentToModel(stateful)
+						} else if stateless, ok := agentProfile.(pools.StatelessAgentProfile); ok {
+							state.StatelessAgent = flattenStatelessAgentToModel(stateless)
+						}
+					}
+
+					if organizationProfile := props.OrganizationProfile; organizationProfile != nil {
+						if azureDevOpsOrganization, ok := organizationProfile.(pools.AzureDevOpsOrganizationProfile); ok {
+							state.AzureDevOpsOrganization = flattenAzureDevOpsOrganizationToModel(azureDevOpsOrganization)
+						}
+					}
+
+					if fabricProfile := props.FabricProfile; fabricProfile != nil {
+						if vmssFabric, ok := fabricProfile.(pools.VMSSFabricProfile); ok {
+							state.VirtualMachineScaleSetFabric = flattenVirtualMachineScaleSetFabricToModel(vmssFabric)
+						}
+					}
+
+					if runtimeConfig := props.RuntimeConfiguration; runtimeConfig != nil {
+						state.WorkFolder = pointer.From(runtimeConfig.WorkFolder)
+					}
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

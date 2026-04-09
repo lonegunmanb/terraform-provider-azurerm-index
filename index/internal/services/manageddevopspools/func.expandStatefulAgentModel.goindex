@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"encoding/json"
+	"regexp"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandStatefulAgentModel(input []StatefulAgentModel) pools.AgentProfile {
+	stateful := &pools.Stateful{
+		Kind: "Stateful",
+	}
+
+	if len(input) == 0 {
+		return stateful
+	}
+
+	agentProfile := input[0]
+
+	stateful.GracePeriodTimeSpan = pointer.To(agentProfile.GracePeriodTimeSpan)
+	stateful.MaxAgentLifetime = pointer.To(agentProfile.MaximumAgentLifetime)
+
+	if len(agentProfile.ManualResourcePrediction) > 0 {
+		manualResourcePrediction := agentProfile.ManualResourcePrediction[0]
+
+		resourcePredictions := expandResourcePredictionsModel(manualResourcePrediction)
+		if resourcePredictions != nil {
+			stateful.ResourcePredictions = pointer.To(interface{}(*resourcePredictions))
+		}
+
+		manualPredictionProfile := &pools.ManualResourcePredictionsProfile{
+			Kind: pools.ResourcePredictionsProfileTypeManual,
+		}
+		stateful.ResourcePredictionsProfile = manualPredictionProfile
+	} else if len(agentProfile.AutomaticResourcePrediction) > 0 {
+		automaticResourcePrediction := agentProfile.AutomaticResourcePrediction[0]
+
+		automaticPredictionProfile := &pools.AutomaticResourcePredictionsProfile{
+			Kind: pools.ResourcePredictionsProfileTypeAutomatic,
+		}
+
+		if automaticResourcePrediction.PredictionPreference != "" {
+			predictionPreference := pools.PredictionPreference(automaticResourcePrediction.PredictionPreference)
+			automaticPredictionProfile.PredictionPreference = &predictionPreference
+		}
+
+		stateful.ResourcePredictionsProfile = automaticPredictionProfile
+	}
+
+	return stateful
+}

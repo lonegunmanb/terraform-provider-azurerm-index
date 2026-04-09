@@ -145,11 +145,13 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 	httpProxyConfigRaw := d.Get("http_proxy_config").([]interface{})
 	httpProxyConfig := expandKubernetesClusterHttpProxyConfig(httpProxyConfigRaw)
 
-	enableOidcIssuer := false
-	var oidcIssuerProfile *managedclusters.ManagedClusterOIDCIssuerProfile
-	if v, ok := d.GetOk("oidc_issuer_enabled"); ok {
-		enableOidcIssuer = v.(bool)
-		oidcIssuerProfile = expandKubernetesClusterOidcIssuerProfile(enableOidcIssuer)
+	enableOidcIssuer := d.Get("oidc_issuer_enabled").(bool)
+	oidcIssuerProfile := expandKubernetesClusterOidcIssuerProfile(enableOidcIssuer)
+	if !features.FivePointOh() {
+		oidcIssuerProfile = nil // preserves 4.x default of `nil`, meaning Azure decides
+		if !pluginsdk.IsExplicitlyNullInConfig(d, "oidc_issuer_enabled") {
+			oidcIssuerProfile = expandKubernetesClusterOidcIssuerProfile(enableOidcIssuer)
+		}
 	}
 
 	storageProfileRaw := d.Get("storage_profile").([]interface{})

@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"encoding/json"
+	"regexp"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenStatefulAgentToModel(input pools.Stateful) []StatefulAgentModel {
+	statefulAgentModel := StatefulAgentModel{
+		GracePeriodTimeSpan:  pointer.From(input.GracePeriodTimeSpan),
+		MaximumAgentLifetime: pointer.From(input.MaxAgentLifetime),
+	}
+
+	if input.ResourcePredictionsProfile != nil {
+		if automatic, ok := input.ResourcePredictionsProfile.(pools.AutomaticResourcePredictionsProfile); ok {
+			statefulAgentModel.AutomaticResourcePrediction = []AutomaticResourcePredictionModel{
+				{
+					PredictionPreference: pointer.FromEnum(automatic.PredictionPreference),
+				},
+			}
+		} else if _, ok := input.ResourcePredictionsProfile.(pools.ManualResourcePredictionsProfile); ok {
+			manualProfile := ManualResourcePredictionModel{}
+
+			if input.ResourcePredictions != nil {
+				manualProfile = flattenManualResourcePredictionsModel(pointer.From(input.ResourcePredictions))
+			}
+
+			statefulAgentModel.ManualResourcePrediction = []ManualResourcePredictionModel{manualProfile}
+		}
+	}
+
+	return []StatefulAgentModel{statefulAgentModel}
+}

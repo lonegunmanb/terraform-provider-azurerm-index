@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2025-02-01/projects"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func validateVirtualMachineScaleSetFabricImages(metadata sdk.ResourceMetaData, vmssFabrics []VirtualMachineScaleSetFabricModel) error {
+	rawConfig := metadata.ResourceDiff.GetRawConfig().AsValueMap()
+
+	vmssFabricValue, exists := rawConfig["virtual_machine_scale_set_fabric"]
+	if !exists || vmssFabricValue.IsNull() {
+		return nil
+	}
+
+	if !vmssFabricValue.IsWhollyKnown() {
+		return nil
+	}
+
+	for _, vmssFabric := range vmssFabrics {
+		for i, image := range vmssFabric.Images {
+			haveResourceId := image.Id != ""
+			haveWellKnownImageName := image.WellKnownImageName != ""
+
+			if !haveResourceId && !haveWellKnownImageName {
+				return fmt.Errorf("one of `id` or `well_known_image_name` must be specified for image %d in `virtual_machine_scale_set_fabric`", i)
+			}
+
+			if haveResourceId && haveWellKnownImageName {
+				return fmt.Errorf("only one of `id` or `well_known_image_name` can be specified for image %d in `virtual_machine_scale_set_fabric`", i)
+			}
+		}
+	}
+
+	return nil
+}

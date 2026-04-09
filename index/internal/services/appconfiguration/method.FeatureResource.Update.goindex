@@ -89,6 +89,7 @@ func (k FeatureResource) Update() sdk.ResourceFunc {
 			timewindowFilters := make([]interface{}, 0)
 			targetingFilters := make([]interface{}, 0)
 			percentageFilter := PercentageFeatureFilter{}
+			customFilters := make([]interface{}, 0)
 			if len(fv.Conditions.ClientFilters.Filters) > 0 {
 				for _, f := range fv.Conditions.ClientFilters.Filters {
 					switch f := f.(type) {
@@ -101,6 +102,9 @@ func (k FeatureResource) Update() sdk.ResourceFunc {
 					case PercentageFeatureFilter:
 						pfp := f
 						percentageFilter = pfp
+					case CustomFilter:
+						cf := f
+						customFilters = append(customFilters, cf)
 					default:
 						return fmt.Errorf("while unmarshaling feature payload: unknown filter type %+v", f)
 					}
@@ -139,6 +143,18 @@ func (k FeatureResource) Update() sdk.ResourceFunc {
 				filterChanged = true
 			} else {
 				filters = append(filters, timewindowFilters...)
+			}
+
+			if metadata.ResourceData.HasChange("custom_filter") {
+				for _, cf := range model.CustomFilters {
+					filters = append(filters, CustomFilter{
+						Name:       cf.Name,
+						Parameters: cf.Parameters,
+					})
+				}
+				filterChanged = true
+			} else {
+				filters = append(filters, customFilters...)
 			}
 
 			if filterChanged {

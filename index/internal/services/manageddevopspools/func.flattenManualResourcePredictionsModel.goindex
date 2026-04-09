@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"encoding/json"
+	"regexp"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenManualResourcePredictionsModel(input interface{}) ManualResourcePredictionModel {
+	manualProfile := ManualResourcePredictionModel{}
+
+	if input == nil {
+		return manualProfile
+	}
+
+	jsonBytes, err := json.Marshal(input)
+	if err != nil {
+		return manualProfile
+	}
+
+	var sdkModel ResourcePredictionsSdkModel
+	if err := json.Unmarshal(jsonBytes, &sdkModel); err != nil {
+		return manualProfile
+	}
+
+	manualProfile.TimeZoneName = sdkModel.TimeZone
+
+	if len(sdkModel.DaysData) == 1 {
+		for _, count := range sdkModel.DaysData[0] {
+			manualProfile.AllWeekSchedule = count
+			break
+		}
+	} else if len(sdkModel.DaysData) == 7 {
+		manualProfile.SundaySchedule = flattenDaySchedule(sdkModel.DaysData[0])
+		manualProfile.MondaySchedule = flattenDaySchedule(sdkModel.DaysData[1])
+		manualProfile.TuesdaySchedule = flattenDaySchedule(sdkModel.DaysData[2])
+		manualProfile.WednesdaySchedule = flattenDaySchedule(sdkModel.DaysData[3])
+		manualProfile.ThursdaySchedule = flattenDaySchedule(sdkModel.DaysData[4])
+		manualProfile.FridaySchedule = flattenDaySchedule(sdkModel.DaysData[5])
+		manualProfile.SaturdaySchedule = flattenDaySchedule(sdkModel.DaysData[6])
+	}
+
+	return manualProfile
+}

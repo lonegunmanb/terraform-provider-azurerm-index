@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"encoding/json"
+	"regexp"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenAzureDevOpsOrganizationToModel(input pools.AzureDevOpsOrganizationProfile) []AzureDevOpsOrganizationModel {
+	organizationModel := AzureDevOpsOrganizationModel{
+		Organizations: flattenOrganizationsToModel(input.Organizations),
+	}
+
+	if input.PermissionProfile != nil {
+		permission := AzureDevOpsPermissionModel{
+			Kind: string(input.PermissionProfile.Kind),
+		}
+
+		if input.PermissionProfile.Kind == pools.AzureDevOpsPermissionTypeSpecificAccounts {
+			adminAccounts := AzureDevOpsAdministratorAccountsModel{
+				Groups: pointer.From(input.PermissionProfile.Groups),
+				Users:  pointer.From(input.PermissionProfile.Users),
+			}
+			permission.AdministratorAccounts = []AzureDevOpsAdministratorAccountsModel{adminAccounts}
+		}
+
+		organizationModel.Permission = []AzureDevOpsPermissionModel{permission}
+	}
+
+	return []AzureDevOpsOrganizationModel{organizationModel}
+}

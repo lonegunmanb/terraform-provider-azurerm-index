@@ -1,0 +1,273 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2025-02-01/projects"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (ManagedDevOpsPoolDataSource) Attributes() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"location": commonschema.LocationComputed(),
+
+		"azure_devops_organization": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"organization": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"parallelism": {
+									Type:     pluginsdk.TypeInt,
+									Computed: true,
+								},
+
+								"projects": {
+									Type:     pluginsdk.TypeList,
+									Computed: true,
+									Elem: &pluginsdk.Schema{
+										Type: pluginsdk.TypeString,
+									},
+								},
+
+								"url": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+							},
+						},
+					},
+
+					"permission": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"kind": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+
+								"administrator_account": {
+									Type:     pluginsdk.TypeList,
+									Computed: true,
+									Elem: &pluginsdk.Resource{
+										Schema: map[string]*pluginsdk.Schema{
+											"groups": {
+												Type:     pluginsdk.TypeList,
+												Computed: true,
+												Elem: &pluginsdk.Schema{
+													Type: pluginsdk.TypeString,
+												},
+											},
+
+											"users": {
+												Type:     pluginsdk.TypeList,
+												Computed: true,
+												Elem: &pluginsdk.Schema{
+													Type: pluginsdk.TypeString,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+
+		"dev_center_project_id": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"identity": commonschema.UserAssignedIdentityComputed(),
+
+		"maximum_concurrency": {
+			Type:     pluginsdk.TypeInt,
+			Computed: true,
+		},
+
+		"stateful_agent": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"grace_period_time_span": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+
+					"maximum_agent_lifetime": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+
+					"manual_resource_prediction": manualResourcePredictionSchemaComputed(),
+
+					"automatic_resource_prediction": automaticResourcePredictionSchemaComputed(),
+				},
+			},
+		},
+
+		"stateless_agent": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"manual_resource_prediction": manualResourcePredictionSchemaComputed(),
+
+					"automatic_resource_prediction": automaticResourcePredictionSchemaComputed(),
+				},
+			},
+		},
+
+		"virtual_machine_scale_set_fabric": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"image": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"aliases": {
+									Type:     pluginsdk.TypeList,
+									Computed: true,
+									Elem: &pluginsdk.Schema{
+										Type: pluginsdk.TypeString,
+									},
+								},
+
+								"buffer": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+
+								"id": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+
+								"well_known_image_name": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+							},
+						},
+					},
+
+					"security": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"interactive_logon_enabled": {
+									Type:     pluginsdk.TypeBool,
+									Computed: true,
+								},
+
+								"key_vault_management": {
+									Type:     pluginsdk.TypeList,
+									Computed: true,
+									Elem: &pluginsdk.Resource{
+										Schema: map[string]*pluginsdk.Schema{
+											"certificate_store_location": {
+												Type:     pluginsdk.TypeString,
+												Computed: true,
+											},
+
+											"certificate_store_name": {
+												Type:     pluginsdk.TypeString,
+												Computed: true,
+											},
+
+											"key_export_enabled": {
+												Type:     pluginsdk.TypeBool,
+												Computed: true,
+											},
+
+											"key_vault_certificate_ids": {
+												Type:     pluginsdk.TypeList,
+												Computed: true,
+												Elem: &pluginsdk.Schema{
+													Type: pluginsdk.TypeString,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+
+					"sku_name": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+
+					"os_disk_storage_account_type": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+
+					"storage": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"caching": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+
+								"disk_size_in_gb": {
+									Type:     pluginsdk.TypeInt,
+									Computed: true,
+								},
+
+								"drive_letter": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+
+								"storage_account_type": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+							},
+						},
+					},
+
+					"subnet_id": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+				},
+			},
+		},
+
+		"work_folder": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"tags": commonschema.TagsDataSource(),
+	}
+}

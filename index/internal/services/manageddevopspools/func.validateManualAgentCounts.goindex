@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2025-02-01/projects"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func validateManualAgentCounts(profileType string, manualPredictions ManualResourcePredictionModel, maxConcurrency int64) error {
+	hasAllWeek := manualPredictions.AllWeekSchedule > 0
+
+	daySchedules := []struct {
+		name     string
+		schedule []DayScheduleModel
+	}{
+		{"sunday_schedule", manualPredictions.SundaySchedule},
+		{"monday_schedule", manualPredictions.MondaySchedule},
+		{"tuesday_schedule", manualPredictions.TuesdaySchedule},
+		{"wednesday_schedule", manualPredictions.WednesdaySchedule},
+		{"thursday_schedule", manualPredictions.ThursdaySchedule},
+		{"friday_schedule", manualPredictions.FridaySchedule},
+		{"saturday_schedule", manualPredictions.SaturdaySchedule},
+	}
+
+	hasDaySchedule := false
+	for _, sched := range daySchedules {
+		if len(sched.schedule) > 0 {
+			hasDaySchedule = true
+			break
+		}
+	}
+
+	if !hasAllWeek && !hasDaySchedule {
+		return fmt.Errorf("%s `manual_resource_prediction` must specify either `all_week_schedule` or at least one day schedule", profileType)
+	}
+
+	if hasAllWeek {
+		if manualPredictions.AllWeekSchedule > maxConcurrency {
+			return fmt.Errorf("%s `all_week_schedule` agent count (%d) cannot exceed `maximum_concurrency` (%d)",
+				profileType, manualPredictions.AllWeekSchedule, maxConcurrency)
+		}
+	}
+
+	for _, sched := range daySchedules {
+		if err := validateScheduleAgentCounts(profileType, sched.name, sched.schedule, maxConcurrency); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

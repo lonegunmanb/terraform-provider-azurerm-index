@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2025-02-01/projects"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func validateScheduleAgentCounts(profileType, scheduleName string, schedule []DayScheduleModel, maxConcurrency int64) error {
+	seen := make(map[string]bool, len(schedule))
+	for _, entry := range schedule {
+		if seen[entry.Time] {
+			return fmt.Errorf("%s %s has duplicate time slot %q - entries with the same time must be merged into a single block",
+				profileType, scheduleName, entry.Time)
+		}
+		seen[entry.Time] = true
+		if entry.Count > maxConcurrency {
+			return fmt.Errorf("%s %s time slot %s has agent count (%d) that exceeds `maximum_concurrency` (%d)",
+				profileType, scheduleName, entry.Time, entry.Count, maxConcurrency)
+		}
+	}
+	return nil
+}

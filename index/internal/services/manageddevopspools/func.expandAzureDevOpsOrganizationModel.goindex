@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools
+import (
+	"encoding/json"
+	"regexp"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devopsinfrastructure/2025-09-20/pools"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/manageddevopspools/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandAzureDevOpsOrganizationModel(input []AzureDevOpsOrganizationModel) pools.OrganizationProfile {
+	if len(input) == 0 {
+		return nil
+	}
+
+	organizationProfile := input[0]
+	poolOrganizations := []pools.Organization{}
+	for _, org := range organizationProfile.Organizations {
+		poolOrganization := pools.Organization{
+			Url:         org.Url,
+			Projects:    pointer.To(org.Projects),
+			Parallelism: pointer.To(org.Parallelism),
+		}
+
+		poolOrganizations = append(poolOrganizations, poolOrganization)
+	}
+
+	azureDevOpsOrganizationProfile := pools.AzureDevOpsOrganizationProfile{
+		Organizations: poolOrganizations,
+	}
+
+	if len(organizationProfile.Permission) > 0 {
+		permissionProfile := organizationProfile.Permission[0]
+		poolPermissionProfile := &pools.AzureDevOpsPermissionProfile{
+			Kind: pools.AzureDevOpsPermissionType(permissionProfile.Kind),
+		}
+
+		if poolPermissionProfile.Kind == pools.AzureDevOpsPermissionTypeSpecificAccounts && len(permissionProfile.AdministratorAccounts) > 0 {
+			adminAccounts := permissionProfile.AdministratorAccounts[0]
+			poolPermissionProfile.Groups = pointer.To(adminAccounts.Groups)
+			poolPermissionProfile.Users = pointer.To(adminAccounts.Users)
+		}
+
+		azureDevOpsOrganizationProfile.PermissionProfile = poolPermissionProfile
+	}
+
+	return azureDevOpsOrganizationProfile
+}
