@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/consumption/2019-10-01/budgets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandConsumptionBudgetNotificationsFromModel(input []ConsumptionBudgetNotificationModel) *map[string]budgets.Notification {
+	if len(input) == 0 {
+		return nil
+	}
+
+	notifications := make(map[string]budgets.Notification)
+	for _, n := range input {
+		notification := budgets.Notification{
+			Enabled:  n.Enabled,
+			Operator: budgets.OperatorType(n.Operator),
+			// nolint: gosec
+			Threshold: float64(n.Threshold),
+		}
+
+		thresholdType := budgets.ThresholdType(n.ThresholdType)
+		notification.ThresholdType = &thresholdType
+
+		notification.ContactEmails = n.ContactEmails
+		if len(n.ContactRoles) > 0 {
+			notification.ContactRoles = &n.ContactRoles
+		}
+		if len(n.ContactGroups) > 0 {
+			notification.ContactGroups = &n.ContactGroups
+		}
+
+		notificationKey := fmt.Sprintf("%s_%s_%f_Percent", string(thresholdType), string(notification.Operator), notification.Threshold)
+		notifications[notificationKey] = notification
+	}
+
+	return &notifications
+}

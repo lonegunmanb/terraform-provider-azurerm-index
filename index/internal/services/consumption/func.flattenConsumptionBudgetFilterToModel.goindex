@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/consumption/2019-10-01/budgets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenConsumptionBudgetFilterToModel(input *budgets.BudgetFilter) []ConsumptionBudgetFilterModel {
+	if input == nil {
+		return []ConsumptionBudgetFilterModel{}
+	}
+
+	dimensions := make([]ConsumptionBudgetFilterDimensionModel, 0)
+	tags := make([]ConsumptionBudgetFilterTagModel, 0)
+
+	if input.And != nil {
+		for _, v := range *input.And {
+			if v.Dimensions != nil {
+				dimensions = append(dimensions, ConsumptionBudgetFilterDimensionModel{
+					Name:     v.Dimensions.Name,
+					Operator: string(v.Dimensions.Operator),
+					Values:   v.Dimensions.Values,
+				})
+			}
+			if v.Tags != nil {
+				tags = append(tags, ConsumptionBudgetFilterTagModel{
+					Name:     v.Tags.Name,
+					Operator: string(v.Tags.Operator),
+					Values:   v.Tags.Values,
+				})
+			}
+		}
+	} else {
+		if input.Dimensions != nil {
+			dimensions = append(dimensions, ConsumptionBudgetFilterDimensionModel{
+				Name:     input.Dimensions.Name,
+				Operator: string(input.Dimensions.Operator),
+				Values:   input.Dimensions.Values,
+			})
+		}
+		if input.Tags != nil {
+			tags = append(tags, ConsumptionBudgetFilterTagModel{
+				Name:     input.Tags.Name,
+				Operator: string(input.Tags.Operator),
+				Values:   input.Tags.Values,
+			})
+		}
+	}
+
+	if len(dimensions) == 0 && len(tags) == 0 {
+		return []ConsumptionBudgetFilterModel{}
+	}
+
+	return []ConsumptionBudgetFilterModel{
+		{
+			Dimension: dimensions,
+			Tag:       tags,
+		},
+	}
+}
