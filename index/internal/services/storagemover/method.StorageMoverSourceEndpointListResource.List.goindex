@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storagemover
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/framework/typehelpers"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagemover/2025-07-01/endpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagemover/2025-07-01/storagemovers"
+	"github.com/hashicorp/terraform-plugin-framework/list"
+	"github.com/hashicorp/terraform-plugin-framework/list/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (StorageMoverSourceEndpointListResource) List(ctx context.Context, request list.ListRequest, stream *list.ListResultsStream, metadata sdk.ResourceMetadata) {
+	client := metadata.Client.StorageMover.EndpointsClient
+
+	var data StorageMoverSourceEndpointListModel
+	diags := request.Config.Get(ctx, &data)
+	if diags.HasError() {
+		stream.Results = list.ListResultsStreamDiagnostics(diags)
+		return
+	}
+
+	storageMoverID, err := storagemovers.ParseStorageMoverID(data.StorageMoverId.ValueString())
+	if err != nil {
+		sdk.SetResponseErrorDiagnostic(stream, fmt.Sprintf("parsing Storage Mover ID for `%s`", StorageMoverSourceEndpointResource{}.ResourceType()), err)
+		return
+	}
+
+	resp, err := client.ListComplete(ctx, endpoints.NewStorageMoverID(storageMoverID.SubscriptionId, storageMoverID.ResourceGroupName, storageMoverID.StorageMoverName))
+	if err != nil {
+		sdk.SetResponseErrorDiagnostic(stream, fmt.Sprintf("listing `%s`", StorageMoverSourceEndpointResource{}.ResourceType()), err)
+		return
+	}
+
+	resource := StorageMoverSourceEndpointResource{}
+	stream.Results = func(push func(list.ListResult) bool) {
+		for _, item := range resp.Items {
+			if _, ok := item.Properties.(endpoints.NfsMountEndpointProperties); !ok {
+				continue
+			}
+
+			result := request.NewListResult(ctx)
+			result.DisplayName = pointer.From(item.Name)
+
+			id, err := endpoints.ParseEndpointIDInsensitively(pointer.From(item.Id))
+			if err != nil {
+				sdk.SetErrorDiagnosticAndPushListResult(result, push, "parsing Storage Mover Source Endpoint ID", err)
+				return
+			}
+
+			meta := sdk.NewResourceMetaData(metadata.Client, resource)
+			meta.SetID(id)
+
+			if err := resource.flatten(meta, id, &item); err != nil {
+				sdk.SetErrorDiagnosticAndPushListResult(result, push, fmt.Sprintf("encoding `%s` resource data", resource.ResourceType()), err)
+				return
+			}
+
+			sdk.EncodeListResult(ctx, meta.ResourceData, &result)
+			if result.Diagnostics.HasError() {
+				push(result)
+				return
+			}
+
+			if !push(result) {
+				return
+			}
+		}
+	}
+}

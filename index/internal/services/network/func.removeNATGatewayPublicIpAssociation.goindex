@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/natgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/publicipaddresses"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func removeNATGatewayPublicIpAssociation(properties *natgateways.NatGatewayPropertiesFormat, publicIPAddressId string) bool {
+	if properties == nil {
+		return false
+	}
+
+	removed := false
+	updatedIPv4Addresses := make([]natgateways.SubResource, 0)
+	for _, publicIPAddress := range pointer.From(properties.PublicIPAddresses) {
+		if strings.EqualFold(pointer.From(publicIPAddress.Id), publicIPAddressId) {
+			removed = true
+			continue
+		}
+
+		updatedIPv4Addresses = append(updatedIPv4Addresses, publicIPAddress)
+	}
+	properties.PublicIPAddresses = pointer.To(updatedIPv4Addresses)
+
+	updatedIPv6Addresses := make([]natgateways.SubResource, 0)
+	for _, publicIPAddress := range pointer.From(properties.PublicIPAddressesV6) {
+		if strings.EqualFold(pointer.From(publicIPAddress.Id), publicIPAddressId) {
+			removed = true
+			continue
+		}
+
+		updatedIPv6Addresses = append(updatedIPv6Addresses, publicIPAddress)
+	}
+	properties.PublicIPAddressesV6 = pointer.To(updatedIPv6Addresses)
+
+	return removed
+}

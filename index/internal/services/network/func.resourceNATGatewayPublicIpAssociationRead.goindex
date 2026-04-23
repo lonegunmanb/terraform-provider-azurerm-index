@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/natgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/publicipaddresses"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -35,32 +36,16 @@ func resourceNATGatewayPublicIpAssociationRead(d *pluginsdk.ResourceData, meta i
 		return fmt.Errorf("retrieving %s: %+v", id.First, err)
 	}
 
-	if model := natGateway.Model; model != nil {
-		if props := model.Properties; props != nil {
-			if props.PublicIPAddresses == nil {
-				log.Printf("[DEBUG] %s doesn't have any Public IP's - removing from state!", id.First)
-				d.SetId("")
-				return nil
-			}
-
-			publicIPAddressId := ""
-			for _, pip := range *props.PublicIPAddresses {
-				if pip.Id == nil {
-					continue
-				}
-
-				if strings.EqualFold(*pip.Id, id.Second.ID()) {
-					publicIPAddressId = *pip.Id
-					break
-				}
-			}
-
-			if publicIPAddressId == "" {
-				log.Printf("[DEBUG] Association between %s and %s was not found - removing from state", id.First, id.Second)
-				d.SetId("")
-				return nil
-			}
-		}
+	if natGateway.Model == nil {
+		return fmt.Errorf("retrieving %s: `model` was nil", id.First)
+	}
+	if natGateway.Model.Properties == nil {
+		return fmt.Errorf("retrieving %s: `properties` was nil", id.First)
+	}
+	if !natGatewayPublicIpAssociationExists(natGateway.Model.Properties, id.Second.ID()) {
+		log.Printf("[DEBUG] Association between %s and %s was not found - removing from state", id.First, id.Second)
+		d.SetId("")
+		return nil
 	}
 
 	d.Set("nat_gateway_id", id.First.ID())

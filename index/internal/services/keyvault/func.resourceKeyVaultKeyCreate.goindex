@@ -15,11 +15,12 @@ import (
 	"time"
 
 	"github.com/Azure/go-autorest/autorest"
-	"github.com/Azure/go-autorest/autorest/date"
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/data-plane/keyvault/7-4/deletedkeys"
+	"github.com/hashicorp/go-azure-sdk/data-plane/keyvault/7-4/keys"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -29,13 +30,10 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
 	"golang.org/x/crypto/ssh"
 )
 func resourceKeyVaultKeyCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	keyVaultsClient := meta.(*clients.Client).KeyVault
-	client := meta.(*clients.Client).KeyVault.ManagementClient
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -50,16 +48,19 @@ func resourceKeyVaultKeyCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 	if err != nil {
 		return fmt.Errorf("looking up Key %q vault url from id %q: %+v", name, *keyVaultId, err)
 	}
+	client := meta.(*clients.Client).KeyVault.DataPlaneKeyVaultClient.Keys.Clone(*keyVaultBaseUri)
+	keyId := keys.NewKeyID(*keyVaultBaseUri, name)
+	keyVersionId := keys.NewKeyversionID(keyId.BaseURI, keyId.KeyName, "")
 
-	existing, err := client.GetKey(ctx, *keyVaultBaseUri, name, "")
+	existing, err := client.GetKey(ctx, keyVersionId)
 	if err != nil {
-		if !utils.ResponseWasNotFound(existing.Response) {
+		if !response.WasNotFound(existing.HttpResponse) {
 			return fmt.Errorf("checking for presence of existing Key %q (Key Vault %q): %s", name, *keyVaultBaseUri, err)
 		}
 	}
 
-	if existing.Key != nil && existing.Key.Kid != nil && *existing.Key.Kid != "" {
-		return tf.ImportAsExistsError("azurerm_key_vault_key", *existing.Key.Kid)
+	if model := existing.Model; model != nil && model.Key != nil && pointer.From(model.Key.Kid) != "" {
+		return tf.ImportAsExistsError("azurerm_key_vault_key", *model.Key.Kid)
 	}
 
 	keyType := d.Get("key_type").(string)
@@ -68,64 +69,67 @@ func resourceKeyVaultKeyCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 
 	// TODO: support Importing Keys once this is fixed:
 	// https://github.com/Azure/azure-rest-api-specs/issues/1747
-	parameters := keyvault.KeyCreateParameters{
-		Kty:    keyvault.JSONWebKeyType(keyType),
+	parameters := keys.KeyCreateParameters{
+		Kty:    keys.JsonWebKeyType(keyType),
 		KeyOps: keyOptions,
-		KeyAttributes: &keyvault.KeyAttributes{
+		Attributes: &keys.KeyAttributes{
 			Enabled: pointer.To(true),
 		},
 
-		Tags: tags.Expand(t),
+		Tags: pointer.To(tags.ToTypedObject(tags.Expand(t))),
 	}
 
 	switch parameters.Kty {
-	case keyvault.JSONWebKeyTypeEC, keyvault.JSONWebKeyTypeECHSM:
+	case keys.JsonWebKeyTypeEC, keys.JsonWebKeyTypeECNegativeHSM:
 		curveName := d.Get("curve").(string)
-		parameters.Curve = keyvault.JSONWebKeyCurveName(curveName)
-	case keyvault.JSONWebKeyTypeRSA, keyvault.JSONWebKeyTypeRSAHSM:
+		parameters.Crv = pointer.To(keys.JsonWebKeyCurveName(curveName))
+	case keys.JsonWebKeyTypeRSA, keys.JsonWebKeyTypeRSANegativeHSM:
 		keySize, ok := d.GetOk("key_size")
 		if !ok {
 			return errors.New("key_size is required when creating an RSA key")
 		}
-		parameters.KeySize = pointer.To(int32(keySize.(int)))
+		parameters.KeySize = pointer.To(int64(keySize.(int)))
 	}
 	// TODO: support `oct` once this is fixed
 	// https://github.com/Azure/azure-rest-api-specs/issues/1739#issuecomment-332236257
 
 	if v, ok := d.GetOk("not_before_date"); ok {
 		notBeforeDate, _ := time.Parse(time.RFC3339, v.(string)) // validated by schema
-		notBeforeUnixTime := date.UnixTime(notBeforeDate)
-		parameters.KeyAttributes.NotBefore = &notBeforeUnixTime
+		parameters.Attributes.Nbf = pointer.To(notBeforeDate.Unix())
 	}
 
 	if v, ok := d.GetOk("expiration_date"); ok {
 		expirationDate, _ := time.Parse(time.RFC3339, v.(string)) // validated by schema
-		expirationUnixTime := date.UnixTime(expirationDate)
-		parameters.KeyAttributes.Expires = &expirationUnixTime
+		parameters.Attributes.Exp = pointer.To(expirationDate.Unix())
 	}
 
-	if resp, err := client.CreateKey(ctx, *keyVaultBaseUri, name, parameters); err != nil {
-		if meta.(*clients.Client).Features.KeyVault.RecoverSoftDeletedKeys && utils.ResponseWasConflict(resp.Response) {
-			recoveredKey, err := client.RecoverDeletedKey(ctx, *keyVaultBaseUri, name)
+	if resp, err := client.CreateKey(ctx, keyId, parameters); err != nil {
+		if meta.(*clients.Client).Features.KeyVault.RecoverSoftDeletedKeys && response.WasConflict(resp.HttpResponse) {
+			deletedKeysClient := meta.(*clients.Client).KeyVault.DataPlaneKeyVaultClient.DeletedKeys.Clone(*keyVaultBaseUri)
+			deletedKeyId := deletedkeys.NewDeletedkeyID(*keyVaultBaseUri, name)
+			recoveredKey, err := deletedKeysClient.RecoverDeletedKey(ctx, deletedKeyId)
 			if err != nil {
 				return err
 			}
-			log.Printf("[DEBUG] Recovering Key %q with ID: %q", name, *recoveredKey.Key.Kid)
-			if kid := recoveredKey.Key.Kid; kid != nil {
-				stateConf := &pluginsdk.StateChangeConf{
-					Pending:                   []string{"pending"},
-					Target:                    []string{"available"},
-					Refresh:                   keyVaultChildItemRefreshFunc(*kid),
-					Delay:                     30 * time.Second,
-					PollInterval:              10 * time.Second,
-					ContinuousTargetOccurence: 10,
-					Timeout:                   d.Timeout(pluginsdk.TimeoutCreate),
-				}
+			if recoveredKey.Model != nil && recoveredKey.Model.Key != nil {
+				kid := recoveredKey.Model.Key.Kid
+				log.Printf("[DEBUG] Recovering Key %q with ID: %q", name, pointer.From(kid))
+				if kid != nil {
+					stateConf := &pluginsdk.StateChangeConf{
+						Pending:                   []string{"pending"},
+						Target:                    []string{"available"},
+						Refresh:                   keyVaultChildItemRefreshFunc(*kid),
+						Delay:                     30 * time.Second,
+						PollInterval:              10 * time.Second,
+						ContinuousTargetOccurence: 10,
+						Timeout:                   d.Timeout(pluginsdk.TimeoutCreate),
+					}
 
-				if _, err := stateConf.WaitForStateContext(ctx); err != nil {
-					return fmt.Errorf("waiting for Key Vault Secret %q to become available: %s", name, err)
+					if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+						return fmt.Errorf("waiting for Key Vault Secret %q to become available: %s", name, err)
+					}
+					log.Printf("[DEBUG] Key %q recovered with ID: %q", name, *kid)
 				}
-				log.Printf("[DEBUG] Key %q recovered with ID: %q", name, *kid)
 			}
 		} else {
 			return fmt.Errorf("creating Key: %+v", err)
@@ -133,8 +137,8 @@ func resourceKeyVaultKeyCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 	}
 
 	if v, ok := d.GetOk("rotation_policy"); ok {
-		if respPolicy, err := client.UpdateKeyRotationPolicy(ctx, *keyVaultBaseUri, name, expandKeyVaultKeyRotationPolicy(v.([]interface{}))); err != nil {
-			if utils.ResponseWasForbidden(respPolicy.Response) {
+		if respPolicy, err := client.UpdateKeyRotationPolicy(ctx, keyId, expandKeyVaultKeyRotationPolicy(v.([]interface{}))); err != nil {
+			if response.WasForbidden(respPolicy.HttpResponse) {
 				return fmt.Errorf("current client lacks permissions to create Key Rotation Policy for Key %q (%q, Vault url: %q), please update this as described here: %s : %v", name, *keyVaultId, *keyVaultBaseUri, "https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/key_vault_key#example-usage", err)
 			}
 			return fmt.Errorf("creating Key Rotation Policy: %+v", err)
@@ -142,19 +146,19 @@ func resourceKeyVaultKeyCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 	}
 
 	// "" indicates the latest version
-	read, err := client.GetKey(ctx, *keyVaultBaseUri, name, "")
+	read, err := client.GetKey(ctx, keyVersionId)
 	if err != nil {
 		return err
 	}
 
-	if read.Key == nil || read.Key.Kid == nil {
+	if read.Model == nil || read.Model.Key == nil || read.Model.Key.Kid == nil {
 		return fmt.Errorf("cannot read KeyVault Key '%s' (in key vault '%s')", name, *keyVaultBaseUri)
 	}
-	keyId, err := parse.ParseNestedItemID(*read.Key.Kid)
+	itemId, err := parse.ParseNestedItemID(*read.Model.Key.Kid)
 	if err != nil {
 		return err
 	}
-	d.SetId(keyId.ID())
+	d.SetId(itemId.ID())
 
 	return resourceKeyVaultKeyRead(d, meta)
 }
