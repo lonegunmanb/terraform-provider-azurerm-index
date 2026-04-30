@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/securitypolicies"
+	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2024-02-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+	"github.com/hashicorp/terraform-provider-azurerm/utils"
+)
+func flattenCdnFrontDoorSecurityPolicyResource(input securitypolicies.SecurityPolicyPropertiesParameters) ([]interface{}, error) {
+	results := make([]interface{}, 0)
+	if input.SecurityPolicyPropertiesParameters().Type != securitypolicies.SecurityPolicyTypeWebApplicationFirewall {
+		return results, fmt.Errorf("unexpected security policy `Type` %q, expected `WebApplicationFirewall`", input.SecurityPolicyPropertiesParameters().Type)
+	}
+
+	wafParams := input.(securitypolicies.SecurityPolicyWebApplicationFirewallParameters)
+	associations := make([]interface{}, 0)
+	wafPolicyId := ""
+
+	if wafParams.WafPolicy != nil {
+		parsedId, err := waf.ParseFrontDoorWebApplicationFirewallPolicyIDInsensitively(pointer.From(wafParams.WafPolicy.Id))
+		if err != nil {
+			return results, err
+		}
+
+		wafPolicyId = parsedId.ID()
+	}
+
+	if wafParams.Associations != nil {
+		for _, item := range *wafParams.Associations {
+			domain, err := flattenSecurityPoliciesActivatedResourceReference(item.Domains)
+			if err != nil {
+				return results, fmt.Errorf("flattening `domain`: %+v", err)
+			}
+
+			associations = append(associations, map[string]interface{}{
+				"domain":            domain,
+				"patterns_to_match": utils.FlattenStringSlice(item.PatternsToMatch),
+			})
+		}
+	}
+
+	results = []interface{}{
+		map[string]interface{}{
+			"firewall": []interface{}{
+				map[string]interface{}{
+					"association":                      associations,
+					"cdn_frontdoor_firewall_policy_id": wafPolicyId,
+				},
+			},
+		},
+	}
+
+	return results, nil
+}

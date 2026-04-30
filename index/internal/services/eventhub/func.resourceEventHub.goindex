@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -164,6 +165,24 @@ func resourceEventHub() *pluginsdk.Resource {
 										Required:     true,
 										ValidateFunc: commonids.ValidateStorageAccountID,
 									},
+
+									// Storage SAS is the default authentication type for capture destination, it's not supported by the API, so hard coding the value to align with azure portal behavior.
+									"storage_authentication_type": {
+										Type:     pluginsdk.TypeString,
+										Optional: true,
+										Default:  "StorageSAS",
+										ValidateFunc: validation.StringInSlice([]string{
+											"StorageSAS",
+											string(eventhubs.CaptureIdentityTypeSystemAssigned),
+											string(eventhubs.CaptureIdentityTypeUserAssigned),
+										}, false),
+									},
+
+									"storage_authentication_id": {
+										Type:         pluginsdk.TypeString,
+										Optional:     true,
+										ValidateFunc: commonids.ValidateUserAssignedIdentityID,
+									},
 								},
 							},
 						},
@@ -189,6 +208,17 @@ func resourceEventHub() *pluginsdk.Resource {
 				Computed: true,
 			},
 		},
+
+		CustomizeDiff: pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			capture := d.GetRawConfig().AsValueMap()["capture_description"]
+			if !capture.IsNull() && len(capture.AsValueSlice()) > 0 {
+				destination := capture.AsValueSlice()[0].AsValueMap()["destination"].AsValueSlice()[0].AsValueMap()
+				if !destination["storage_authentication_type"].IsNull() && destination["storage_authentication_type"].AsString() == string(eventhubs.CaptureIdentityTypeUserAssigned) && destination["storage_authentication_id"].IsNull() {
+					return fmt.Errorf("`storage_authentication_id` must be specified when `storage_authentication_type` is set to `UserAssigned`")
+				}
+			}
+			return nil
+		}),
 	}
 
 	if !features.FivePointOh() {

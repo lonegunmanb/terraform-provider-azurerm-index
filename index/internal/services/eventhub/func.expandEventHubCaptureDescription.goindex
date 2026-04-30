@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventhub
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -60,6 +61,20 @@ func expandEventHubCaptureDescription(d *pluginsdk.ResourceData) *eventhubs.Capt
 					BlobContainer:            pointer.To(blobContainerName),
 					StorageAccountResourceId: pointer.To(storageAccountId),
 				},
+			}
+
+			if destinationAuthType := destination["storage_authentication_type"]; destinationAuthType != nil && destinationAuthType.(string) != "" {
+				authType := eventhubs.CaptureIdentityType(destinationAuthType.(string))
+				if authType != "StorageSAS" {
+					captureDescription.Destination.Identity = &eventhubs.CaptureIdentity{
+						Type: pointer.To(authType),
+					}
+				}
+			}
+
+			if destinationAuthTypeId := destination["storage_authentication_id"]; destinationAuthTypeId != nil && destinationAuthTypeId.(string) != "" {
+				authId := destinationAuthTypeId.(string)
+				captureDescription.Destination.Identity.UserAssignedIdentity = &authId
 			}
 		}
 	}

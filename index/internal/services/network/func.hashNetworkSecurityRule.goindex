@@ -1,0 +1,70 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"bytes"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/networksecuritygroups"
+	"github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func hashNetworkSecurityRule(input any) int {
+	var buf bytes.Buffer
+	if m, ok := input.(map[string]any); ok {
+		buf.WriteString(m["name"].(string))
+		buf.WriteString(m["description"].(string))
+		buf.WriteString(m["protocol"].(string))
+
+		buf.WriteString(m["source_port_range"].(string))
+		if set := m["source_port_ranges"].(*pluginsdk.Set); set != nil {
+			buf.WriteString(set.GoString())
+		}
+
+		buf.WriteString(m["destination_port_range"].(string))
+		if set := m["destination_port_ranges"].(*pluginsdk.Set); set != nil {
+			buf.WriteString(set.GoString())
+		}
+
+		buf.WriteString(m["source_address_prefix"].(string))
+		if set := m["source_address_prefixes"].(*pluginsdk.Set); set != nil {
+			buf.WriteString(set.GoString())
+		}
+
+		buf.WriteString(m["destination_address_prefix"].(string))
+		if set := m["destination_address_prefixes"].(*pluginsdk.Set); set != nil {
+			buf.WriteString(set.GoString())
+		}
+
+		if set := m["source_application_security_group_ids"].(*pluginsdk.Set); set != nil {
+			for _, elem := range set.List() {
+				buf.WriteString(strings.ToLower(elem.(string)))
+			}
+		}
+
+		if set := m["destination_application_security_group_ids"].(*pluginsdk.Set); set != nil {
+			for _, elem := range set.List() {
+				buf.WriteString(strings.ToLower(elem.(string)))
+			}
+		}
+
+		buf.WriteString(m["access"].(string))
+		buf.WriteString(m["direction"].(string))
+		buf.WriteString(strconv.Itoa(m["priority"].(int)))
+	}
+	return pluginsdk.HashString(buf.String())
+}

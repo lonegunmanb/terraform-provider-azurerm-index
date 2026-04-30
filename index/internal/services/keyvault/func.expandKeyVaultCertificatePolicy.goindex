@@ -16,31 +16,31 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+	kv "github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
 )
-func expandKeyVaultCertificatePolicy(d *pluginsdk.ResourceData) (*keyvault.CertificatePolicy, error) {
+func expandKeyVaultCertificatePolicy(d *pluginsdk.ResourceData) (*kv.CertificatePolicy, error) {
 	policies := d.Get("certificate_policy").([]interface{})
 	if len(policies) == 0 || policies[0] == nil {
 		return nil, nil
 	}
 
 	policyRaw := policies[0].(map[string]interface{})
-	policy := keyvault.CertificatePolicy{}
+	policy := kv.CertificatePolicy{}
 
 	issuers := policyRaw["issuer_parameters"].([]interface{})
 	issuer := issuers[0].(map[string]interface{})
-	policy.IssuerParameters = &keyvault.IssuerParameters{
+	policy.IssuerParameters = &kv.IssuerParameters{
 		Name: pointer.To(issuer["name"].(string)),
 	}
 
@@ -51,32 +51,32 @@ func expandKeyVaultCertificatePolicy(d *pluginsdk.ResourceData) (*keyvault.Certi
 	keyType := props["key_type"].(string)
 	keySize := props["key_size"].(int)
 
-	if keyType == string(keyvault.JSONWebKeyTypeEC) || keyType == string(keyvault.JSONWebKeyTypeECHSM) {
+	if keyType == string(kv.JSONWebKeyTypeEC) || keyType == string(kv.JSONWebKeyTypeECHSM) {
 		if curve == "" {
 			return nil, fmt.Errorf("`curve` is required when creating an EC key")
 		}
 		// determine key_size if not specified
 		if keySize == 0 {
 			switch curve {
-			case string(keyvault.JSONWebKeyCurveNameP256), string(keyvault.JSONWebKeyCurveNameP256K):
+			case string(kv.JSONWebKeyCurveNameP256), string(kv.JSONWebKeyCurveNameP256K):
 				keySize = 256
-			case string(keyvault.JSONWebKeyCurveNameP384):
+			case string(kv.JSONWebKeyCurveNameP384):
 				keySize = 384
-			case string(keyvault.JSONWebKeyCurveNameP521):
+			case string(kv.JSONWebKeyCurveNameP521):
 				keySize = 521
 			}
 		}
-	} else if keyType == string(keyvault.JSONWebKeyTypeRSA) || keyType == string(keyvault.JSONWebKeyTypeRSAHSM) {
+	} else if keyType == string(kv.JSONWebKeyTypeRSA) || keyType == string(kv.JSONWebKeyTypeRSAHSM) {
 		if keySize == 0 {
 			return nil, fmt.Errorf("`key_size` is required when creating an RSA key")
 		}
 	}
 
-	policy.KeyProperties = &keyvault.KeyProperties{
-		Curve:      keyvault.JSONWebKeyCurveName(curve),
+	policy.KeyProperties = &kv.KeyProperties{
+		Curve:      kv.JSONWebKeyCurveName(curve),
 		Exportable: pointer.To(props["exportable"].(bool)),
 		KeySize:    pointer.To(int32(keySize)),
-		KeyType:    keyvault.JSONWebKeyType(keyType),
+		KeyType:    kv.JSONWebKeyType(keyType),
 		ReuseKey:   pointer.To(props["reuse_key"].(bool)),
 	}
 
@@ -84,7 +84,7 @@ func expandKeyVaultCertificatePolicy(d *pluginsdk.ResourceData) (*keyvault.Certi
 
 	secrets := policyRaw["secret_properties"].([]interface{})
 	secret := secrets[0].(map[string]interface{})
-	policy.SecretProperties = &keyvault.SecretProperties{
+	policy.SecretProperties = &kv.SecretProperties{
 		ContentType: pointer.To(secret["content_type"].(string)),
 	}
 
@@ -95,13 +95,13 @@ func expandKeyVaultCertificatePolicy(d *pluginsdk.ResourceData) (*keyvault.Certi
 		ekus := cert["extended_key_usage"].([]interface{})
 		extendedKeyUsage := utils.ExpandStringSlice(ekus)
 
-		keyUsage := make([]keyvault.KeyUsageType, 0)
+		keyUsage := make([]kv.KeyUsageType, 0)
 		keys := cert["key_usage"].(*pluginsdk.Set).List()
 		for _, key := range keys {
-			keyUsage = append(keyUsage, keyvault.KeyUsageType(key.(string)))
+			keyUsage = append(keyUsage, kv.KeyUsageType(key.(string)))
 		}
 
-		subjectAlternativeNames := &keyvault.SubjectAlternativeNames{}
+		subjectAlternativeNames := &kv.SubjectAlternativeNames{}
 		if v, ok := cert["subject_alternative_names"]; ok {
 			if sans := v.([]interface{}); len(sans) > 0 {
 				if sans[0] != nil {
@@ -125,7 +125,7 @@ func expandKeyVaultCertificatePolicy(d *pluginsdk.ResourceData) (*keyvault.Certi
 			}
 		}
 
-		policy.X509CertificateProperties = &keyvault.X509CertificateProperties{
+		policy.X509CertificateProperties = &kv.X509CertificateProperties{
 			ValidityInMonths:        pointer.To(int32(cert["validity_in_months"].(int))),
 			Subject:                 pointer.To(cert["subject"].(string)),
 			KeyUsage:                &keyUsage,

@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -10,31 +11,21 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-02/diskencryptionsets"
-	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
-	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
-	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
-	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
-	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
 )
 func resourceDiskEncryptionSetCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Compute.DiskEncryptionSetsClient
-	keyVaultsClient := meta.(*clients.Client).KeyVault
-	keyVaultKeyClient := meta.(*clients.Client).KeyVault.ManagementClient
-	managedkeyBundleClient := meta.(*clients.Client).ManagedHSMs.DataPlaneKeysClient
-	env := meta.(*clients.Client).Account.Environment
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
@@ -47,6 +38,7 @@ func resourceDiskEncryptionSetCreate(d *pluginsdk.ResourceData, meta interface{}
 			return fmt.Errorf("checking for present of existing %s: %+v", id, err)
 		}
 	}
+
 	if !response.WasNotFound(existing.HttpResponse) {
 		return tf.ImportAsExistsError("azurerm_disk_encryption_set", id.ID())
 	}
@@ -54,60 +46,34 @@ func resourceDiskEncryptionSetCreate(d *pluginsdk.ResourceData, meta interface{}
 	rotationToLatestKeyVersionEnabled := d.Get("auto_key_rotation_enabled").(bool)
 	activeKey := &diskencryptionsets.KeyForDiskEncryptionSet{}
 
-	if keyVaultKeyId, ok := d.GetOk("key_vault_key_id"); ok {
-		keyVaultKey, err := keyVaultParse.ParseOptionallyVersionedNestedItemID(keyVaultKeyId.(string))
+	if !features.FivePointOh() && !d.GetRawConfig().AsValueMap()["managed_hsm_key_id"].IsNull() {
+		key, err := keyvault.ParseNestedItemID(d.Get("managed_hsm_key_id").(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeAny)
 		if err != nil {
 			return err
 		}
 
-		err = validateKeyAndRotationEnabled(rotationToLatestKeyVersionEnabled, keyVaultKey.Version != "", keyVaultKey.ID())
+		keyURL, err := getKeyURL(ctx, key, rotationToLatestKeyVersionEnabled, meta)
+		if err != nil {
+			return err
+		}
+		activeKey.KeyURL = keyURL
+	} else {
+		nestedItemType := keyvault.NestedItemTypeKey
+		if !features.FivePointOh() {
+			nestedItemType = keyvault.NestedItemTypeAny
+		}
+
+		key, err := keyvault.ParseNestedItemID(d.Get("key_vault_key_id").(string), keyvault.VersionTypeAny, nestedItemType)
 		if err != nil {
 			return err
 		}
 
-		keyVaultDetails, err := diskEncryptionSetRetrieveKeyVault(ctx, keyVaultsClient, subscriptionId, *keyVaultKey)
-		if err != nil {
-			return fmt.Errorf("validating Key Vault Key %q for Disk Encryption Set: %+v", keyVaultKey.ID(), err)
-		}
-
-		if keyVaultDetails != nil {
-			err = validateKeyVaultDetails(keyVaultDetails)
-			if err != nil {
-				return err
-			}
-
-			activeKey.SourceVault = &diskencryptionsets.SourceVault{
-				Id: pointer.To(keyVaultDetails.keyVaultId),
-			}
-		}
-
-		// NOTE: The API requires a versioned key to be sent however if rotationToLatestKeyVersion is enabled this will cause
-		// terraform to revert the rotated key to the previous version that is defined in the configuration file...
-		// Issue #22864
-		if rotationToLatestKeyVersionEnabled {
-			// Get the latest version of the key...
-			keyBundle, err := keyVaultKeyClient.GetKey(ctx, keyVaultKey.KeyVaultBaseUrl, keyVaultKey.Name, "")
-			if err != nil {
-				return err
-			}
-
-			if keyBundle.Key != nil {
-				activeKey.KeyURL = pointer.From(keyBundle.Key.Kid)
-			}
-		} else {
-			// Use the passed version of the key...
-			activeKey.KeyURL = keyVaultKey.ID()
-		}
-	} else if managedHsmKeyId, ok := d.GetOk("managed_hsm_key_id"); ok {
-		keyUrl, err := getManagedHsmKeyURL(ctx, managedkeyBundleClient, managedHsmKeyId.(string), rotationToLatestKeyVersionEnabled, env)
+		keyURL, err := getKeyURL(ctx, key, rotationToLatestKeyVersionEnabled, meta)
 		if err != nil {
 			return err
 		}
-		activeKey.KeyURL = keyUrl
+		activeKey.KeyURL = keyURL
 	}
-
-	encryptionType := diskencryptionsets.DiskEncryptionSetType(d.Get("encryption_type").(string))
-	t := d.Get("tags").(map[string]interface{})
 
 	expandedIdentity, err := expandDiskEncryptionSetIdentity(d.Get("identity").([]interface{}))
 	if err != nil {
@@ -119,18 +85,17 @@ func resourceDiskEncryptionSetCreate(d *pluginsdk.ResourceData, meta interface{}
 		Properties: &diskencryptionsets.EncryptionSetProperties{
 			ActiveKey:                         activeKey,
 			RotationToLatestKeyVersionEnabled: pointer.To(rotationToLatestKeyVersionEnabled),
-			EncryptionType:                    &encryptionType,
+			EncryptionType:                    pointer.ToEnum[diskencryptionsets.DiskEncryptionSetType](d.Get("encryption_type").(string)),
 		},
 		Identity: expandedIdentity,
-		Tags:     tags.Expand(t),
+		Tags:     tags.Expand(d.Get("tags").(map[string]interface{})),
 	}
 
 	if v, ok := d.GetOk("federated_client_id"); ok {
 		params.Properties.FederatedClientId = pointer.To(v.(string))
 	}
 
-	err = client.CreateOrUpdateThenPoll(ctx, id, params)
-	if err != nil {
+	if err := client.CreateOrUpdateThenPoll(ctx, id, params); err != nil {
 		return fmt.Errorf("creating %s: %+v", id, err)
 	}
 

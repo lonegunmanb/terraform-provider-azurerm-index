@@ -43,50 +43,14 @@ func resourceCdnFrontdoorSecurityPolicyRead(d *pluginsdk.ResourceData, meta inte
 
 	if model := resp.Model; model != nil {
 		if props := model.Properties; props != nil {
-			if props.Parameters.SecurityPolicyPropertiesParameters().Type != securitypolicies.SecurityPolicyTypeWebApplicationFirewall {
-				return fmt.Errorf("'model.Properties.Parameters.Type' of %q is unexpected, want security policy 'Type' of 'WebApplicationFirewall': %s", props.Parameters.SecurityPolicyPropertiesParameters().Type, id)
+			securityPolicies, err := flattenCdnFrontDoorSecurityPolicyResource(props.Parameters)
+			if err != nil {
+				return fmt.Errorf("flattening `security_policies`: %+v", err)
 			}
 
-			// we know it's a firewall policy at this point,
-			// create the objects to hold the policy data
-			wafParams := props.Parameters.(securitypolicies.SecurityPolicyWebApplicationFirewallParameters)
-			associations := make([]interface{}, 0)
-			wafPolicyId := ""
-
-			if wafParams.WafPolicy != nil && wafParams.WafPolicy.Id != nil {
-				parsedId, err := waf.ParseFrontDoorWebApplicationFirewallPolicyIDInsensitively(*wafParams.WafPolicy.Id)
-				if err != nil {
-					return fmt.Errorf("flattening `cdn_frontdoor_firewall_policy_id`: %+v", err)
-				}
-				wafPolicyId = parsedId.ID()
+			if err := d.Set("security_policies", securityPolicies); err != nil {
+				return fmt.Errorf("setting `security_policies`: %+v", err)
 			}
-
-			if wafParams.Associations != nil {
-				for _, item := range *wafParams.Associations {
-					domain, err := flattenSecurityPoliciesActivatedResourceReference(item.Domains)
-					if err != nil {
-						return fmt.Errorf("flattening `ActivatedResourceReference`: %+v", err)
-					}
-
-					associations = append(associations, map[string]interface{}{
-						"domain":            domain,
-						"patterns_to_match": utils.FlattenStringSlice(item.PatternsToMatch),
-					})
-				}
-			}
-
-			securityPolicy := []interface{}{
-				map[string]interface{}{
-					"firewall": []interface{}{
-						map[string]interface{}{
-							"association":                      associations,
-							"cdn_frontdoor_firewall_policy_id": wafPolicyId,
-						},
-					},
-				},
-			}
-
-			d.Set("security_policies", securityPolicy)
 		}
 	}
 

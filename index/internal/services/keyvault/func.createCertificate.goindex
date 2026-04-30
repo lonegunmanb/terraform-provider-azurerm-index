@@ -16,20 +16,20 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+	kv "github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
 )
-func createCertificate(d *pluginsdk.ResourceData, meta interface{}) (keyvault.CertificateBundle, error) {
+func createCertificate(d *pluginsdk.ResourceData, meta interface{}) (kv.CertificateBundle, error) {
 	keyVaultsClient := meta.(*clients.Client).KeyVault
 	client := meta.(*clients.Client).KeyVault.ManagementClient
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
@@ -38,29 +38,29 @@ func createCertificate(d *pluginsdk.ResourceData, meta interface{}) (keyvault.Ce
 	name := d.Get("name").(string)
 	keyVaultId, err := commonids.ParseKeyVaultID(d.Get("key_vault_id").(string))
 	if err != nil {
-		return keyvault.CertificateBundle{}, err
+		return kv.CertificateBundle{}, err
 	}
 
 	keyVaultBaseUrl, err := keyVaultsClient.BaseUriForKeyVault(ctx, *keyVaultId)
 	if err != nil {
-		return keyvault.CertificateBundle{}, fmt.Errorf("looking up Base URI for Certificate %q in %s: %+v", name, *keyVaultId, err)
+		return kv.CertificateBundle{}, fmt.Errorf("looking up Base URI for Certificate %q in %s: %+v", name, *keyVaultId, err)
 	}
 
 	t := d.Get("tags").(map[string]interface{})
 
 	policy, err := expandKeyVaultCertificatePolicy(d)
 	if err != nil {
-		return keyvault.CertificateBundle{}, fmt.Errorf("expanding certificate policy: %s", err)
+		return kv.CertificateBundle{}, fmt.Errorf("expanding certificate policy: %s", err)
 	}
 
-	parameters := keyvault.CertificateCreateParameters{
+	parameters := kv.CertificateCreateParameters{
 		CertificatePolicy: policy,
 		Tags:              tags.Expand(t),
 	}
 
 	result, err := client.CreateCertificate(ctx, *keyVaultBaseUrl, name, parameters)
 	if err != nil {
-		return keyvault.CertificateBundle{
+		return kv.CertificateBundle{
 			Response: result.Response,
 		}, err
 	}
@@ -82,7 +82,7 @@ func createCertificate(d *pluginsdk.ResourceData, meta interface{}) (keyvault.Ce
 	}
 
 	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
-		return keyvault.CertificateBundle{}, fmt.Errorf("waiting for Certificate %q in Vault %q to become available: %s", name, *keyVaultBaseUrl, err)
+		return kv.CertificateBundle{}, fmt.Errorf("waiting for Certificate %q in Vault %q to become available: %s", name, *keyVaultBaseUrl, err)
 	}
 	return client.GetCertificate(ctx, *keyVaultBaseUrl, name, "")
 }

@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
+	kv "github.com/jackofallops/kermit/sdk/keyvault/7.4/keyvault"
 )
 func (EncryptedValueDataSource) Read() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
@@ -32,17 +32,17 @@ func (EncryptedValueDataSource) Read() sdk.ResourceFunc {
 				return fmt.Errorf("only one of `encrypted_data` or `plain_text_value` must be specified - both were specified")
 			}
 
-			keyVaultKeyId, err := parse.ParseNestedItemID(model.KeyVaultKeyId)
+			keyVaultKeyId, err := keyvault.ParseNestedItemID(model.KeyVaultKeyId, keyvault.VersionTypeAny, keyvault.NestedItemTypeAny)
 			if err != nil {
 				return err
 			}
 
 			if model.EncryptedData != "" {
-				params := keyvault.KeyOperationsParameters{
-					Algorithm: keyvault.JSONWebKeyEncryptionAlgorithm(model.Algorithm),
+				params := kv.KeyOperationsParameters{
+					Algorithm: kv.JSONWebKeyEncryptionAlgorithm(model.Algorithm),
 					Value:     pointer.To(model.EncryptedData),
 				}
-				result, err := client.Decrypt(ctx, keyVaultKeyId.KeyVaultBaseUrl, keyVaultKeyId.Name, keyVaultKeyId.Version, params)
+				result, err := client.Decrypt(ctx, keyVaultKeyId.KeyVaultBaseURL, keyVaultKeyId.Name, keyVaultKeyId.Version, params)
 				if err != nil {
 					return fmt.Errorf("decrypting plain-text value using Key Vault Key ID %q: %+v", model.KeyVaultKeyId, err)
 				}
@@ -56,11 +56,11 @@ func (EncryptedValueDataSource) Read() sdk.ResourceFunc {
 					log.Printf("[WARN] Failed to decode plain-text value: %+v", err)
 				}
 			} else {
-				params := keyvault.KeyOperationsParameters{
-					Algorithm: keyvault.JSONWebKeyEncryptionAlgorithm(model.Algorithm),
+				params := kv.KeyOperationsParameters{
+					Algorithm: kv.JSONWebKeyEncryptionAlgorithm(model.Algorithm),
 					Value:     pointer.To(model.PlainTextValue),
 				}
-				result, err := client.Encrypt(ctx, keyVaultKeyId.KeyVaultBaseUrl, keyVaultKeyId.Name, keyVaultKeyId.Version, params)
+				result, err := client.Encrypt(ctx, keyVaultKeyId.KeyVaultBaseURL, keyVaultKeyId.Name, keyVaultKeyId.Version, params)
 				if err != nil {
 					return fmt.Errorf("encrypting plain-text value using Key Vault Key ID %q: %+v", model.KeyVaultKeyId, err)
 				}

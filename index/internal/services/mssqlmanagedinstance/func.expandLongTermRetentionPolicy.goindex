@@ -16,22 +16,29 @@ import (
 	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/helper"
 	miParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
-func expandLongTermRetentionPolicy(ltrPolicy []LongTermRetentionPolicy) managedinstancelongtermretentionpolicies.ManagedInstanceLongTermRetentionPolicyProperties {
+func expandLongTermRetentionPolicy(ltrPolicy []LongTermRetentionPolicy) *managedinstancelongtermretentionpolicies.ManagedInstanceLongTermRetentionPolicyProperties {
 	if len(ltrPolicy) == 0 {
-		return managedinstancelongtermretentionpolicies.ManagedInstanceLongTermRetentionPolicyProperties{}
+		return &managedinstancelongtermretentionpolicies.ManagedInstanceLongTermRetentionPolicyProperties{}
 	}
 
-	return managedinstancelongtermretentionpolicies.ManagedInstanceLongTermRetentionPolicyProperties{
+	// The API errors if `weekOfYear` is not at least 1 when `yearlyRetention` is provided.
+	weekOfYear := int64(1)
+	if ltrPolicy[0].WeekOfYear != 0 {
+		weekOfYear = ltrPolicy[0].WeekOfYear
+	}
+
+	result := &managedinstancelongtermretentionpolicies.ManagedInstanceLongTermRetentionPolicyProperties{
 		WeeklyRetention:  &ltrPolicy[0].WeeklyRetention,
 		MonthlyRetention: &ltrPolicy[0].MonthlyRetention,
 		YearlyRetention:  &ltrPolicy[0].YearlyRetention,
-		WeekOfYear:       pointer.To(ltrPolicy[0].WeekOfYear),
+		WeekOfYear:       &weekOfYear,
 	}
+
+	return result
 }

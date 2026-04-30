@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/bot
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -42,15 +43,24 @@ func resourceBotChannelDirectLineSpeechCreate(d *pluginsdk.ResourceData, meta in
 	channel := botservice.BotChannel{
 		Properties: botservice.DirectLineSpeechChannel{
 			Properties: &botservice.DirectLineSpeechChannelProperties{
-				CognitiveServiceRegion:          pointer.To(d.Get("cognitive_service_location").(string)),
-				CognitiveServiceSubscriptionKey: pointer.To(d.Get("cognitive_service_access_key").(string)),
-				IsDefaultBotForCogSvcAccount:    pointer.To(false),
-				IsEnabled:                       pointer.To(true),
+				IsDefaultBotForCogSvcAccount: pointer.To(false),
+				IsEnabled:                    pointer.To(true),
 			},
 			ChannelName: botservice.ChannelNameBasicChannelChannelNameDirectLineSpeechChannel,
 		},
 		Location: pointer.To(location.Normalize(d.Get("location").(string))),
 		Kind:     botservice.KindBot,
+	}
+
+	// Set cognitive service properties if provided
+	if v, ok := d.GetOk("cognitive_service_location"); ok {
+		channel, _ := channel.Properties.AsDirectLineSpeechChannel()
+		channel.Properties.CognitiveServiceRegion = pointer.To(v.(string))
+	}
+
+	if v, ok := d.GetOk("cognitive_service_access_key"); ok {
+		channel, _ := channel.Properties.AsDirectLineSpeechChannel()
+		channel.Properties.CognitiveServiceSubscriptionKey = pointer.To(v.(string))
 	}
 
 	if v, ok := d.GetOk("cognitive_account_id"); ok {
