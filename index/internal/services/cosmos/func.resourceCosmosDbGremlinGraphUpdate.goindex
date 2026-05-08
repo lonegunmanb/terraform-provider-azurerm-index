@@ -2,7 +2,6 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -34,7 +32,7 @@ func resourceCosmosDbGremlinGraphUpdate(d *pluginsdk.ResourceData, meta interfac
 
 	err = common.CheckForChangeFromAutoscaleAndManualThroughput(d)
 	if err != nil {
-		return fmt.Errorf("updating Cosmos Gremlin Graph %q (Account: %q, Database: %q): %+v", id.GraphName, id.DatabaseAccountName, id.GremlinDatabaseName, err)
+		return fmt.Errorf("checking `autoscale_settings` and `throughput` for %s: %w", id, err)
 	}
 
 	partitionkeypaths := d.Get("partition_key_path").(string)
@@ -81,11 +79,8 @@ func resourceCosmosDbGremlinGraphUpdate(d *pluginsdk.ResourceData, meta interfac
 	}
 
 	if common.HasThroughputChange(d) {
-		throughputParameters := common.ExpandCosmosDBThroughputSettingsUpdateParameters(d)
-		err = client.GremlinResourcesUpdateGremlinGraphThroughputThenPoll(ctx, *id, *throughputParameters)
-		if err != nil {
-			return fmt.Errorf("setting Throughput for Cosmos Gremlin Graph %q (Account: %q, Database: %q): %+v - "+
-				"If the graph has not been created with an initial throughput, you cannot configure it later", id.GraphName, id.DatabaseAccountName, id.GremlinDatabaseName, err)
+		if err := client.GremlinResourcesUpdateGremlinGraphThroughputThenPoll(ctx, *id, common.ExpandCosmosDBThroughputSettingsUpdateParameters(d)); err != nil {
+			return fmt.Errorf("setting Throughput for %s: %+v - If the graph has not been created with an initial throughput, you cannot configure it later", id, err)
 		}
 	}
 

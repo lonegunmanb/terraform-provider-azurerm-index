@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2024-03-01/webpubsub"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -44,60 +45,7 @@ func (w WebPubSubSocketIOResource) Read() sdk.ResourceFunc {
 				return fmt.Errorf("listing keys for %s: %+v", *id, err)
 			}
 
-			state := WebPubSubSocketIOResourceModel{
-				Name:              id.WebPubSubName,
-				ResourceGroupName: id.ResourceGroupName,
-			}
-
-			if model := resp.Model; model != nil {
-				state.Location = location.Normalize(model.Location)
-				state.Tags = pointer.From(model.Tags)
-
-				flattenedIdentity, err := identity.FlattenSystemOrUserAssignedMapToModel(model.Identity)
-				if err != nil {
-					return fmt.Errorf("flattening `identity`: %+v", err)
-				}
-				state.Identity = pointer.From(flattenedIdentity)
-
-				if sku := model.Sku; sku != nil {
-					state.Sku = flattenWebPubSubSocketIOSkuToModel(sku)
-				}
-
-				if props := model.Properties; props != nil {
-					liveTrace := flattenLiveTraceConfigToMap(props.LiveTraceConfiguration)
-
-					state.AADAuthEnabled = !pointer.From(props.DisableAadAuth)
-					state.ExternalIP = pointer.From(props.ExternalIP)
-					state.HostName = pointer.From(props.HostName)
-					state.PublicPort = pointer.From(props.PublicPort)
-					state.ServerPort = pointer.From(props.ServerPort)
-
-					state.LiveTraceEnabled = liveTrace["enabled"]
-					state.LiveTraceConnectivityLogsEnabled = liveTrace["connectivityLogsEnabled"]
-					state.LiveTraceHttpRequestLogsEnabled = liveTrace["httpLogsEnabled"]
-					state.LiveTraceMessagingLogsEnabled = liveTrace["messagingLogsEnabled"]
-
-					state.LocalAuthEnabled = !pointer.From(props.DisableLocalAuth)
-					state.PublicNetworkAccess = pointer.From(props.PublicNetworkAccess)
-
-					if socketio := props.SocketIO; socketio != nil {
-						state.ServiceMode = pointer.From(socketio.ServiceMode)
-					}
-
-					if tls := props.Tls; tls != nil {
-						state.TlsClientCertEnabled = pointer.From(tls.ClientCertEnabled)
-					}
-				}
-			}
-
-			if keyModel := keys.Model; keyModel != nil {
-				state.PrimaryAccessKey = pointer.From(keyModel.PrimaryKey)
-				state.PrimaryConnectionString = pointer.From(keyModel.PrimaryConnectionString)
-				state.SecondaryAccessKey = pointer.From(keyModel.SecondaryKey)
-				state.SecondaryConnectionString = pointer.From(keyModel.SecondaryConnectionString)
-			}
-
-			return metadata.Encode(&state)
+			return w.flatten(metadata, id, resp.Model, keys.Model)
 		},
 	}
 }

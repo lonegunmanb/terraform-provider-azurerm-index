@@ -1,24 +1,29 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-04-15/afdcustomdomains"
 	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func resourceCdnFrontDoorCustomDomainCreate(d *pluginsdk.ResourceData, meta interface{}) error {
-	client := meta.(*clients.Client).Cdn.FrontDoorCustomDomainsClient
+	client := meta.(*clients.Client).Cdn.AFDCustomDomainsClient
+	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -27,46 +32,53 @@ func resourceCdnFrontDoorCustomDomainCreate(d *pluginsdk.ResourceData, meta inte
 		return err
 	}
 
-	id := parse.NewFrontDoorCustomDomainID(profileId.SubscriptionId, profileId.ResourceGroupName, profileId.ProfileName, d.Get("name").(string))
+	id := afdcustomdomains.NewCustomDomainID(subscriptionId, profileId.ResourceGroupName, profileId.ProfileName, d.Get("name").(string))
 
-	existing, err := client.Get(ctx, id.ResourceGroup, id.ProfileName, id.CustomDomainName)
+	existing, err := client.Get(ctx, id)
 	if err != nil {
-		if !utils.ResponseWasNotFound(existing.Response) {
+		if !response.WasNotFound(existing.HttpResponse) {
 			return fmt.Errorf("checking for existing %s: %+v", id, err)
 		}
 	}
 
-	if !utils.ResponseWasNotFound(existing.Response) {
+	if !response.WasNotFound(existing.HttpResponse) {
 		return tf.ImportAsExistsError("azurerm_cdn_frontdoor_custom_domain", id.ID())
 	}
 
 	dnsZone := d.Get("dns_zone_id").(string)
 	tls := d.Get("tls").([]interface{})
 
-	props := cdn.AFDDomain{
-		AFDDomainProperties: &cdn.AFDDomainProperties{
-			HostName: pointer.To(d.Get("host_name").(string)),
+	props := afdcustomdomains.AFDDomain{
+		Properties: &afdcustomdomains.AFDDomainProperties{
+			HostName: d.Get("host_name").(string),
 		},
 	}
 
 	if dnsZone != "" {
-		props.AzureDNSZone = expandResourceReference(dnsZone)
+		props.Properties.AzureDnsZone = expandAfdResourceReference(dnsZone)
 	}
 
-	tlsSettings, err := expandTlsParameters(tls)
+	tlsSettings, err := expandAfdDomainTlsParameters(d, tls)
 	if err != nil {
 		return err
 	}
 
-	props.TLSSettings = tlsSettings
+	props.Properties.TlsSettings = tlsSettings
 
-	future, err := client.Create(ctx, id.ResourceGroup, id.ProfileName, id.CustomDomainName, props)
+	// NOTE: Azure Front Door custom domains that use Managed Certificates require a DNS TXT record
+	// ("_dnsauth.<subdomain>") for domain ownership validation.
+	//
+	// The service team confirmed the `validation_token` is available once the Create LRO completes,
+	// so we can use the normal poller here.
+	// For more information, see: https://learn.microsoft.com/azure/frontdoor/domain#domain-validation.
+	createResp, err := client.Create(ctx, id, props)
 	if err != nil {
 		return fmt.Errorf("creating %s: %+v", id, err)
 	}
-
-	if err = future.WaitForCompletionRef(ctx, client.Client); err != nil {
-		return fmt.Errorf("waiting for the creation of %s: %+v", id, err)
+	if createResp.Poller != (pollers.Poller{}) {
+		if err := createResp.Poller.PollUntilDone(ctx); err != nil {
+			return fmt.Errorf("waiting for creation of %s: %+v", id, err)
+		}
 	}
 
 	d.SetId(id.ID())

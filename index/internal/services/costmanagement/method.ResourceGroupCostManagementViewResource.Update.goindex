@@ -1,5 +1,13 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/costmanagement
 import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2023-08-01/views"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/costmanagement/validate"
 	resourceValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/validate"
@@ -7,5 +15,67 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
 func (r ResourceGroupCostManagementViewResource) Update() sdk.ResourceFunc {
-	return r.base.updateFunc()
+	return sdk.ResourceFunc{
+		Timeout: 30 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.CostManagement.ViewsClient
+
+			id, err := views.ParseScopedViewID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var config ResourceGroupCostManagementViewModel
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			// Update operation requires latest eTag to be set in the request.
+			existing, err := client.GetByScope(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+			model := existing.Model
+
+			if model != nil {
+				if model.ETag == nil {
+					return fmt.Errorf("add %s: etag was nil", *id)
+				}
+			}
+
+			if model.Properties == nil {
+				return fmt.Errorf("retrieving %s: `properties` was nil", *id)
+			}
+
+			if metadata.ResourceData.HasChange("display_name") {
+				model.Properties.DisplayName = pointer.To(config.DisplayName)
+			}
+
+			if metadata.ResourceData.HasChange("chart_type") {
+				model.Properties.Chart = pointer.To(views.ChartType(config.ChartType))
+			}
+
+			if metadata.ResourceData.HasChange("dataset") {
+				model.Properties.Query.DataSet = expandDatasetFromModel(config.Dataset)
+			}
+
+			if metadata.ResourceData.HasChange("timeframe") {
+				model.Properties.Query.Timeframe = views.ReportTimeframeType(config.Timeframe)
+			}
+
+			if metadata.ResourceData.HasChange("kpi") {
+				model.Properties.Kpis = expandKpisFromModel(config.Kpi)
+			}
+
+			if metadata.ResourceData.HasChange("pivot") {
+				model.Properties.Pivots = expandPivotsFromModel(config.Pivot)
+			}
+
+			if _, err = client.CreateOrUpdateByScope(ctx, *id, *model); err != nil {
+				return fmt.Errorf("updating %s: %+v", *id, err)
+			}
+
+			return nil
+		},
+	}
 }

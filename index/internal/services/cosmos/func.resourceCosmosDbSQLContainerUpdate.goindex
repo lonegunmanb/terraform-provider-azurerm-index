@@ -2,7 +2,6 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -13,7 +12,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -32,13 +30,12 @@ func resourceCosmosDbSQLContainerUpdate(d *pluginsdk.ResourceData, meta interfac
 
 	err = common.CheckForChangeFromAutoscaleAndManualThroughput(d)
 	if err != nil {
-		return fmt.Errorf("updating Cosmos SQL Container %q (Account: %q, Database: %q): %+v", id.ContainerName, id.DatabaseAccountName, id.SqlDatabaseName, err)
+		return fmt.Errorf("checking `autoscale_settings` and `throughput` for %s: %w", id, err)
 	}
 
 	indexingPolicy := common.ExpandAzureRmCosmosDbIndexingPolicy(d)
-	err = common.ValidateAzureRmCosmosDbIndexingPolicy(indexingPolicy)
-	if err != nil {
-		return fmt.Errorf("updating Cosmos SQL Container %q (Account: %q, Database: %q): %+v", id.ContainerName, id.DatabaseAccountName, id.SqlDatabaseName, err)
+	if err := common.ValidateAzureRmCosmosDbIndexingPolicy(indexingPolicy); err != nil {
+		return fmt.Errorf("validating `indexing_policy`: %w", err)
 	}
 
 	db := cosmosdb.SqlContainerCreateUpdateParameters{
@@ -83,11 +80,8 @@ func resourceCosmosDbSQLContainerUpdate(d *pluginsdk.ResourceData, meta interfac
 	}
 
 	if common.HasThroughputChange(d) {
-		throughputParameters := common.ExpandCosmosDBThroughputSettingsUpdateParameters(d)
-		err := client.SqlResourcesUpdateSqlContainerThroughputThenPoll(ctx, *id, *throughputParameters)
-		if err != nil {
-			return fmt.Errorf("setting Throughput for Cosmos SQL Container %q (Account: %q, Database: %q): %+v - "+
-				"If the collection has not been created with an initial throughput, you cannot configure it later", id.ContainerName, id.DatabaseAccountName, id.SqlDatabaseName, err)
+		if err := client.SqlResourcesUpdateSqlContainerThroughputThenPoll(ctx, *id, common.ExpandCosmosDBThroughputSettingsUpdateParameters(d)); err != nil {
+			return fmt.Errorf("setting Throughput for %s: %+v - If the collection has not been created with an initial throughput, you cannot configure it later", id, err)
 		}
 	}
 

@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+)
+func toSnakeCase(input string) string {
+	delimiter := uint8('_')
+
+	input = strings.TrimSpace(input)
+	n := strings.Builder{}
+	n.Grow(len(input) + 2) // nominal 2 bytes of extra space for inserted delimiters
+	for i, v := range []byte(input) {
+		vIsCap := v >= 'A' && v <= 'Z'
+		vIsLow := v >= 'a' && v <= 'z'
+		if vIsCap {
+			v += 'a'
+			v -= 'A'
+		}
+
+		// treat acronyms as words, eg for JSONData -> JSON is a whole word
+		if i+1 < len(input) {
+			next := input[i+1]
+			vIsNum := v >= '0' && v <= '9'
+			nextIsCap := next >= 'A' && next <= 'Z'
+			nextIsLow := next >= 'a' && next <= 'z'
+			nextIsNum := next >= '0' && next <= '9'
+
+			// if it looks like a version (e.g. `ServerGroupsv2Name`), group `v2`/`V2` together -> `_v2_`
+			if (vIsLow || vIsCap) && nextIsNum && (v == 'v' || v == 'V') {
+				// avoid duplicate delimiter
+				if b := []byte(n.String()); len(b)-1 >= 0 && b[len(b)-1] != delimiter {
+					n.WriteByte(delimiter)
+				}
+				n.WriteByte(v)
+				continue
+			}
+
+			// add underscore if next letter case type is changed
+			if (vIsCap && (nextIsLow || nextIsNum)) || (vIsLow && (nextIsCap || nextIsNum)) || (vIsNum && (nextIsCap || nextIsLow)) {
+				if vIsCap && nextIsLow {
+					if prevIsCap := i > 0 && input[i-1] >= 'A' && input[i-1] <= 'Z'; prevIsCap {
+						n.WriteByte(delimiter)
+					}
+				}
+				n.WriteByte(v)
+				if vIsLow || vIsNum || nextIsNum {
+					n.WriteByte(delimiter)
+				}
+				continue
+			}
+		}
+
+		if v == ' ' || v == '_' || v == '-' || v == '.' {
+			// replace space/underscore/hyphen/dot with delimiter
+			n.WriteByte(delimiter)
+		} else {
+			n.WriteByte(v)
+		}
+	}
+
+	return n.String()
+}

@@ -1,0 +1,128 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-04-15/afdcustomdomains"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandAfdDomainTlsParameters(d *pluginsdk.ResourceData, input []interface{}) (*afdcustomdomains.AFDDomainHTTPSParameters, error) {
+	// NOTE: With the Frontdoor service, they do not treat an empty object like an empty object
+	// if it is not nil they assume it is fully defined and then end up throwing errors when they
+	// attempt to get a value from one of the fields.
+	if len(input) == 0 || input[0] == nil {
+		return nil, nil
+	}
+
+	v := input[0].(map[string]interface{})
+
+	certType := v["certificate_type"].(string)
+	secretRaw := v["cdn_frontdoor_secret_id"].(string)
+	secretWasConfigured := false
+
+	minTlsVersion := ""
+
+	// `cdn_frontdoor_secret_id` is Optional+Computed. When `certificate_type` is
+	// ManagedCertificate, the service may populate a value in state even when
+	// the user didn't configure it. Only treat it as user-specified when it
+	// exists in raw config.
+	if rawConfig := d.GetRawConfig(); !rawConfig.IsNull() {
+		tlsConfig := rawConfig.GetAttr("tls")
+		if !tlsConfig.IsNull() && tlsConfig.LengthInt() > 0 {
+			tlsBlock := tlsConfig.AsValueSlice()[0]
+			if !tlsBlock.IsNull() {
+				secretWasConfigured = !tlsBlock.GetAttr("cdn_frontdoor_secret_id").IsNull()
+			}
+		}
+	}
+
+	if features.FivePointOh() {
+		minTlsVersion = v["minimum_version"].(string)
+	}
+
+	if !features.FivePointOh() {
+		if rawConfig := d.GetRawConfig(); !rawConfig.IsNull() {
+			tlsConfig := rawConfig.GetAttr("tls")
+			if !tlsConfig.IsNull() && tlsConfig.LengthInt() > 0 {
+				tlsBlock := tlsConfig.AsValueSlice()[0]
+				if !tlsBlock.IsNull() {
+					switch {
+					case !tlsBlock.GetAttr("minimum_version").IsNull():
+						minTlsVersion = v["minimum_version"].(string)
+					case !tlsBlock.GetAttr("minimum_tls_version").IsNull():
+						minTlsVersion = v["minimum_tls_version"].(string)
+					default:
+						minTlsVersion = string(afdcustomdomains.AfdMinimumTlsVersionTLSOneTwo)
+					}
+				}
+			}
+		}
+	}
+
+	cipherSuiteRaw := v["cipher_suite"].([]interface{})
+
+	// NOTE: Cert type has to always be passed in the else you will get a
+	// "AfdDomain.TlsSettings.CertificateType' is required but it was not set" error
+	tls := afdcustomdomains.AFDDomainHTTPSParameters{
+		CertificateType: afdcustomdomains.AfdCertificateType(certType),
+	}
+
+	if certType == string(afdcustomdomains.AfdCertificateTypeCustomerCertificate) && secretRaw == "" {
+		return nil, errors.New("the `cdn_frontdoor_secret_id` field must be set if the `certificate_type` is `CustomerCertificate`")
+	} else if certType == string(afdcustomdomains.AfdCertificateTypeManagedCertificate) {
+		// Ignore computed `cdn_frontdoor_secret_id` for managed certs unless the
+		// user explicitly configured it.
+		if secretRaw != "" && secretWasConfigured {
+			return nil, errors.New("the `cdn_frontdoor_secret_id` field is not supported if the `certificate_type` is `ManagedCertificate`")
+		}
+		if !secretWasConfigured {
+			secretRaw = ""
+		}
+	}
+
+	// NOTE: Secret always needs to be passed if it is defined else you will
+	// receive a 500 Internal Server Error
+	if secretRaw != "" {
+		secret, err := parse.FrontDoorSecretID(secretRaw)
+		if err != nil {
+			return nil, err
+		}
+
+		tls.Secret = expandAfdResourceReference(secret.ID())
+	}
+
+	if minTlsVersion != "" {
+		tlsVer := afdcustomdomains.AfdMinimumTlsVersion(minTlsVersion)
+		tls.MinimumTlsVersion = &tlsVer
+	}
+
+	if len(cipherSuiteRaw) > 0 && cipherSuiteRaw[0] != nil {
+		cipherSuite := cipherSuiteRaw[0].(map[string]interface{})
+
+		if cipherSuiteType := cipherSuite["type"].(string); cipherSuiteType != "" {
+			cipherType := afdcustomdomains.AfdCipherSuiteSetType(cipherSuiteType)
+			tls.CipherSuiteSetType = &cipherType
+		}
+
+		if customCiphersRaw := cipherSuite["custom_ciphers"].([]interface{}); len(customCiphersRaw) > 0 {
+			tls.CustomizedCipherSuiteSet = expandAfdCustomizedCipherSuiteSet(customCiphersRaw)
+		}
+	}
+
+	return &tls, nil
+}

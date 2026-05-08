@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2023-12-30/serverfailover"
@@ -21,15 +22,13 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
-	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
-	hsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func expandFlexibleServerDataEncryption(input []interface{}) *servers.DataEncryption {
+func expandFlexibleServerDataEncryption(d *pluginsdk.ResourceData, input []interface{}) *servers.DataEncryption {
 	if len(input) == 0 || input[0] == nil {
 		det := servers.DataEncryptionTypeSystemManaged
 		return &servers.DataEncryption{
@@ -43,14 +42,15 @@ func expandFlexibleServerDataEncryption(input []interface{}) *servers.DataEncryp
 		Type: &det,
 	}
 
-	if keyVaultKeyId := v["key_vault_key_id"].(string); keyVaultKeyId != "" {
+	if keyVaultKeyId := v["key_vault_key_id"].(string); keyVaultKeyId != "" && setInConfig(d, "customer_managed_key.0.key_vault_key_id") {
 		dataEncryption.PrimaryKeyURI = pointer.To(keyVaultKeyId)
 	}
 
-	if hsmManagedKeyId := v["managed_hsm_key_id"].(string); hsmManagedKeyId != "" {
-		dataEncryption.PrimaryKeyURI = pointer.To(hsmManagedKeyId)
+	if !features.FivePointOh() {
+		if hsmManagedKeyId := v["managed_hsm_key_id"].(string); hsmManagedKeyId != "" && setInConfig(d, "customer_managed_key.0.managed_hsm_key_id") {
+			dataEncryption.PrimaryKeyURI = pointer.To(hsmManagedKeyId)
+		}
 	}
-
 	if primaryUserAssignedIdentityId := v["primary_user_assigned_identity_id"].(string); primaryUserAssignedIdentityId != "" {
 		dataEncryption.PrimaryUserAssignedIdentityId = pointer.To(primaryUserAssignedIdentityId)
 	}

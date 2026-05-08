@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-04-15/afdcustomdomains"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenAfdCustomizedCipherSuiteSet(input *afdcustomdomains.AFDDomainHTTPSCustomizedCipherSuiteSet) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	tls12Suites := make([]interface{}, 0)
+	if input.CipherSuiteSetForTls12 != nil {
+		for _, suite := range *input.CipherSuiteSetForTls12 {
+			tls12Suites = append(tls12Suites, string(suite))
+		}
+	}
+
+	tls13Suites := make([]interface{}, 0)
+	if input.CipherSuiteSetForTls13 != nil {
+		for _, suite := range *input.CipherSuiteSetForTls13 {
+			tls13Suites = append(tls13Suites, string(suite))
+		}
+	}
+
+	if len(tls12Suites) == 0 && len(tls13Suites) == 0 {
+		return []interface{}{}
+	}
+
+	return []interface{}{
+		map[string]interface{}{
+			"tls12": tls12Suites,
+			"tls13": tls13Suites,
+		},
+	}
+}

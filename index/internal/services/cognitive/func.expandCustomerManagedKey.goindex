@@ -11,26 +11,22 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2025-06-01/cognitiveservicesaccounts"
-	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	cognitiveValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/validate"
-	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
-	managedHsmHelpers "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/helpers"
-	managedHsmParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/parse"
-	managedHsmValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/managedhsm/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/set"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func expandCustomerManagedKey(input []CustomerManagedKey) (*cognitiveservicesaccounts.Encryption, error) {
+func expandCustomerManagedKey(input []CustomerManagedKey, rmd sdk.ResourceMetaData) (*cognitiveservicesaccounts.Encryption, error) {
 	if len(input) == 0 {
 		return &cognitiveservicesaccounts.Encryption{
 			KeySource: pointer.To(cognitiveservicesaccounts.KeySourceMicrosoftPointCognitiveServices),
@@ -44,30 +40,33 @@ func expandCustomerManagedKey(input []CustomerManagedKey) (*cognitiveservicesacc
 		identityClientId = value
 	}
 
-	encryption := &cognitiveservicesaccounts.Encryption{
+	setInConfig := func(rmd sdk.ResourceMetaData) bool {
+		raw, err := rmd.GetRawConfigAt("customer_managed_key.0.managed_hsm_key_id")
+		return err == nil && !raw.IsNull()
+	}
+
+	key := keyvault.NestedItemID{}
+	if !features.FivePointOh() && setInConfig(rmd) {
+		hsmKeyId, err := keyvault.ParseNestedItemID(v.ManagedHsmKeyID, keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey)
+		if err != nil {
+			return nil, err
+		}
+		key = *hsmKeyId
+	} else {
+		keyId, err := keyvault.ParseNestedItemID(v.KeyVaultKeyID, keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey)
+		if err != nil {
+			return nil, err
+		}
+		key = *keyId
+	}
+
+	return &cognitiveservicesaccounts.Encryption{
 		KeySource: pointer.To(cognitiveservicesaccounts.KeySourceMicrosoftPointKeyVault),
 		KeyVaultProperties: &cognitiveservicesaccounts.KeyVaultProperties{
 			IdentityClientId: pointer.To(identityClientId),
+			KeyName:          pointer.To(key.Name),
+			KeyVaultUri:      pointer.To(key.KeyVaultBaseURL),
+			KeyVersion:       pointer.To(key.Version),
 		},
-	}
-
-	if v.KeyVaultKeyID != "" {
-		keyId, err := keyVaultParse.ParseOptionallyVersionedNestedItemID(v.KeyVaultKeyID)
-		if err != nil {
-			return nil, err
-		}
-		encryption.KeyVaultProperties.KeyName = pointer.To(keyId.Name)
-		encryption.KeyVaultProperties.KeyVersion = pointer.To(keyId.Version)
-		encryption.KeyVaultProperties.KeyVaultUri = pointer.To(keyId.KeyVaultBaseUrl)
-	} else {
-		hsmKyId, err := managedHsmParse.ManagedHSMDataPlaneVersionedKeyID(v.ManagedHsmKeyID, nil)
-		if err != nil {
-			return nil, err
-		}
-
-		encryption.KeyVaultProperties.KeyName = pointer.To(hsmKyId.KeyName)
-		encryption.KeyVaultProperties.KeyVersion = pointer.To(hsmKyId.KeyVersion)
-		encryption.KeyVaultProperties.KeyVaultUri = pointer.To(hsmKyId.BaseUri())
-	}
-	return encryption, nil
+	}, nil
 }

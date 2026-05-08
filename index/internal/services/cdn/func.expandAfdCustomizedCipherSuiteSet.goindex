@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-04-15/afdcustomdomains"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandAfdCustomizedCipherSuiteSet(input []interface{}) *afdcustomdomains.AFDDomainHTTPSCustomizedCipherSuiteSet {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	v := input[0].(map[string]interface{})
+
+	result := &afdcustomdomains.AFDDomainHTTPSCustomizedCipherSuiteSet{}
+
+	if tls12Raw := v["tls12"].(*pluginsdk.Set); tls12Raw.Len() > 0 {
+		tls12Suites := make([]afdcustomdomains.AfdCustomizedCipherSuiteForTls12, 0)
+		for _, suite := range tls12Raw.List() {
+			tls12Suites = append(tls12Suites, afdcustomdomains.AfdCustomizedCipherSuiteForTls12(suite.(string)))
+		}
+		result.CipherSuiteSetForTls12 = &tls12Suites
+	}
+
+	if tls13Raw := v["tls13"].(*pluginsdk.Set); tls13Raw.Len() > 0 {
+		tls13Suites := make([]afdcustomdomains.AfdCustomizedCipherSuiteForTls13, 0)
+		for _, suite := range tls13Raw.List() {
+			tls13Suites = append(tls13Suites, afdcustomdomains.AfdCustomizedCipherSuiteForTls13(suite.(string)))
+		}
+		result.CipherSuiteSetForTls13 = &tls13Suites
+	}
+
+	return result
+}

@@ -2,7 +2,6 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -13,7 +12,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -22,7 +20,7 @@ import (
 )
 func resourceCosmosDbSQLContainerRead(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Cosmos.CosmosDBClient
-	accountClient := meta.(*clients.Client).Cosmos.DatabaseClient
+
 	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -34,12 +32,11 @@ func resourceCosmosDbSQLContainerRead(d *pluginsdk.ResourceData, meta interface{
 	resp, err := client.SqlResourcesGetSqlContainer(ctx, *id)
 	if err != nil {
 		if response.WasNotFound(resp.HttpResponse) {
-			log.Printf("[INFO] Error reading %q - removing from state", id)
 			d.SetId("")
 			return nil
 		}
 
-		return fmt.Errorf("reading %q: %+v", id, err)
+		return fmt.Errorf("retrieving %s: %+v", id, err)
 	}
 
 	d.Set("name", id.ContainerName)
@@ -87,27 +84,24 @@ func resourceCosmosDbSQLContainerRead(d *pluginsdk.ResourceData, meta interface{
 		}
 	}
 
-	accResp, err := accountClient.Get(ctx, id.ResourceGroupName, id.DatabaseAccountName)
+	databaseAccountID := cosmosdb.NewDatabaseAccountID(id.SubscriptionId, id.ResourceGroupName, id.DatabaseAccountName)
+	accResp, err := client.DatabaseAccountsGet(ctx, databaseAccountID)
 	if err != nil {
-		return fmt.Errorf("reading CosmosDB Account %q (Resource Group %q): %+v", id.DatabaseAccountName, id.ResourceGroupName, err)
-	}
-
-	if accResp.ID == nil || *accResp.ID == "" {
-		return fmt.Errorf("cosmosDB Account %q (Resource Group %q) ID is empty or nil", id.DatabaseAccountName, id.ResourceGroupName)
+		return fmt.Errorf("retrieving %s: %+v", databaseAccountID, err)
 	}
 
 	// if the cosmos account is serverless calling the get throughput api would yield an error
-	if !isServerlessCapacityMode(accResp) {
+	if !isServerlessCapacityMode(accResp.Model) {
 		throughputResp, err := client.SqlResourcesGetSqlContainerThroughput(ctx, *id)
 		if err != nil {
 			if !response.WasNotFound(throughputResp.HttpResponse) {
-				return fmt.Errorf("reading Throughput on Cosmos SQL Container %s (Account: %q, Database: %q) ID: %v", id.ContainerName, id.DatabaseAccountName, id.SqlDatabaseName, err)
+				return fmt.Errorf("retrieving Throughput for %s: %v", id, err)
 			} else {
 				d.Set("throughput", nil)
 				d.Set("autoscale_settings", nil)
 			}
 		} else {
-			common.SetResourceDataThroughputFromResponse(*throughputResp.Model, d)
+			common.SetResourceDataThroughputFromResponse(pointer.From(throughputResp.Model), d)
 		}
 	}
 

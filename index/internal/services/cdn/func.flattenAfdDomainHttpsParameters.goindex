@@ -1,0 +1,94 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2024-02-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-04-15/afdcustomdomains"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenAfdDomainHttpsParameters(input *afdcustomdomains.AFDDomainHTTPSParameters, includeDefaultCipherSuite bool) []interface{} {
+	if input == nil {
+		return []interface{}{}
+	}
+
+	secretId := ""
+	if input.Secret != nil && input.Secret.Id != nil {
+		if id, err := parse.FrontDoorSecretIDInsensitively(pointer.From(input.Secret.Id)); err == nil {
+			secretId = id.ID()
+		}
+	}
+
+	minTlsVersion := ""
+	if input.MinimumTlsVersion != nil {
+		minTlsVersion = string(pointer.From(input.MinimumTlsVersion))
+	}
+
+	// Azure omits `minimumTlsVersion` when the value is `TLS12`, so we default the field to
+	// that setting to avoid spurious diffs when the user explicitly configured nothing.
+	if minTlsVersion == "" {
+		minTlsVersion = string(afdcustomdomains.AfdMinimumTlsVersionTLSOneTwo)
+	}
+
+	customCiphers := flattenAfdCustomizedCipherSuiteSet(input.CustomizedCipherSuiteSet)
+	cipherSuiteType := ""
+	if input.CipherSuiteSetType != nil {
+		cipherSuiteType = string(pointer.From(input.CipherSuiteSetType))
+	}
+
+	// Azure always returns the default `TLS12_2022` cipher suite even when users never
+	// configured a block, so we ignore that value to avoid perpetual diffs. Only emit the
+	// block when the service reports a non-default type, custom entries exist, or the user
+	// explicitly configured the block (tracked via includeDefaultCipherSuite).
+	includeCipherSuite := len(customCiphers) > 0
+
+	switch cipherSuiteType {
+	case "":
+		if includeDefaultCipherSuite {
+			includeCipherSuite = true
+		}
+	case string(afdcustomdomains.AfdCipherSuiteSetTypeTLSOneTwoTwoZeroTwoTwo):
+		if includeDefaultCipherSuite {
+			includeCipherSuite = true
+		}
+	default:
+		includeCipherSuite = true
+	}
+
+	cipherSuite := make([]interface{}, 0)
+	if includeCipherSuite {
+		cipherSuite = []interface{}{
+			map[string]interface{}{
+				"type":           cipherSuiteType,
+				"custom_ciphers": customCiphers,
+			},
+		}
+	}
+
+	result := map[string]interface{}{
+		"cdn_frontdoor_secret_id": secretId,
+		"certificate_type":        string(input.CertificateType),
+		"cipher_suite":            cipherSuite,
+		"minimum_version":         minTlsVersion,
+	}
+
+	if !features.FivePointOh() {
+		result["minimum_tls_version"] = minTlsVersion
+	}
+
+	return []interface{}{result}
+}

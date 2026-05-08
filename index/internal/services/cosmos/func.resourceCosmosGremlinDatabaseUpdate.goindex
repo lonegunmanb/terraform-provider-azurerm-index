@@ -1,7 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/response"
@@ -11,7 +10,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/common"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/migration"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cosmos/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -28,7 +26,7 @@ func resourceCosmosGremlinDatabaseUpdate(d *pluginsdk.ResourceData, meta interfa
 
 	err = common.CheckForChangeFromAutoscaleAndManualThroughput(d)
 	if err != nil {
-		return fmt.Errorf("updating Cosmos Gremlin Database %q (Account: %q) - %+v", id.GremlinDatabaseName, id.DatabaseAccountName, err)
+		return fmt.Errorf("checking `autoscale_settings` and `throughput` for %s: %w", id, err)
 	}
 
 	db := cosmosdb.GremlinDatabaseCreateUpdateParameters{
@@ -46,22 +44,9 @@ func resourceCosmosGremlinDatabaseUpdate(d *pluginsdk.ResourceData, meta interfa
 	}
 
 	if common.HasThroughputChange(d) {
-		throughputParameters := common.ExpandCosmosDBThroughputSettingsUpdateParameters(d)
-		throughputFuture, err := client.GremlinResourcesUpdateGremlinDatabaseThroughput(ctx, *id, *throughputParameters)
-		if err != nil {
-			if response.WasNotFound(throughputFuture.HttpResponse) {
-				return fmt.Errorf("setting Throughput for Cosmos Gremlin Database %q (Account: %q): %+v - "+
-					"If the collection has not been created with and initial throughput, you cannot configure it later", id.GremlinDatabaseName, id.DatabaseAccountName, err)
-			}
+		if err := client.GremlinResourcesUpdateGremlinDatabaseThroughputThenPoll(ctx, *id, common.ExpandCosmosDBThroughputSettingsUpdateParameters(d)); err != nil {
+			return fmt.Errorf("setting Throughput for %s: %+v - If the collection has not been created with and initial throughput, you cannot configure it later", id, err)
 		}
-
-		if err := throughputFuture.Poller.PollUntilDone(ctx); err != nil {
-			return fmt.Errorf("waiting on ThroughputUpdate future for Cosmos Gremlin Database %q (Account: %q, Database %q): %+v", id.GremlinDatabaseName, id.DatabaseAccountName, id.GremlinDatabaseName, err)
-		}
-	}
-
-	if _, err = client.GremlinResourcesGetGremlinDatabase(ctx, *id); err != nil {
-		return fmt.Errorf("making get request for Cosmos Gremlin Database %q (Account: %q): %+v", id.GremlinDatabaseName, id.DatabaseAccountName, err)
 	}
 
 	return resourceCosmosGremlinDatabaseRead(d, meta)
