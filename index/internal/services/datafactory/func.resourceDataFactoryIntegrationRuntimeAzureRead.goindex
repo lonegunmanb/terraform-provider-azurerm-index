@@ -1,5 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory
 import (
+	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -8,9 +10,13 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/factories"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/integrationruntimedisableinteractivequery"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/integrationruntimeenableinteractivequery"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/integrationruntimes"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -58,6 +64,33 @@ func resourceDataFactoryIntegrationRuntimeAzureRead(d *pluginsdk.ResourceData, m
 				d.Set("core_count", dataFlowProps.CoreCount)
 				d.Set("time_to_live_min", dataFlowProps.TimeToLive)
 				d.Set("cleanup_enabled", dataFlowProps.Cleanup)
+			}
+		}
+
+		// @sreallymatt: This is currently non-functional, the API doesn't return the InteractiveQuery properties
+		// See: https://github.com/Azure/azure-rest-api-specs/issues/39594
+		// Can be uncommented and the additional `GetStatus` request below removed once this issue is resolved.
+		// if iqProps := runTime.TypeProperties.InteractiveQuery; iqProps != nil {
+		//	d.Set("interactive_authoring_time_to_live_in_minutes", iqProps.AutoTerminationMinutes)
+		// }
+	}
+
+	status, err := client.GetStatus(ctx, *id)
+	if err != nil {
+		return fmt.Errorf("retrieving status for %s: %+v", id, err)
+	}
+
+	if model := status.Model; model != nil {
+		rt, ok := model.Properties.(integrationruntimes.ManagedIntegrationRuntimeStatus)
+		if !ok {
+			return fmt.Errorf("asserting `IntegrationRuntimeStatus` as `ManagedIntegrationRuntimeStatus` for %s", *id)
+		}
+
+		if iq := rt.TypeProperties.InteractiveQuery; iq != nil {
+			d.Set("interactive_authoring_time_to_live_in_minutes", iq.AutoTerminationMinutes)
+			// The API doesn't reset the TTL value when interactive authoring is disabled. If disabled, reset TTL.
+			if pointer.From(iq.Status) == integrationruntimes.InteractiveCapabilityStatusDisabled {
+				d.Set("interactive_authoring_time_to_live_in_minutes", nil)
 			}
 		}
 	}

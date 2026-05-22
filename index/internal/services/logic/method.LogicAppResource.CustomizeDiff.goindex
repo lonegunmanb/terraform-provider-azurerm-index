@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/validate"
+	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r LogicAppResource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			// If `key_vault_reference_identity_id` is not set in config, check if ForceNew is needed
+			if metadata.ResourceDiff.GetRawConfig().GetAttr("key_vault_reference_identity_id").IsNull() {
+				// If it was previously set and identity is purely UserAssigned, ForceNew is required
+				// because the API does not support unsetting this property
+				old, _ := metadata.ResourceDiff.GetChange("key_vault_reference_identity_id")
+				if old.(string) != "" {
+					identityType := metadata.ResourceDiff.Get("identity.0.type").(string)
+					if strings.EqualFold(identityType, "UserAssigned") {
+						if err := metadata.ResourceDiff.ForceNew("key_vault_reference_identity_id"); err != nil {
+							return err
+						}
+					}
+				}
+				return nil
+			}
+
+			keyVaultReferenceIdentityId := metadata.ResourceDiff.Get("key_vault_reference_identity_id").(string)
+			if keyVaultReferenceIdentityId == "" {
+				return nil
+			}
+
+			identityIdsRaw := metadata.ResourceDiff.Get("identity.0.identity_ids").(*pluginsdk.Set)
+			identityIds := identityIdsRaw.List()
+
+			for _, id := range identityIds {
+				if strings.EqualFold(id.(string), keyVaultReferenceIdentityId) {
+					return nil
+				}
+			}
+
+			return fmt.Errorf("`key_vault_reference_identity_id` must be an identity assigned to this resource in the `identity` block, got `%s`", keyVaultReferenceIdentityId)
+		},
+	}
+}
