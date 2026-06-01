@@ -16,7 +16,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
 	vmwaremachines "github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/machines"
 	vmwarerunasaccounts "github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/runasaccounts"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservices/2024-01-01/vaults"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservices/2025-08-01/vaults"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationpolicies"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotecteditems"
@@ -28,7 +28,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
-func (s VMWareReplicatedVmResource) Create() sdk.ResourceFunc {
+func (r VMWareReplicatedVmResource) Create() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Timeout: 120 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
@@ -62,10 +62,16 @@ func (s VMWareReplicatedVmResource) Create() sdk.ResourceFunc {
 			id := replicationprotecteditems.NewReplicationProtectedItemID(parsedContainerId.SubscriptionId, parsedContainerId.ResourceGroupName, parsedContainerId.VaultName, parsedContainerId.ReplicationFabricName, parsedContainerId.ReplicationProtectionContainerName, model.Name)
 			fabricId := replicationfabrics.NewReplicationFabricID(parsedContainerId.SubscriptionId, parsedContainerId.ResourceGroupName, parsedContainerId.VaultName, parsedContainerId.ReplicationFabricName)
 
-			existing, err := client.Get(ctx, id)
-			if err != nil {
+			if !metadata.Client.Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
+				existing, err := client.Get(ctx, id)
+				if err != nil {
+					if !response.WasNotFound(existing.HttpResponse) {
+						return fmt.Errorf("checking for presence of existing site recovery vmware replicated vm %q: %+v", id, err)
+					}
+				}
+
 				if !response.WasNotFound(existing.HttpResponse) {
-					return fmt.Errorf("checking for presence of existing site recovery vmware replicated vm %q: %+v", id, err)
+					return tf.ImportAsExistsError("azurerm_site_recovery_vmware_replicated_vm", *existing.Model.Id)
 				}
 			}
 
@@ -87,10 +93,6 @@ func (s VMWareReplicatedVmResource) Create() sdk.ResourceFunc {
 			runAsAccountId, err := fetchRunAsAccountsIdBySite(ctx, runAsAccountsClient, siteID, model.PhysicalServerCredentialName, model.ApplianceName)
 			if err != nil {
 				return fmt.Errorf("fetch run as account id %s: %+v", model.PhysicalServerCredentialName, err)
-			}
-
-			if existing.Model != nil {
-				return tf.ImportAsExistsError("azurerm_site_recovery_vmware_replicated_vm", *existing.Model.Id)
 			}
 
 			providerSpecificDetail := replicationprotecteditems.InMageRcmEnableProtectionInput{
@@ -180,17 +182,10 @@ func (s VMWareReplicatedVmResource) Create() sdk.ResourceFunc {
 				},
 			}
 
-			poller, err := client.Create(ctx, id, parameters)
-			if err != nil {
+			if err := client.CreateCallbackThenPoll(ctx, id, parameters, metadata.SetIDCallback(&id)); err != nil {
 				return fmt.Errorf("creating %q: %+v", id, err)
 			}
-			// once the PUT request returned successfully, an item has been created, even if it may fail in the poll process.
 			metadata.SetID(id)
-
-			err = poller.Poller.PollUntilDone(ctx)
-			if err != nil {
-				return fmt.Errorf("polling %q: %+v", id, err)
-			}
 
 			deadline, ok := ctx.Deadline()
 			if !ok {
@@ -254,8 +249,7 @@ func (s VMWareReplicatedVmResource) Create() sdk.ResourceFunc {
 				},
 			}
 
-			err = client.UpdateThenPoll(ctx, id, updateInput)
-			if err != nil {
+			if err := client.UpdateThenPoll(ctx, id, updateInput); err != nil {
 				return fmt.Errorf("creating %q: %+v", id, err)
 			}
 

@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -23,6 +24,8 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
@@ -31,20 +34,43 @@ import (
 )
 func flattenOrchestratedVirtualMachineScaleSetSkuProfile(input *virtualmachinescalesets.SkuProfile) []interface{} {
 	if input == nil {
-		return make([]interface{}, 0)
+		return []interface{}{}
 	}
 
-	vmSizes := make([]string, 0)
+	result := map[string]interface{}{
+		"allocation_strategy": string(pointer.From(input.AllocationStrategy)),
+	}
+
+	output := make([]interface{}, 0)
 	if input.VMSizes != nil {
 		for _, vmSize := range *input.VMSizes {
-			vmSizes = append(vmSizes, *vmSize.Name)
+			results := map[string]interface{}{
+				"name": pointer.From(vmSize.Name),
+				"rank": nil,
+			}
+
+			if vmSize.Rank != nil {
+				results["rank"] = int(pointer.From(vmSize.Rank)) + 1
+			}
+
+			output = append(output, results)
 		}
 	}
 
-	return []interface{}{
-		map[string]interface{}{
-			"allocation_strategy": string(pointer.From(input.AllocationStrategy)),
-			"vm_sizes":            vmSizes,
-		},
+	result["virtual_machine_size"] = output
+
+	if !features.FivePointOh() {
+		output := make([]string, 0)
+		if input.VMSizes != nil {
+			for _, vmSize := range *input.VMSizes {
+				if vmSize.Name != nil {
+					output = append(output, pointer.From(vmSize.Name))
+				}
+			}
+		}
+
+		result["vm_sizes"] = output
 	}
+
+	return []interface{}{result}
 }

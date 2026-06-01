@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
@@ -50,7 +51,12 @@ func resourceMsSqlManagedInstanceTransparentDataEncryptionCreateUpdate(d *plugin
 
 	var key *keyvault.NestedItemID
 	if v, ok := d.GetOk("key_vault_key_id"); ok {
-		key, err = keyvault.ParseNestedItemID(v.(string), keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey)
+		key, err = keyvault.ParseNestedItemID(v.(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
+		if err != nil {
+			return err
+		}
+
+		key, err = resourceMsSqlManagedInstanceTransparentDataEncryptionVersionedKey(ctx, key, "key_vault_key_id", d.Get("auto_rotation_enabled").(bool), meta)
 		if err != nil {
 			return err
 		}
@@ -58,7 +64,12 @@ func resourceMsSqlManagedInstanceTransparentDataEncryptionCreateUpdate(d *plugin
 
 	if !features.FivePointOh() {
 		if !pluginsdk.IsExplicitlyNullInConfig(d, "managed_hsm_key_id") {
-			key, err = keyvault.ParseNestedItemID(d.Get("managed_hsm_key_id").(string), keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey)
+			key, err = keyvault.ParseNestedItemID(d.Get("managed_hsm_key_id").(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
+			if err != nil {
+				return err
+			}
+
+			key, err = resourceMsSqlManagedInstanceTransparentDataEncryptionVersionedKey(ctx, key, "managed_hsm_key_id", d.Get("auto_rotation_enabled").(bool), meta)
 			if err != nil {
 				return err
 			}
@@ -92,6 +103,7 @@ func resourceMsSqlManagedInstanceTransparentDataEncryptionCreateUpdate(d *plugin
 		payload.Properties.ServerKeyType = managedinstanceencryptionprotectors.ServerKeyTypeAzureKeyVault
 	}
 
+	// TODO: implement `CallbackThenPoll`, requires migrating to an ID that implements `resourceids.ResourceId`
 	if err := client.CreateOrUpdateThenPoll(ctx, *managedInstanceId, payload); err != nil {
 		return fmt.Errorf("creating/updating %s: %+v", id, err)
 	}

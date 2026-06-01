@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -23,6 +24,8 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
@@ -30,7 +33,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	resource := &pluginsdk.Resource{
 		Create: resourceOrchestratedVirtualMachineScaleSetCreate,
 		Read:   resourceOrchestratedVirtualMachineScaleSetRead,
 		Update: resourceOrchestratedVirtualMachineScaleSetUpdate,
@@ -106,7 +109,6 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 			"sku_profile": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
-				ForceNew: true,
 				MaxItems: 1,
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
@@ -118,14 +120,23 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 								false,
 							),
 						},
-
-						"vm_sizes": {
+						"virtual_machine_size": {
 							Type:     pluginsdk.TypeSet,
 							Required: true,
-							MinItems: 1,
-							Elem: &pluginsdk.Schema{
-								Type:         pluginsdk.TypeString,
-								ValidateFunc: validation.StringIsNotEmpty,
+							MaxItems: 5,
+							Elem: &pluginsdk.Resource{
+								Schema: map[string]*pluginsdk.Schema{
+									"name": {
+										Type:         pluginsdk.TypeString,
+										Required:     true,
+										ValidateFunc: computeValidate.SkuProfileVMSizeName,
+									},
+									"rank": {
+										Type:         pluginsdk.TypeInt,
+										Optional:     true,
+										ValidateFunc: validation.IntBetween(1, 3),
+									},
+								},
 							},
 						},
 					},
@@ -341,13 +352,14 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 				return false
 			}),
 
+			// SKU Profile validation
 			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
 				skuName, hasSkuName := diff.GetOk("sku_name")
 				_, hasSkuProfile := diff.GetOk("sku_profile")
 
 				if hasSkuProfile {
 					if !hasSkuName || skuName != SkuNameMix {
-						return fmt.Errorf("`sku_profile` can only be configured when `sku_name` is set to `Mix`")
+						return fmt.Errorf("`sku_profile` can only be configured when `sku_name` is set to `Mix`, got `%s`", skuName)
 					}
 				} else {
 					if hasSkuName && skuName == SkuNameMix {
@@ -355,6 +367,60 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 					}
 				}
 
+				// Validate SKU Profile configuration
+				if skuProfileRaw := diff.Get("sku_profile").([]interface{}); len(skuProfileRaw) > 0 {
+					skuProfile := skuProfileRaw[0].(map[string]interface{})
+					allocationStrategy := skuProfile["allocation_strategy"].(string)
+
+					configRaw := diff.GetRawConfig().AsValueMap()["sku_profile"]
+					if configRaw.IsNull() || !configRaw.IsKnown() {
+						return nil
+					}
+
+					skuProfiles := configRaw.AsValueSlice()
+					if len(skuProfiles) == 0 {
+						return nil
+					}
+
+					// TODO: Remove in v5.0
+					if !features.FivePointOh() {
+						vmSizesProvided := len(skuProfile["vm_sizes"].(*pluginsdk.Set).List()) > 0
+						vmSizeProvided := len(skuProfile["virtual_machine_size"].(*pluginsdk.Set).List()) > 0
+						if !vmSizesProvided && !vmSizeProvided {
+							return errors.New("either `vm_sizes` or `virtual_machine_size` must be configured in `sku_profile`")
+						}
+					}
+
+					if vmSizes := skuProfile["virtual_machine_size"].(*pluginsdk.Set).List(); len(vmSizes) > 0 {
+						for _, vmSize := range vmSizes {
+							vmSizeMap := vmSize.(map[string]interface{})
+							rank := vmSizeMap["rank"].(int)
+
+							if rank != 0 && allocationStrategy != string(virtualmachinescalesets.AllocationStrategyPrioritized) {
+								return fmt.Errorf("`rank` can only be set when `allocation_strategy` is `Prioritized`, got `%s`", allocationStrategy)
+							}
+						}
+					}
+				}
+
+				return nil
+			}),
+
+			// Force recreation when sku_profile is removed and sku_name changes from mix
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+				oldName, newName := diff.GetChange("sku_name")
+
+				if oldName.(string) == "Mix" && newName.(string) != "Mix" {
+					if err := diff.ForceNew("sku_profile"); err != nil {
+						return fmt.Errorf("forcing new resource when removing `sku_profile` with `sku_name` change from `Mix`: %+v", err)
+					}
+				}
+
+				return nil
+			}),
+
+			// Upgrade policy validation
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
 				upgradeMode := virtualmachinescalesets.UpgradeMode(diff.Get("upgrade_mode").(string))
 				rollingUpgradePolicyRaw := diff.Get("rolling_upgrade_policy").([]interface{})
 
@@ -366,6 +432,11 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 					return fmt.Errorf("`rolling_upgrade_policy` is required when `upgrade_mode` is set to `%s`", string(upgradeMode))
 				}
 
+				return nil
+			}),
+
+			// Network interface validation
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
 				networkInterfaces := diff.Get("network_interface").([]interface{})
 				for _, networkInterface := range networkInterfaces {
 					raw := networkInterface.(map[string]interface{})
@@ -392,4 +463,29 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 			}),
 		),
 	}
+
+	if !features.FivePointOh() {
+		skuProfileSchema := resource.Schema["sku_profile"].Elem.(*pluginsdk.Resource).Schema
+		skuProfileSchema["vm_sizes"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeSet,
+			Optional:      true,
+			Computed:      true,
+			MinItems:      1,
+			ConflictsWith: []string{"sku_profile.0.virtual_machine_size"},
+			Deprecated:    "The `vm_sizes` field has been deprecated and will be removed in v5.0 of the AzureRM Provider. Please use the `virtual_machine_size` block instead.",
+			Elem: &pluginsdk.Schema{
+				Type:         pluginsdk.TypeString,
+				ValidateFunc: computeValidate.SkuProfileVMSizeName,
+			},
+		}
+
+		skuProfileVirtualMachineSize := skuProfileSchema["virtual_machine_size"]
+		skuProfileVirtualMachineSize.Required = false
+		skuProfileVirtualMachineSize.Optional = true
+		skuProfileVirtualMachineSize.Computed = true
+		skuProfileVirtualMachineSize.MinItems = 1
+		skuProfileVirtualMachineSize.ConflictsWith = []string{"sku_profile.0.vm_sizes"}
+	}
+
+	return resource
 }

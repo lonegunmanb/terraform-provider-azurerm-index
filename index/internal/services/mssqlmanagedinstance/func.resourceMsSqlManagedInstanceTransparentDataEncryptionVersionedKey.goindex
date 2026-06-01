@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstanceencryptionprotectors"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/managedinstancekeys"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceMsSqlManagedInstanceTransparentDataEncryptionVersionedKey(ctx context.Context, id *keyvault.NestedItemID, fieldName string, autoRotationEnabled bool, meta interface{}) (*keyvault.NestedItemID, error) {
+	if id.Version != "" {
+		return id, nil
+	}
+
+	if !autoRotationEnabled {
+		return nil, fmt.Errorf("`%s` must be a versioned Key Vault Key ID when `auto_rotation_enabled` is false", fieldName)
+	}
+
+	var keyUrl string
+	if id.IsManagedHSM() {
+		resp, err := meta.(*clients.Client).ManagedHSMs.DataPlaneKeysClient.GetKey(ctx, id.KeyVaultBaseURL, id.Name, "")
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.Key != nil {
+			keyUrl = pointer.From(resp.Key.Kid)
+		}
+	} else {
+		resp, err := meta.(*clients.Client).KeyVault.ManagementClient.GetKey(ctx, id.KeyVaultBaseURL, id.Name, "")
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.Key != nil {
+			keyUrl = pointer.From(resp.Key.Kid)
+		}
+	}
+
+	if keyUrl == "" {
+		return nil, fmt.Errorf("retrieving latest version for Key Vault Key %q at %q: empty key ID returned", id.Name, id.KeyVaultBaseURL)
+	}
+
+	versionedId, err := keyvault.ParseNestedItemID(keyUrl, keyvault.VersionTypeVersioned, keyvault.NestedItemTypeKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return versionedId, nil
+}

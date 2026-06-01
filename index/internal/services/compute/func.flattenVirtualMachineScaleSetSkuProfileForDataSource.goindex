@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-11-01/virtualmachinescalesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenVirtualMachineScaleSetSkuProfileForDataSource(input *virtualmachinescalesets.SkuProfile) []VirtualMachineScaleSetSkuProfile {
+	if input == nil {
+		return []VirtualMachineScaleSetSkuProfile{}
+	}
+
+	vmSizes := make([]VirtualMachineScaleSetSkuProfileVMSize, 0)
+	if input.VMSizes != nil {
+		for _, vmSize := range *input.VMSizes {
+			vmSizeStruct := VirtualMachineScaleSetSkuProfileVMSize{
+				Name: pointer.From(vmSize.Name),
+			}
+
+			if vmSize.Rank != nil {
+				vmSizeStruct.Rank = pointer.From(vmSize.Rank) + 1
+			}
+
+			vmSizes = append(vmSizes, vmSizeStruct)
+		}
+	}
+
+	return []VirtualMachineScaleSetSkuProfile{{
+		AllocationStrategy: string(pointer.From(input.AllocationStrategy)),
+		VirtualMachineSize: vmSizes,
+	}}
+}
