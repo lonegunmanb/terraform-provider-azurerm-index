@@ -37,7 +37,7 @@ func resourceNetAppAccountRead(d *pluginsdk.ResourceData, meta interface{}) erro
 	resp, err := client.AccountsGet(ctx, *id)
 	if err != nil {
 		if response.WasNotFound(resp.HttpResponse) {
-			log.Printf("[INFO] %s does not exist - removing from state", *id)
+			log.Printf("[DEBUG] %s was not found - removing from state", id)
 			d.SetId("")
 			return nil
 		}
@@ -50,28 +50,22 @@ func resourceNetAppAccountRead(d *pluginsdk.ResourceData, meta interface{}) erro
 	if model := resp.Model; model != nil {
 		d.Set("location", location.Normalize(model.Location))
 
-		if model.Identity != nil {
-			anfAccountIdentity, err := identity.FlattenLegacySystemAndUserAssignedMap(model.Identity)
-			if err != nil {
-				return fmt.Errorf("flattening `identity`: %+v", err)
-			}
-
-			if err := d.Set("identity", anfAccountIdentity); err != nil {
-				return fmt.Errorf("setting `identity`: %+v", err)
-			}
+		anfAccountIdentity, err := identity.FlattenLegacySystemAndUserAssignedMap(model.Identity)
+		if err != nil {
+			return fmt.Errorf("flattening `identity`: %+v", err)
 		}
 
-		if model.Properties.ActiveDirectories != nil {
-			adProps := *model.Properties.ActiveDirectories
-			// response returns an array, but only 1 NetApp AD connection is allowed per the Azure platform currently
-			if len(adProps) > 0 {
-				// the API returns opaque('***') values for password and server_root_ca_certificate, so we pass through current state values so change detection works
-				prevPassword := d.Get("active_directory.0.password").(string)
-				prevCaCert := d.Get("active_directory.0.server_root_ca_certificate").(string)
+		if err := d.Set("identity", anfAccountIdentity); err != nil {
+			return fmt.Errorf("setting `identity`: %+v", err)
+		}
 
-				if err = d.Set("active_directory", flattenNetAppActiveDirectories(&adProps[0], &prevPassword, &prevCaCert)); err != nil {
-					return fmt.Errorf("setting `active_directory`: %+v", err)
-				}
+		if model.Properties != nil {
+			// the API doesn't return values for `active_directory.0.password` and `active_directory.0.server_root_ca_certificate`, so we pass through current state values so change detection works
+			prevPassword := d.Get("active_directory.0.password").(string)
+			prevCaCert := d.Get("active_directory.0.server_root_ca_certificate").(string)
+
+			if err = d.Set("active_directory", flattenNetAppActiveDirectories(model.Properties.ActiveDirectories, &prevPassword, &prevCaCert)); err != nil {
+				return fmt.Errorf("setting `active_directory`: %+v", err)
 			}
 		}
 

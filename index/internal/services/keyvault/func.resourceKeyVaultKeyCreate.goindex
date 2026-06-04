@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/data-plane/keyvault/7-4/deletedkeys"
 	"github.com/hashicorp/go-azure-sdk/data-plane/keyvault/7-4/keys"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/structure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -37,7 +40,6 @@ func resourceKeyVaultKeyCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	log.Print("[INFO] preparing arguments for AzureRM KeyVault Key creation.")
 	name := d.Get("name").(string)
 	keyVaultId, err := commonids.ParseKeyVaultID(d.Get("key_vault_id").(string))
 	if err != nil {
@@ -65,26 +67,26 @@ func resourceKeyVaultKeyCreate(d *pluginsdk.ResourceData, meta interface{}) erro
 		}
 	}
 
-	keyType := d.Get("key_type").(string)
-	keyOptions := expandKeyVaultKeyOptions(d)
-	t := d.Get("tags").(map[string]interface{})
-
 	// TODO: support Importing Keys once this is fixed:
 	// https://github.com/Azure/azure-rest-api-specs/issues/1747
 	parameters := keys.KeyCreateParameters{
-		Kty:    keys.JsonWebKeyType(keyType),
-		KeyOps: keyOptions,
+		Kty:    keys.JsonWebKeyType(d.Get("key_type").(string)),
+		KeyOps: expandKeyVaultKeyOptions(d),
 		Attributes: &keys.KeyAttributes{
 			Enabled: pointer.To(true),
 		},
+		Tags: pointer.To(tags.ToTypedObject(tags.Expand(d.Get("tags").(map[string]interface{})))),
+	}
 
-		Tags: pointer.To(tags.ToTypedObject(tags.Expand(t))),
+	if p := expandKeyVaultKeyReleasePolicy(d.Get("release_policy").([]any)); p != nil {
+		parameters.ReleasePolicy = p
+		// key must be exportable when `release_policy` is set
+		parameters.Attributes.Exportable = pointer.To(true)
 	}
 
 	switch parameters.Kty {
 	case keys.JsonWebKeyTypeEC, keys.JsonWebKeyTypeECNegativeHSM:
-		curveName := d.Get("curve").(string)
-		parameters.Crv = pointer.To(keys.JsonWebKeyCurveName(curveName))
+		parameters.Crv = pointer.ToEnum[keys.JsonWebKeyCurveName](d.Get("curve").(string))
 	case keys.JsonWebKeyTypeRSA, keys.JsonWebKeyTypeRSANegativeHSM:
 		keySize, ok := d.GetOk("key_size")
 		if !ok {

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/data-plane/keyvault/7-4/deletedkeys"
 	"github.com/hashicorp/go-azure-sdk/data-plane/keyvault/7-4/keys"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/structure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -106,6 +109,12 @@ func resourceKeyVaultKeyRead(d *pluginsdk.ResourceData, meta interface{}) error 
 
 			d.Set("curve", string(pointer.From(key.Crv)))
 		}
+
+		data, err := flattenKeyVaultKeyReleasePolicy(resp.Model.ReleasePolicy)
+		if err != nil {
+			return fmt.Errorf("flattening `release_policy`: %+v", err)
+		}
+		d.Set("release_policy", data)
 
 		if attributes := resp.Model.Attributes; attributes != nil {
 			notBeforeDate := ""

@@ -26,7 +26,8 @@ import (
 )
 func resourceNetAppAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).NetApp.AccountClient
-	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
+
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
 	id, err := netappaccounts.ParseNetAppAccountID(d.Id())
@@ -37,19 +38,34 @@ func resourceNetAppAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) er
 	locks.ByID(id.ID())
 	defer locks.UnlockByID(id.ID())
 
-	update := netappaccounts.NetAppAccountPatch{
-		Properties: &netappaccounts.AccountProperties{},
+	existing, err := client.AccountsGet(ctx, *id)
+	if err != nil {
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+
+	if existing.Model == nil {
+		return fmt.Errorf("retrieving %s: `model` was nil", id)
+	}
+
+	if existing.Model.Properties == nil {
+		return fmt.Errorf("retrieving %s: `properties` was nil", id)
+	}
+
+	if ad := existing.Model.Properties.ActiveDirectories; ad != nil && len(*ad) > 0 {
+		// The API doesn't return these, so we'll set these values based on config.
+		// If there are no changes to the `active_directory` block this ensures we don't unintentionally wipe these values
+		existingAD := (*ad)[0]
+		existingAD.ServerRootCACertificate = pointer.To(d.Get("active_directory.0.server_root_ca_certificate").(string))
+		existingAD.Password = pointer.To(d.Get("active_directory.0.password").(string))
+		existing.Model.Properties.ActiveDirectories = pointer.To([]netappaccounts.ActiveDirectory{existingAD})
 	}
 
 	if d.HasChange("active_directory") {
-		activeDirectoriesRaw := d.Get("active_directory").([]interface{})
-		activeDirectories := expandNetAppActiveDirectories(activeDirectoriesRaw)
-		update.Properties.ActiveDirectories = activeDirectories
+		existing.Model.Properties.ActiveDirectories = expandNetAppActiveDirectories(d.Get("active_directory").([]interface{}))
 	}
 
 	if d.HasChange("tags") {
-		tagsRaw := d.Get("tags").(map[string]interface{})
-		update.Tags = tags.Expand(tagsRaw)
+		existing.Model.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
 	}
 
 	if d.HasChange("identity") {
@@ -57,11 +73,10 @@ func resourceNetAppAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) er
 		if err != nil {
 			return fmt.Errorf("expanding `identity`: %+v", err)
 		}
-
-		update.Identity = anfAccountIdentity
+		existing.Model.Identity = anfAccountIdentity
 	}
 
-	if err = client.AccountsUpdateThenPoll(ctx, *id, update); err != nil {
+	if err := client.AccountsCreateOrUpdateThenPoll(ctx, *id, *existing.Model); err != nil {
 		return fmt.Errorf("updating %s: %+v", id.ID(), err)
 	}
 

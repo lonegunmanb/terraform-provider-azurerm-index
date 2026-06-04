@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/data-plane/keyvault/7-4/deletedkeys"
 	"github.com/hashicorp/go-azure-sdk/data-plane/keyvault/7-4/keys"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/structure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -134,6 +137,29 @@ func resourceKeyVaultKey() *pluginsdk.Resource {
 				Type:         pluginsdk.TypeString,
 				Optional:     true,
 				ValidateFunc: validation.IsRFC3339Time,
+			},
+
+			"release_policy": {
+				Type:     pluginsdk.TypeList,
+				Optional: true,
+				ForceNew: true,
+				MaxItems: 1,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"json": {
+							Type:             pluginsdk.TypeString,
+							Required:         true,
+							ValidateFunc:     validation.StringIsJSON,
+							DiffSuppressFunc: pluginsdk.SuppressJsonDiff,
+						},
+
+						"immutable": {
+							Type:     pluginsdk.TypeBool,
+							Optional: true,
+							Default:  false,
+						},
+					},
+				},
 			},
 
 			"rotation_policy": {
@@ -267,6 +293,48 @@ func resourceKeyVaultKey() *pluginsdk.Resource {
 
 				return false
 			}),
+			func(_ context.Context, d *pluginsdk.ResourceDiff, _ interface{}) error {
+				if p := d.Get("release_policy").([]any); len(p) > 0 {
+					if t := d.Get("key_type").(string); !slices.Contains([]string{string(keys.JsonWebKeyTypeRSANegativeHSM), string(keys.JsonWebKeyTypeECNegativeHSM)}, t) {
+						return fmt.Errorf("when `release_policy` is set, `key_type` must be `RSA-HSM` or `EC-HSM`, got `%s`", t)
+					}
+
+					if d.Id() != "" {
+						if d.HasChange("release_policy.0.json") && (!d.HasChange("release_policy.0.immutable") && d.Get("release_policy.0.immutable").(bool)) {
+							// before triggering a resource recreation, confirm it's not just a whitespace difference
+							o, n := d.GetChange("release_policy.0.json")
+							if o != "" {
+								oldMap, err := structure.ExpandJsonFromString(o.(string))
+								if err != nil {
+									return fmt.Errorf("expanding `release_policy.json`: %+v", err)
+								}
+
+								newMap, err := structure.ExpandJsonFromString(n.(string))
+								if err != nil {
+									return fmt.Errorf("expanding updated `release_policy.json`: %+v", err)
+								}
+
+								if !reflect.DeepEqual(oldMap, newMap) {
+									if err := d.ForceNew("release_policy.0.json"); err != nil {
+										return err
+									}
+								}
+							}
+						}
+
+						if d.HasChange("release_policy.0.immutable") {
+							o, n := d.GetChange("release_policy.0.immutable")
+							if o.(bool) && !n.(bool) {
+								if err := d.ForceNew("release_policy.0.immutable"); err != nil {
+									return err
+								}
+							}
+						}
+					}
+				}
+
+				return nil
+			},
 		),
 	}
 }
