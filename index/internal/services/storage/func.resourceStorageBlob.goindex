@@ -8,8 +8,11 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
@@ -20,7 +23,7 @@ import (
 	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
 )
 func resourceStorageBlob() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	r := &pluginsdk.Resource{
 		Create: resourceStorageBlobCreate,
 		Read:   resourceStorageBlobRead,
 		Update: resourceStorageBlobUpdate,
@@ -51,18 +54,10 @@ func resourceStorageBlob() *pluginsdk.Resource {
 				ValidateFunc: validation.StringIsNotEmpty,
 			},
 
-			"storage_account_name": {
-				Type:         pluginsdk.TypeString,
-				Required:     true,
-				ForceNew:     true,
-				ValidateFunc: validate.StorageAccountName,
-			},
-
-			"storage_container_name": {
-				Type:         pluginsdk.TypeString,
-				Required:     true,
-				ForceNew:     true,
-				ValidateFunc: validate.StorageContainerName,
+			"storage_container_id": {
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				ForceNew: true,
 			},
 
 			"type": {
@@ -167,4 +162,31 @@ func resourceStorageBlob() *pluginsdk.Resource {
 			return nil
 		},
 	}
+
+	if !features.FivePointOh() {
+		r.Schema["storage_container_id"].Required = false
+		r.Schema["storage_container_id"].Optional = true
+		r.Schema["storage_container_id"].Computed = true
+		r.Schema["storage_container_id"].ConflictsWith = []string{"storage_account_name", "storage_container_name"}
+
+		r.Schema["storage_account_name"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeString,
+			Optional:      true,
+			Computed:      true,
+			ForceNew:      true,
+			ConflictsWith: []string{"storage_container_id"},
+			Deprecated:    "`storage_account_name` has been deprecated in favour of `storage_container_id` and will be removed in v5.0 of the AzureRM Provider",
+		}
+
+		r.Schema["storage_container_name"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeString,
+			Optional:      true,
+			Computed:      true,
+			ForceNew:      true,
+			ConflictsWith: []string{"storage_container_id"},
+			Deprecated:    "`storage_container_name` has been deprecated in favour of `storage_container_id` and will be removed in v5.0 of the AzureRM Provider",
+		}
+	}
+
+	return r
 }

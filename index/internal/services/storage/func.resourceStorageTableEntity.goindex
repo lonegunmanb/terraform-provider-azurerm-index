@@ -6,8 +6,12 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-06-01/tables"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
 	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -15,7 +19,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
 	"github.com/jackofallops/giovanni/storage/2023-11-03/table/entities"
-	"github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
+	legacyTables "github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
 )
 func resourceStorageTableEntity() *pluginsdk.Resource {
 	resource := &pluginsdk.Resource{
@@ -40,7 +44,7 @@ func resourceStorageTableEntity() *pluginsdk.Resource {
 			"storage_table_id": {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
-				ValidateFunc: storageValidate.StorageTableDataPlaneID,
+				ValidateFunc: tables.ValidateTableID,
 			},
 
 			"partition_key": {
@@ -65,6 +69,10 @@ func resourceStorageTableEntity() *pluginsdk.Resource {
 				},
 			},
 		},
+	}
+
+	if !features.FivePointOh() {
+		resource.Schema["storage_table_id"].ValidateFunc = validation.Any(tables.ValidateTableID, storageValidate.StorageTableDataPlaneID)
 	}
 
 	return resource

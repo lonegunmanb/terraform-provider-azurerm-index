@@ -1,9 +1,14 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
 import (
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	rmTables "github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-06-01/tables"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -25,7 +30,7 @@ func dataSourceStorageTableEntity() *pluginsdk.Resource {
 			"storage_table_id": {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
-				ValidateFunc: storageValidate.StorageTableDataPlaneID,
+				ValidateFunc: rmTables.ValidateTableID,
 			},
 
 			"partition_key": {
@@ -48,6 +53,10 @@ func dataSourceStorageTableEntity() *pluginsdk.Resource {
 				},
 			},
 		},
+	}
+
+	if !features.FivePointOh() {
+		resource.Schema["storage_table_id"].ValidateFunc = validation.Any(rmTables.ValidateTableID, storageValidate.StorageTableDataPlaneID)
 	}
 
 	return resource

@@ -6,20 +6,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-06-01/tables"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	storageAccountHelper "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
 	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/jackofallops/giovanni/storage/2023-11-03/table/entities"
-	"github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
+	legacyTables "github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
 )
 func (k storageTableEntitiesDataSource) Arguments() map[string]*pluginsdk.Schema {
 	s := map[string]*pluginsdk.Schema{
 		"storage_table_id": {
 			Type:         pluginsdk.TypeString,
 			Required:     true,
-			ValidateFunc: storageValidate.StorageTableDataPlaneID,
+			ValidateFunc: tables.ValidateTableID,
 		},
 
 		"filter": {
@@ -35,6 +39,10 @@ func (k storageTableEntitiesDataSource) Arguments() map[string]*pluginsdk.Schema
 				Type: pluginsdk.TypeString,
 			},
 		},
+	}
+
+	if !features.FivePointOh() {
+		s["storage_table_id"].ValidateFunc = validation.Any(tables.ValidateTableID, storageValidate.StorageTableDataPlaneID)
 	}
 
 	return s

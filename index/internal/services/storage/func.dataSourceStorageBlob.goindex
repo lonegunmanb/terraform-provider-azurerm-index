@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -14,7 +16,7 @@ import (
 	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/blobs"
 )
 func dataSourceStorageBlob() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	r := &pluginsdk.Resource{
 		Read: dataSourceStorageBlobRead,
 
 		Timeouts: &pluginsdk.ResourceTimeout{
@@ -25,15 +27,9 @@ func dataSourceStorageBlob() *pluginsdk.Resource {
 			"name": {
 				Type:     pluginsdk.TypeString,
 				Required: true,
-				// TODO: add validation
 			},
 
-			"storage_account_name": {
-				Type:     pluginsdk.TypeString,
-				Required: true,
-			},
-
-			"storage_container_name": {
+			"storage_container_id": {
 				Type:     pluginsdk.TypeString,
 				Required: true,
 			},
@@ -71,4 +67,29 @@ func dataSourceStorageBlob() *pluginsdk.Resource {
 			"metadata": MetaDataComputedSchema(),
 		},
 	}
+
+	if !features.FivePointOh() {
+		r.Schema["storage_container_id"].Required = false
+		r.Schema["storage_container_id"].Optional = true
+		r.Schema["storage_container_id"].Computed = true
+		r.Schema["storage_container_id"].ConflictsWith = []string{"storage_account_name", "storage_container_name"}
+
+		r.Schema["storage_account_name"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeString,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"storage_container_id"},
+			Deprecated:    "`storage_account_name` has been deprecated in favour of `storage_container_id` and will be removed in v5.0 of the AzureRM Provider",
+		}
+
+		r.Schema["storage_container_name"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeString,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"storage_container_id"},
+			Deprecated:    "`storage_container_name` has been deprecated in favour of `storage_container_id` and will be removed in v5.0 of the AzureRM Provider",
+		}
+	}
+
+	return r
 }

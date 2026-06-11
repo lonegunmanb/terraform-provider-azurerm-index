@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2024-03-01/webpubsub"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
@@ -30,28 +31,7 @@ func (r CustomDomainWebPubsubResource) Read() sdk.ResourceFunc {
 				return fmt.Errorf("retrieving %s: %+v", id, err)
 			}
 
-			webPubsubId := webpubsub.NewWebPubSubID(id.SubscriptionId, id.ResourceGroupName, id.WebPubSubName).ID()
-
-			state := CustomDomainWebPubsubModel{
-				Name:        id.CustomDomainName,
-				WebPubsubId: webPubsubId,
-			}
-
-			if model := resp.Model; model != nil {
-				props := model.Properties
-				webPubsubCustomCertificateId := ""
-				if props.CustomCertificate.Id != nil {
-					webPubsubCustomCertificateID, err := webpubsub.ParseCustomCertificateIDInsensitively(*props.CustomCertificate.Id)
-					if err != nil {
-						return fmt.Errorf("parsing web pubsub custom cert id for %s: %+v", id, err)
-					}
-					webPubsubCustomCertificateId = webPubsubCustomCertificateID.ID()
-				}
-				state.WebPubsubCustomCertificateId = webPubsubCustomCertificateId
-				state.DomainName = props.DomainName
-			}
-
-			return metadata.Encode(&state)
+			return r.flatten(metadata, id, resp.Model)
 		},
 	}
 }
