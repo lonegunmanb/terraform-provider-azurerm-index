@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -73,10 +74,10 @@ func resourceApplicationInsights() *pluginsdk.Resource {
 				}, false),
 			},
 
-			// NOTE: O+C A Log Analytics Workspace will be attached to the Application Insight by default, which should be computed=true
 			"workspace_id": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				// NOTE: O+C A Log Analytics Workspace will be attached to the Application Insight by default, which should be computed=true
 				Computed:     true,
 				ValidateFunc: workspaces.ValidateWorkspaceID,
 			},
@@ -105,10 +106,10 @@ func resourceApplicationInsights() *pluginsdk.Resource {
 				ValidateFunc: validation.FloatBetween(0, 100),
 			},
 
-			"disable_ip_masking": {
+			"ip_masking_enabled": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
-				Default:  false,
+				Default:  true,
 			},
 
 			"tags": commonschema.Tags(),
@@ -120,9 +121,10 @@ func resourceApplicationInsights() *pluginsdk.Resource {
 				ValidateFunc: validation.FloatAtLeast(0),
 			},
 
-			"daily_data_cap_notifications_disabled": {
+			"daily_data_cap_notifications_enabled": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
+				Default:  true,
 			},
 
 			"app_id": {
@@ -142,10 +144,10 @@ func resourceApplicationInsights() *pluginsdk.Resource {
 				Sensitive: true,
 			},
 
-			"local_authentication_disabled": {
+			"local_authentication_enabled": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
-				Default:  false,
+				Default:  true,
 			},
 
 			"internet_ingestion_enabled": {
@@ -165,6 +167,53 @@ func resourceApplicationInsights() *pluginsdk.Resource {
 				Default:  false,
 			},
 		},
+	}
+
+	if !features.FivePointOh() {
+		resource.Schema["local_authentication_disabled"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeBool,
+			Optional:      true,
+			Computed:      true,
+			Deprecated:    "`local_authentication_disabled` has been deprecated in favour of `local_authentication_enabled` and will be removed in v5.0 of the AzureRM Provider",
+			ConflictsWith: []string{"local_authentication_enabled"},
+		}
+
+		resource.Schema["local_authentication_enabled"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeBool,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"local_authentication_disabled"},
+		}
+
+		resource.Schema["disable_ip_masking"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeBool,
+			Optional:      true,
+			Computed:      true,
+			Deprecated:    "`disable_ip_masking` has been deprecated in favour of `ip_masking_enabled` and will be removed in v5.0 of the AzureRM Provider",
+			ConflictsWith: []string{"ip_masking_enabled"},
+		}
+
+		resource.Schema["ip_masking_enabled"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeBool,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"disable_ip_masking"},
+		}
+
+		resource.Schema["daily_data_cap_notifications_disabled"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeBool,
+			Optional:      true,
+			Computed:      true,
+			Deprecated:    "`daily_data_cap_notifications_disabled` has been deprecated in favour of `daily_data_cap_notifications_enabled` and will be removed in v5.0 of the AzureRM Provider",
+			ConflictsWith: []string{"daily_data_cap_notifications_enabled"},
+		}
+
+		resource.Schema["daily_data_cap_notifications_enabled"] = &pluginsdk.Schema{
+			Type:          pluginsdk.TypeBool,
+			Optional:      true,
+			Computed:      true,
+			ConflictsWith: []string{"daily_data_cap_notifications_disabled"},
+		}
 	}
 
 	return resource

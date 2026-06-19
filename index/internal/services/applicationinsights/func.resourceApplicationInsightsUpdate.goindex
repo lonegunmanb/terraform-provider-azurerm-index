@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -54,12 +55,24 @@ func resourceApplicationInsightsUpdate(d *pluginsdk.ResourceData, meta interface
 		component.Properties.SamplingPercentage = pointer.To(d.Get("sampling_percentage").(float64))
 	}
 
-	if d.HasChange("disable_ip_masking") {
-		component.Properties.DisableIPMasking = pointer.To(d.Get("disable_ip_masking").(bool))
+	if d.HasChange("ip_masking_enabled") {
+		component.Properties.DisableIPMasking = pointer.To(!d.Get("ip_masking_enabled").(bool))
 	}
 
-	if d.HasChange("local_authentication_disabled") {
-		component.Properties.DisableLocalAuth = pointer.To(d.Get("local_authentication_disabled").(bool))
+	if !features.FivePointOh() {
+		if d.HasChange("disable_ip_masking") {
+			component.Properties.DisableIPMasking = pointer.To(d.Get("disable_ip_masking").(bool))
+		}
+	}
+
+	if d.HasChange("local_authentication_enabled") {
+		component.Properties.DisableLocalAuth = pointer.To(!d.Get("local_authentication_enabled").(bool))
+	}
+
+	if !features.FivePointOh() {
+		if d.HasChange("local_authentication_disabled") {
+			component.Properties.DisableLocalAuth = pointer.To(d.Get("local_authentication_disabled").(bool))
+		}
 	}
 
 	if d.HasChange("internet_ingestion_enabled") {
@@ -134,8 +147,14 @@ func resourceApplicationInsightsUpdate(d *pluginsdk.ResourceData, meta interface
 		billingProps.DataVolumeCap.Cap = pointer.To(d.Get("daily_data_cap_in_gb").(float64))
 	}
 
-	if d.HasChange("daily_data_cap_notifications_disabled") {
-		billingProps.DataVolumeCap.StopSendNotificationWhenHitCap = pointer.To(d.Get("daily_data_cap_notifications_disabled").(bool))
+	if d.HasChange("daily_data_cap_notifications_enabled") {
+		billingProps.DataVolumeCap.StopSendNotificationWhenHitCap = pointer.To(!d.Get("daily_data_cap_notifications_enabled").(bool))
+	}
+
+	if !features.FivePointOh() {
+		if d.HasChange("daily_data_cap_notifications_disabled") {
+			billingProps.DataVolumeCap.StopSendNotificationWhenHitCap = pointer.To(d.Get("daily_data_cap_notifications_disabled").(bool))
+		}
 	}
 
 	if _, err = billingClient.ComponentCurrentBillingFeaturesUpdate(ctx, *billingId, *billingProps); err != nil {

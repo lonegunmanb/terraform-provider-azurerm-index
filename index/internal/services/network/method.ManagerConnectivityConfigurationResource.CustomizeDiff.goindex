@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/connectivityconfigurations"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r ManagerConnectivityConfigurationResource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			rd := metadata.ResourceDiff
+
+			if rd.HasChange("connected_group_address_overlap_enabled") {
+				oldVal, newVal := rd.GetChange("connected_group_address_overlap_enabled")
+
+				if oldVal.(bool) && !newVal.(bool) {
+					if err := rd.ForceNew("connected_group_address_overlap_enabled"); err != nil {
+						return err
+					}
+				}
+			}
+
+			topology := rd.Get("connectivity_topology").(string)
+			peeringEnforcementEnabled := rd.Get("peering_enforcement_enabled").(bool)
+
+			if topology == string(connectivityconfigurations.ConnectivityTopologyMesh) &&
+				peeringEnforcementEnabled {
+				return errors.New("`peering_enforcement_enabled` can only be set to `true` when `connectivity_topology` is `HubAndSpoke`")
+			}
+
+			return nil
+		},
+	}
+}

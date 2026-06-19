@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -41,13 +42,22 @@ func (r ManagerConnectivityConfigurationResource) Read() sdk.ResourceFunc {
 			properties := existing.Model.Properties
 
 			state := ManagerConnectivityConfigurationModel{
-				Name:                         id.ConnectivityConfigurationName,
-				NetworkManagerId:             connectivityconfigurations.NewNetworkManagerID(id.SubscriptionId, id.ResourceGroupName, id.NetworkManagerName).ID(),
-				AppliesToGroups:              flattenConnectivityGroupItemModel(properties.AppliesToGroups),
-				ConnectivityTopology:         properties.ConnectivityTopology,
-				DeleteExistingPeeringEnabled: flattenDeleteExistingPeering(properties.DeleteExistingPeering),
-				GlobalMeshEnabled:            flattenConnectivityConfIsGlobal(properties.IsGlobal),
-				Hub:                          flattenHubModel(properties.Hubs),
+				Name:                                id.ConnectivityConfigurationName,
+				NetworkManagerId:                    connectivityconfigurations.NewNetworkManagerID(id.SubscriptionId, id.ResourceGroupName, id.NetworkManagerName).ID(),
+				AppliesToGroups:                     flattenConnectivityGroupItemModel(properties.AppliesToGroups),
+				ConnectivityTopology:                properties.ConnectivityTopology,
+				DeleteExistingPeeringEnabled:        flattenDeleteExistingPeering(properties.DeleteExistingPeering),
+				GlobalMeshEnabled:                   flattenConnectivityConfIsGlobal(properties.IsGlobal),
+				Hub:                                 flattenHubModel(properties.Hubs),
+				ConnectedGroupAddressOverlapEnabled: true,
+				ConnectedGroupPrivateEndpointsScale: string(connectivityconfigurations.ConnectedGroupPrivateEndpointsScaleStandard),
+				PeeringEnforcementEnabled:           false,
+			}
+
+			if properties.ConnectivityCapabilities != nil {
+				state.ConnectedGroupAddressOverlapEnabled = flattenConnectedGroupAddressOverlap(properties.ConnectivityCapabilities.ConnectedGroupAddressOverlap)
+				state.ConnectedGroupPrivateEndpointsScale = string(properties.ConnectivityCapabilities.ConnectedGroupPrivateEndpointsScale)
+				state.PeeringEnforcementEnabled = flattenPeeringEnforcement(properties.ConnectivityCapabilities.PeeringEnforcement)
 			}
 
 			if properties.Description != nil {

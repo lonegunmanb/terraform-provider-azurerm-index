@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -63,6 +64,8 @@ func (r MsSqlManagedInstanceResource) Create() sdk.ResourceFunc {
 				}
 			}
 
+			isGeneralPurposeV2 := expandMsSqlManagedInstanceGeneralPurposeV2Enabled(model.GeneralPurposeV2Enabled, model.SkuName)
+
 			parameters := managedinstances.ManagedInstance{
 				Sku:      sku,
 				Identity: r.expandIdentity(model.Identity),
@@ -72,7 +75,7 @@ func (r MsSqlManagedInstanceResource) Create() sdk.ResourceFunc {
 					AdministratorLoginPassword:       pointer.To(model.AdministratorLoginPassword),
 					Collation:                        pointer.To(model.Collation),
 					DnsZonePartner:                   pointer.To(model.DnsZonePartnerId),
-					IsGeneralPurposeV2:               expandMsSqlManagedInstanceGeneralPurposeV2Enabled(model.GeneralPurposeV2Enabled, model.SkuName),
+					IsGeneralPurposeV2:               isGeneralPurposeV2,
 					LicenseType:                      pointer.To(managedinstances.ManagedInstanceLicenseType(model.LicenseType)),
 					MaintenanceConfigurationId:       pointer.To(maintenanceConfigId.ID()),
 					MinimalTlsVersion:                pointer.To(model.MinimumTlsVersion),
@@ -90,6 +93,11 @@ func (r MsSqlManagedInstanceResource) Create() sdk.ResourceFunc {
 					HybridSecondaryUsage: pointer.To(managedinstances.HybridSecondaryUsage(model.HybridSecondaryUsage)),
 				},
 				Tags: pointer.To(model.Tags),
+			}
+
+			// If StorageIOps is carried in payload and set to 0, the service will return HTTP 405.
+			if pointer.From(isGeneralPurposeV2) && model.StorageIOps != 0 {
+				parameters.Properties.StorageIOps = pointer.To(model.StorageIOps)
 			}
 
 			if parameters.Identity != nil && len(parameters.Identity.IdentityIds) > 0 {

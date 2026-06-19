@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -210,13 +211,19 @@ func (r MsSqlManagedInstanceResource) Update() sdk.ResourceFunc {
 				props.HybridSecondaryUsage = pointer.To(managedinstances.HybridSecondaryUsage(state.HybridSecondaryUsage))
 			}
 
-			if metadata.ResourceData.HasChanges("general_purpose_v2_enabled", "sku_name") {
-				props.IsGeneralPurposeV2 = expandMsSqlManagedInstanceGeneralPurposeV2Enabled(state.GeneralPurposeV2Enabled, state.SkuName)
+			effectiveIsGeneralPurposeV2 := expandMsSqlManagedInstanceGeneralPurposeV2Enabled(state.GeneralPurposeV2Enabled, state.SkuName)
 
-				// when `general_purpose_v2_enabled` is `nil` or `false`, ensure `storageIOps is not in the request as this is not supported
-				if !pointer.From(props.IsGeneralPurposeV2) {
-					props.StorageIOps = nil
+			if metadata.ResourceData.HasChanges("general_purpose_v2_enabled", "sku_name") {
+				props.IsGeneralPurposeV2 = effectiveIsGeneralPurposeV2
+			}
+
+			// When updating MI from GPv2 to non GPv2, `StorageIOps` is not a valid value in payload.
+			if pointer.From(effectiveIsGeneralPurposeV2) && state.StorageIOps != 0 {
+				if metadata.ResourceData.HasChange("storage_iops") {
+					props.StorageIOps = pointer.To(state.StorageIOps)
 				}
+			} else {
+				props.StorageIOps = nil
 			}
 
 			if err := client.CreateOrUpdateThenPoll(ctx, *id, *existing.Model); err != nil {

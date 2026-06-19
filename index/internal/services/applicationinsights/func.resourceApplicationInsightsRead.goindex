@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/applicationinsights/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -73,9 +74,15 @@ func resourceApplicationInsightsRead(d *pluginsdk.ResourceData, meta interface{}
 			d.Set("app_id", props.AppId)
 			d.Set("instrumentation_key", props.InstrumentationKey)
 			d.Set("sampling_percentage", props.SamplingPercentage)
-			d.Set("disable_ip_masking", props.DisableIPMasking)
+			d.Set("ip_masking_enabled", !pointer.From(props.DisableIPMasking))
+			if !features.FivePointOh() {
+				d.Set("disable_ip_masking", pointer.From(props.DisableIPMasking))
+			}
 			d.Set("connection_string", props.ConnectionString)
-			d.Set("local_authentication_disabled", props.DisableLocalAuth)
+			d.Set("local_authentication_enabled", !pointer.From(props.DisableLocalAuth))
+			if !features.FivePointOh() {
+				d.Set("local_authentication_disabled", pointer.From(props.DisableLocalAuth))
+			}
 			d.Set("internet_ingestion_enabled", pointer.From(props.PublicNetworkAccessForIngestion) == components.PublicNetworkAccessTypeEnabled)
 			d.Set("internet_query_enabled", pointer.From(props.PublicNetworkAccessForQuery) == components.PublicNetworkAccessTypeEnabled)
 			d.Set("force_customer_storage_for_profiler", props.ForceCustomerStorageForProfiler)
@@ -95,7 +102,10 @@ func resourceApplicationInsightsRead(d *pluginsdk.ResourceData, meta interface{}
 	if model := billingResp.Model; model != nil {
 		if props := model.DataVolumeCap; props != nil {
 			d.Set("daily_data_cap_in_gb", props.Cap)
-			d.Set("daily_data_cap_notifications_disabled", props.StopSendNotificationWhenHitCap)
+			d.Set("daily_data_cap_notifications_enabled", !pointer.From(props.StopSendNotificationWhenHitCap))
+			if !features.FivePointOh() {
+				d.Set("daily_data_cap_notifications_disabled", pointer.From(props.StopSendNotificationWhenHitCap))
+			}
 		}
 	}
 

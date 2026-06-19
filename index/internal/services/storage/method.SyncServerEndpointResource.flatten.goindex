@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagesync/2020-03-01/registeredserverresource"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagesync/2020-03-01/serverendpointresource"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r SyncServerEndpointResource) flatten(metadata sdk.ResourceMetaData, id *serverendpointresource.ServerEndpointId, model *serverendpointresource.ServerEndpoint) error {
+	schema := StorageSyncServerEndpointResourceSchema{
+		Name:               id.ServerEndpointName,
+		StorageSyncGroupId: serverendpointresource.NewSyncGroupID(id.SubscriptionId, id.ResourceGroupName, id.StorageSyncServiceName, id.SyncGroupName).ID(),
+	}
+
+	if model != nil {
+		if props := model.Properties; props != nil {
+			schema.RegisteredServerId = pointer.From(props.ServerResourceId)
+			schema.ServerLocalPath = pointer.From(props.ServerLocalPath)
+			schema.VolumeFreeSpacePercent = pointer.From(props.VolumeFreeSpacePercent)
+			schema.CloudTieringEnabled = pointer.From(props.CloudTiering) == serverendpointresource.FeatureStatusOn
+			schema.InitialDownloadPolicy = string(pointer.From(props.InitialDownloadPolicy))
+			schema.LocalCacheMode = string(pointer.From(props.LocalCacheMode))
+			if pointer.From(props.TierFilesOlderThanDays) != 0 {
+				schema.TierFilesOlderThanDays = pointer.From(props.TierFilesOlderThanDays)
+			}
+		}
+	}
+
+	if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+		return err
+	}
+
+	return metadata.Encode(&schema)
+}
