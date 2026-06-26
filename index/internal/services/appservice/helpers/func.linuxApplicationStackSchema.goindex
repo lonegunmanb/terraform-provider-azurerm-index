@@ -1,10 +1,15 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
 import (
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
 func linuxApplicationStackSchema() *pluginsdk.Schema {
-	return &pluginsdk.Schema{
+	if !features.FivePointOh() {
+		linuxApplicationStackConstraint = append(linuxApplicationStackConstraint, "site_config.0.application_stack.0.ruby_version")
+	}
+
+	schema := &pluginsdk.Schema{
 		Type:     pluginsdk.TypeList,
 		Optional: true,
 		Computed: true,
@@ -81,16 +86,6 @@ func linuxApplicationStackSchema() *pluginsdk.Schema {
 					ExactlyOneOf: linuxApplicationStackConstraint,
 				},
 
-				"ruby_version": {
-					Type:     pluginsdk.TypeString,
-					Optional: true,
-					ValidateFunc: validation.StringInSlice([]string{
-						"2.6", // TODO: 4.0 Deprecated - accepted but not offered in the portal. Remove in 4.0
-						"2.7", // TODO: 4.0 EOL 31/03/2023 https://github.com/Azure/app-service-linux-docs/blob/master/Runtime_Support/ruby_support.md Remove Ruby support in 4.0?
-					}, false),
-					ExactlyOneOf: linuxApplicationStackConstraint,
-				},
-
 				"java_version": {
 					Type:     pluginsdk.TypeString,
 					Optional: true,
@@ -156,4 +151,19 @@ func linuxApplicationStackSchema() *pluginsdk.Schema {
 			},
 		},
 	}
+
+	if !features.FivePointOh() {
+		schema.Elem.(*pluginsdk.Resource).Schema["ruby_version"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ValidateFunc: validation.StringInSlice([]string{
+				"2.6", // Deprecated - accepted but not offered in the portal.
+				"2.7", // EOL 31/03/2023 https://github.com/Azure/app-service-linux-docs/blob/master/Runtime_Support/ruby_support.md Remove Ruby support in 4.0?
+			}, false),
+			ExactlyOneOf: linuxApplicationStackConstraint,
+			Deprecated:   "`site_config.application_stack.ruby_version` has been deprecated and will be removed in v5.0 of the AzureRM provider",
+		}
+	}
+
+	return schema
 }

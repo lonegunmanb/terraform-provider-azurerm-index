@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/date"
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/data-plane/batch/2022-01-01-15-0/jobs"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/batchaccount"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
@@ -13,15 +14,21 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/batch/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	batchDataplane "github.com/jackofallops/kermit/sdk/batch/2022-01.15.0/batch"
 )
-func (r BatchJobResource) addJob(ctx context.Context, client *batchDataplane.JobClient, id parse.JobId, job batchDataplane.JobAddParameter) error {
-	deadline, _ := ctx.Deadline()
-	now := time.Now()
-	timeout := deadline.Sub(now)
-	if _, err := client.Add(ctx, job, pointer.To(int32(timeout.Seconds())), nil, nil, &date.TimeRFC1123{Time: now}); err != nil {
-		return fmt.Errorf("creating %s: %v", id, err)
+func (r BatchJobResource) GetEndpoint(ctx context.Context, client *batchaccount.BatchAccountClient, accountID batchaccount.BatchAccountId) (string, error) {
+	account, err := client.Get(ctx, accountID)
+	if err != nil {
+		return "", fmt.Errorf("retrieving %s: %v", accountID, err)
 	}
-	return nil
+
+	endpoint := ""
+	if account.Model != nil && account.Model.Properties != nil {
+		endpoint = "https://" + *account.Model.Properties.AccountEndpoint
+	}
+
+	if endpoint == "" {
+		return "", fmt.Errorf("retrieving %s: unable to determine account data plane endpoint", accountID)
+	}
+
+	return endpoint, nil
 }

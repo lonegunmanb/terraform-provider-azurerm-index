@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-01-01/buckets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-01-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (r NetAppVolumeBucketResource) flatten(metadata sdk.ResourceMetaData, id *buckets.BucketId, bucket *buckets.Bucket) error {
+	volumeID := volumes.NewVolumeID(id.SubscriptionId, id.ResourceGroupName, id.NetAppAccountName, id.CapacityPoolName, id.VolumeName)
+
+	model := netAppModels.NetAppVolumeBucketModel{
+		Name:     id.BucketName,
+		VolumeID: volumeID.ID(),
+	}
+
+	if bucket != nil && bucket.Properties != nil {
+		props := bucket.Properties
+
+		model.Path = pointer.From(props.Path)
+		model.Permissions = string(pointer.From(props.Permissions))
+		model.Status = string(pointer.From(props.Status))
+
+		if props.FileSystemUser != nil {
+			model.FileSystemNfsUser = flattenNetAppBucketNfsUser(props.FileSystemUser.NfsUser)
+			model.FileSystemCifsUsername = flattenNetAppBucketCifsUser(props.FileSystemUser.CifsUser)
+		}
+		model.KeyVault = flattenNetAppBucketAkvDetails(props.AkvDetails)
+
+		if props.Server != nil {
+			model.ServerIPAddress = pointer.From(props.Server.IPAddress)
+			model.ServerCertificateCommonName = pointer.From(props.Server.CertificateCommonName)
+			model.ServerCertificateExpiryDate = pointer.From(props.Server.CertificateExpiryDate)
+		}
+	}
+
+	if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+		return err
+	}
+
+	return metadata.Encode(&model)
+}

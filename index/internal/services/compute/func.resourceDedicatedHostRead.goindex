@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -50,7 +51,16 @@ func resourceDedicatedHostRead(d *pluginsdk.ResourceData, meta interface{}) erro
 		d.Set("sku_name", model.Sku.Name)
 		if props := model.Properties; props != nil {
 			d.Set("auto_replace_on_failure", props.AutoReplaceOnFailure)
-			d.Set("license_type", string(pointer.From(props.LicenseType)))
+
+			if !features.FivePointOh() {
+				d.Set("license_type", pointer.FromEnum(props.LicenseType))
+			} else {
+				licenseType := pointer.FromEnum(props.LicenseType)
+				if licenseType == string(dedicatedhosts.DedicatedHostLicenseTypesNone) {
+					licenseType = ""
+				}
+				d.Set("license_type", licenseType)
+			}
 
 			platformFaultDomain := 0
 			if props.PlatformFaultDomain != nil {

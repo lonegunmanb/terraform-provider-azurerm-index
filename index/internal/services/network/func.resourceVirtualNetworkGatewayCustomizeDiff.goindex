@@ -40,5 +40,47 @@ func resourceVirtualNetworkGatewayCustomizeDiff(ctx context.Context, d *pluginsd
 		}
 	}
 
+	minScaleUnit := d.Get("minimum_scale_unit").(int)
+	maxScaleUnit := d.Get("maximum_scale_unit").(int)
+	sku := d.Get("sku").(string)
+
+	if features.FivePointOh() {
+		if sku == string(virtualnetworkgateways.VirtualNetworkGatewaySkuNameErGwScale) {
+			if minScaleUnit == 0 || maxScaleUnit == 0 {
+				return fmt.Errorf("`minimum_scale_unit` and `maximum_scale_unit` must be set when `sku` is `%s`", virtualnetworkgateways.VirtualNetworkGatewaySkuNameErGwScale)
+			}
+		}
+	}
+
+	// Use RawConfig to determine if the user explicitly set the scale unit fields,
+	// since these are Optional+Computed and d.Get() returns API-stored values from state
+	rawConfig := d.GetRawConfig().AsValueMap()
+	minIsSet := !rawConfig["minimum_scale_unit"].IsNull()
+	maxIsSet := !rawConfig["maximum_scale_unit"].IsNull()
+
+	if minIsSet || maxIsSet {
+		if sku != string(virtualnetworkgateways.VirtualNetworkGatewaySkuNameErGwScale) {
+			return fmt.Errorf("`minimum_scale_unit` and `maximum_scale_unit` are only supported when `sku` is set to `%s`", virtualnetworkgateways.VirtualNetworkGatewaySkuNameErGwScale)
+		}
+
+		if minScaleUnit > maxScaleUnit {
+			return fmt.Errorf("`minimum_scale_unit` (%d) cannot be greater than `maximum_scale_unit` (%d)", minScaleUnit, maxScaleUnit)
+		}
+	}
+
+	// The Azure API can't convert an ExpressRoute gateway between the
+	// availability-zone SKUs (ErGw1AZ/ErGw2AZ/ErGw3AZ/ErGwScale) and the
+	// non-availability-zone SKUs (Standard/HighPerformance/UltraPerformance) in
+	// place; the gateway must be deleted and recreated. An in-place change fails
+	// with `ExpressRouteVirtualNetworkGatewayAutoscaleBoundsNotValid`.
+	if d.Id() != "" && gatewayType == string(virtualnetworkgateways.VirtualNetworkGatewayTypeExpressRoute) && d.HasChange("sku") {
+		oldSku, newSku := d.GetChange("sku")
+		if expressRouteGatewaySkuIsAvailabilityZone(oldSku.(string)) != expressRouteGatewaySkuIsAvailabilityZone(newSku.(string)) {
+			if err := d.ForceNew("sku"); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }

@@ -1,0 +1,100 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-01-01/buckets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-01-01/volumes"
+	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func netAppBucketResourceCommonArguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: netAppValidate.BucketName,
+		},
+
+		"volume_id": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: volumes.ValidateVolumeID,
+		},
+
+		"file_system_nfs_user": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"group_id": {
+						Type:         pluginsdk.TypeInt,
+						Required:     true,
+						ValidateFunc: validation.IntAtLeast(0),
+					},
+					"user_id": {
+						Type:         pluginsdk.TypeInt,
+						Required:     true,
+						ValidateFunc: validation.IntAtLeast(0),
+					},
+				},
+			},
+			ExactlyOneOf: []string{"file_system_nfs_user", "file_system_cifs_username"},
+		},
+
+		"file_system_cifs_username": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: validation.StringIsNotEmpty,
+			ExactlyOneOf: []string{"file_system_nfs_user", "file_system_cifs_username"},
+		},
+
+		"key_vault": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"certificate_key_vault_uri": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.IsURLWithHTTPS,
+					},
+					"certificate_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+					"credentials_key_vault_uri": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.IsURLWithHTTPS,
+					},
+					"credentials_secret_name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+				},
+			},
+		},
+
+		"path": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ForceNew:     true,
+			Default:      "/",
+			ValidateFunc: netAppValidate.BucketPath,
+		},
+
+		"permissions": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			Default:      string(buckets.BucketPermissionsReadOnly),
+			ValidateFunc: validation.StringInSlice(buckets.PossibleValuesForBucketPermissions(), false),
+		},
+	}
+}
