@@ -3,6 +3,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -35,50 +36,40 @@ func expandAfdDomainTlsParameters(d *pluginsdk.ResourceData, input []interface{}
 	certType := v["certificate_type"].(string)
 	secretRaw := v["cdn_frontdoor_secret_id"].(string)
 	secretWasConfigured := false
+	minimumVersionConfigured := false
+	minimumTlsVersionConfigured := false
 
-	minTlsVersion := ""
+	var minTlsVersion string
 
-	// `cdn_frontdoor_secret_id` is Optional+Computed. When `certificate_type` is
-	// ManagedCertificate, the service may populate a value in state even when
-	// the user didn't configure it. Only treat it as user-specified when it
-	// exists in raw config.
 	if rawConfig := d.GetRawConfig(); !rawConfig.IsNull() {
 		tlsConfig := rawConfig.GetAttr("tls")
 		if !tlsConfig.IsNull() && tlsConfig.LengthInt() > 0 {
 			tlsBlock := tlsConfig.AsValueSlice()[0]
 			if !tlsBlock.IsNull() {
 				secretWasConfigured = !tlsBlock.GetAttr("cdn_frontdoor_secret_id").IsNull()
-			}
-		}
-	}
-
-	if features.FivePointOh() {
-		minTlsVersion = v["minimum_version"].(string)
-	}
-
-	if !features.FivePointOh() {
-		if rawConfig := d.GetRawConfig(); !rawConfig.IsNull() {
-			tlsConfig := rawConfig.GetAttr("tls")
-			if !tlsConfig.IsNull() && tlsConfig.LengthInt() > 0 {
-				tlsBlock := tlsConfig.AsValueSlice()[0]
-				if !tlsBlock.IsNull() {
-					switch {
-					case !tlsBlock.GetAttr("minimum_version").IsNull():
-						minTlsVersion = v["minimum_version"].(string)
-					case !tlsBlock.GetAttr("minimum_tls_version").IsNull():
-						minTlsVersion = v["minimum_tls_version"].(string)
-					default:
-						minTlsVersion = string(afdcustomdomains.AfdMinimumTlsVersionTLSOneTwo)
-					}
+				minimumVersionConfigured = !tlsBlock.GetAttr("minimum_version").IsNull()
+				if !features.FivePointOh() {
+					minimumTlsVersionConfigured = !tlsBlock.GetAttr("minimum_tls_version").IsNull()
 				}
 			}
 		}
 	}
 
+	if !features.FivePointOh() {
+		switch {
+		case minimumVersionConfigured:
+			minTlsVersion = v["minimum_version"].(string)
+		case minimumTlsVersionConfigured:
+			minTlsVersion = v["minimum_tls_version"].(string)
+		default:
+			minTlsVersion = string(afdcustomdomains.AfdMinimumTlsVersionTLSOneTwo)
+		}
+	} else {
+		minTlsVersion = v["minimum_version"].(string)
+	}
+
 	cipherSuiteRaw := v["cipher_suite"].([]interface{})
 
-	// NOTE: Cert type has to always be passed in the else you will get a
-	// "AfdDomain.TlsSettings.CertificateType' is required but it was not set" error
 	tls := afdcustomdomains.AFDDomainHTTPSParameters{
 		CertificateType: afdcustomdomains.AfdCertificateType(certType),
 	}
