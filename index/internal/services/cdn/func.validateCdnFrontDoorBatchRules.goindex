@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigins"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rulesets"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func validateCdnFrontDoorBatchRules(input []CdnFrontDoorBatchRuleSetRuleModel) error {
+	names := make(map[string]struct{}, len(input))
+	orders := make(map[int64]struct{}, len(input))
+	lastOrder := int64(math.MinInt64)
+
+	for _, item := range input {
+		if _, exists := names[item.Name]; exists {
+			return fmt.Errorf("the `rule` blocks must have unique `name` values, got duplicate `%s`", item.Name)
+		}
+		names[item.Name] = struct{}{}
+
+		if _, exists := orders[item.Order]; exists {
+			return fmt.Errorf("the `rule` blocks must have unique `order` values, got duplicate `%d`", item.Order)
+		}
+		orders[item.Order] = struct{}{}
+
+		if item.Order < lastOrder {
+			return fmt.Errorf("the `rule` blocks must be declared in ascending `order`, got `%d` before `%d`", lastOrder, item.Order)
+		}
+
+		if err := validateCdnFrontDoorBatchRuleActionCounts(countCdnFrontDoorBatchRuleActions(item.Actions)); err != nil {
+			return err
+		}
+
+		lastOrder = item.Order
+	}
+
+	return nil
+}

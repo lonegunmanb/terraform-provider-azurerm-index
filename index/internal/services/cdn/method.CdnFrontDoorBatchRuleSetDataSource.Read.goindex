@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rulesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (CdnFrontDoorBatchRuleSetDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Cdn.FrontDoorRuleSetsClient
+
+			var state CdnFrontDoorBatchRuleSetDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := rulesets.NewRuleSetID(metadata.Client.Account.SubscriptionId, state.ResourceGroupName, state.ProfileName, state.Name)
+
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if resp.Model != nil && resp.Model.Properties != nil && !pointer.From(resp.Model.Properties.BatchMode) {
+				return fmt.Errorf("%s was not provisioned using batch mode, and cannot be read by this data source, use `azurerm_cdn_frontdoor_rule_set` instead", id)
+			}
+
+			metadata.SetID(&id)
+
+			state.Name = id.RuleSetName
+			state.ProfileName = id.ProfileName
+			state.ResourceGroupName = id.ResourceGroupName
+			state.CdnFrontDoorProfileID = profiles.NewProfileID(id.SubscriptionId, id.ResourceGroupName, id.ProfileName).ID()
+
+			if model := resp.Model; model != nil {
+				if props := model.Properties; props != nil {
+					rulesState, err := flattenCdnFrontDoorBatchRuleSetRules(props.Rules)
+					if err != nil {
+						return fmt.Errorf("flattening `rules`: %+v", err)
+					}
+					state.Rules = rulesState
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

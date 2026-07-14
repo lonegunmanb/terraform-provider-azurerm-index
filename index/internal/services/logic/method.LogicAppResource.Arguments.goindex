@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
@@ -146,16 +147,38 @@ func (r LogicAppResource) Arguments() map[string]*pluginsdk.Schema {
 
 		"storage_account_name": {
 			Type:         pluginsdk.TypeString,
-			Required:     true,
-			ForceNew:     true,
+			Optional:     true,
 			ValidateFunc: storageValidate.StorageAccountName,
+			RequiredWith: []string{
+				"storage_account_access_key",
+			},
+			ExactlyOneOf: []string{
+				"storage_account_name",
+				"storage_key_vault_secret_id",
+			},
 		},
 
 		"storage_account_access_key": {
 			Type:         pluginsdk.TypeString,
-			Required:     true,
+			Optional:     true,
 			Sensitive:    true,
 			ValidateFunc: validation.NoZeroValues,
+			RequiredWith: []string{
+				"storage_account_name",
+			},
+			ConflictsWith: []string{
+				"storage_key_vault_secret_id",
+			},
+		},
+
+		"storage_key_vault_secret_id": {
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeSecret),
+			ExactlyOneOf: []string{
+				"storage_account_name",
+				"storage_key_vault_secret_id",
+			},
 		},
 
 		// Once this property is set, it can not be removed while identity is UserAssigned.

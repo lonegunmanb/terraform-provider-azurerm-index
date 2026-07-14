@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/nginx
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/nginx/2024-11-01-preview/nginxdeployment"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/preflight"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (m DeploymentResource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			rd := metadata.ResourceDiff
+
+			if metadata.Client.Features.EnhancedValidation.PreflightEnabled {
+				// Only perform preflight validation if there are changes. This avoids validation failures and
+				// additional API calls for resources that are unchanged between plan invocations
+				if len(rd.GetChangedKeysPrefix("")) > 0 || rd.Id() == "" {
+					var model DeploymentModel
+					if err := metadata.DecodeDiff(&model); err != nil {
+						return err
+					}
+
+					req, err := expandCreateForNginxDeployment(model)
+					if err != nil {
+						return err
+					}
+
+					id := nginxdeployment.NewNginxDeploymentID(metadata.Client.Account.SubscriptionId, model.ResourceGroupName, model.Name)
+
+					preflightValidate, err := preflight.NewValidationRequest(pointer.To(model.Location), pointer.To(id), "2024-11-01-preview", req)
+					if err != nil {
+						return fmt.Errorf("constructing preflight validation request: %w", err)
+					}
+
+					if err = preflightValidate.ValidateResource(ctx, metadata); err != nil {
+						return err
+					}
+				}
+			}
+
+			return nil
+		},
+	}
+}

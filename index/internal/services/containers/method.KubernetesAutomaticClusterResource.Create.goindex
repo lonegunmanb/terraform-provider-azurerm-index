@@ -1,0 +1,84 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-04-01/managedclusters"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r KubernetesAutomaticClusterResource) Create() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 90 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			clusterClient := metadata.Client.Containers.KubernetesClustersClient_v2026_04_01
+			subscriptionID := metadata.Client.Account.SubscriptionId
+
+			var model KubernetesAutomaticClusterModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := commonids.NewKubernetesClusterID(subscriptionID, model.ResourceGroupName, model.Name)
+
+			if !metadata.Client.Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
+				existing, err := clusterClient.Get(ctx, id)
+				if err != nil && !response.WasNotFound(existing.HttpResponse) {
+					return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+				}
+				if !response.WasNotFound(existing.HttpResponse) {
+					return metadata.ResourceRequiresImport(r.ResourceType(), id)
+				}
+			}
+
+			clusterIdentity, err := identity.ExpandSystemOrUserAssignedMapFromModel(model.Identity)
+			if err != nil {
+				return fmt.Errorf("expanding identity: %+v", err)
+			}
+
+			parameters := managedclusters.ManagedCluster{
+				Location: location.Normalize(model.Location),
+				Sku: &managedclusters.ManagedClusterSKU{
+					Name: pointer.To(managedclusters.ManagedClusterSKUNameAutomatic),
+					Tier: pointer.To(managedclusters.ManagedClusterSKUTierStandard),
+				},
+				Properties: &managedclusters.ManagedClusterProperties{
+					ApiServerAccessProfile: expandKubernetesAutomaticClusterAPIAccessProfile(model),
+					HostedSystemProfile:    expandKubernetesAutomaticClusterHostedSystemProfile(model.HostedSystemProfile),
+					IngressProfile:         expandKubernetesAutomaticClusterWebAppRoutingIngress(model.WebAppRoutingIngress),
+					ServiceMeshProfile:     expandKubernetesAutomaticClusterServiceMeshProfile(model.ServiceMeshProfile, nil),
+				},
+				Identity: clusterIdentity,
+				Tags:     tags.Expand(model.Tags),
+			}
+
+			if err := clusterClient.CreateOrUpdateCallbackThenPoll(ctx, id, parameters, managedclusters.DefaultCreateOrUpdateOperationOptions(), metadata.SetIDAndIdentityCallback(&id)); err != nil {
+				return fmt.Errorf("creating %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+			if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, &id); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	}
+}

@@ -1,0 +1,268 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-04-01/managedclusters"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r KubernetesAutomaticClusterResource) Arguments() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"name": {
+			Type:         pluginsdk.TypeString,
+			Required:     true,
+			ForceNew:     true,
+			ValidateFunc: containerValidate.KubernetesClusterName,
+		},
+
+		"resource_group_name": commonschema.ResourceGroupName(),
+
+		"location": commonschema.Location(),
+
+		"identity": commonschema.SystemOrUserAssignedIdentityRequired(),
+
+		"api_server_access": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"authorized_ip_ranges": {
+						Type:     pluginsdk.TypeSet,
+						Optional: true,
+						AtLeastOneOf: []string{
+							"api_server_access.0.authorized_ip_ranges",
+							"api_server_access.0.subnet_id",
+						},
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeString,
+							ValidateFunc: validate.CIDR,
+						},
+						ConflictsWith: []string{"private_cluster"},
+					},
+
+					"subnet_id": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						AtLeastOneOf: []string{
+							"api_server_access.0.authorized_ip_ranges",
+							"api_server_access.0.subnet_id",
+						},
+						ValidateFunc: commonids.ValidateSubnetID,
+					},
+				},
+			},
+		},
+
+		"hosted_system": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			// O+C if no subnet ids are supplied, it will return the new, managed subnet ids
+			Computed: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"node_subnet_id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ForceNew:     true,
+						ValidateFunc: commonids.ValidateSubnetID,
+					},
+
+					"system_node_subnet_id": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ForceNew:     true,
+						ValidateFunc: commonids.ValidateSubnetID,
+					},
+				},
+			},
+		},
+
+		"private_cluster": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"public_fully_qualified_domain_name_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						Default:  false,
+					},
+
+					"private_dns_zone_id": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						ForceNew: true,
+						Default:  "System",
+						ValidateFunc: validation.Any(
+							privatezones.ValidatePrivateDnsZoneID,
+							validation.StringInSlice([]string{
+								"System",
+								"None",
+							}, false),
+						),
+					},
+				},
+			},
+		},
+
+		"service_mesh": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"internal_ingress_gateway_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						Default:  false,
+					},
+
+					"external_ingress_gateway_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+						Default:  false,
+					},
+
+					"proxy_redirect_mechanism": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Default:      managedclusters.ProxyRedirectionMechanismInitContainers,
+						ValidateFunc: validation.StringInSlice(managedclusters.PossibleValuesForProxyRedirectionMechanism(), false),
+					},
+
+					"certificate_authority": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						MaxItems: 1,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"key_vault_id": commonschema.ResourceIDReferenceRequired(&commonids.KeyVaultId{}),
+
+								"root_certificate_object_name": {
+									Type:         pluginsdk.TypeString,
+									Required:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+
+								"certificate_chain_object_name": {
+									Type:         pluginsdk.TypeString,
+									Required:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+
+								"certificate_object_name": {
+									Type:         pluginsdk.TypeString,
+									Required:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+
+								"key_object_name": {
+									Type:         pluginsdk.TypeString,
+									Required:     true,
+									ValidateFunc: validation.StringIsNotEmpty,
+								},
+							},
+						},
+					},
+					"revisions": {
+						Type:     pluginsdk.TypeList,
+						Required: true,
+						MinItems: 1,
+						MaxItems: 2,
+						Elem: &pluginsdk.Schema{
+							Type:         pluginsdk.TypeString,
+							ValidateFunc: validation.StringStartsWithOneOf("asm-"),
+						},
+					},
+				},
+			},
+		},
+
+		"web_app_routing_ingress": {
+			Type:     pluginsdk.TypeList,
+			Optional: true,
+			// NOTE: O+C - Azure provides default ingress configuration if not specified
+			Computed: true,
+			MaxItems: 1,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"dns_zone_ids": {
+						Type:     pluginsdk.TypeList,
+						Optional: true,
+						Elem: &pluginsdk.Schema{
+							Type: pluginsdk.TypeString,
+							ValidateFunc: validation.Any(
+								dnsValidate.ValidateDnsZoneID,
+								privatezones.ValidatePrivateDnsZoneID,
+							),
+						},
+					},
+
+					"default_nginx_controller": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						ValidateFunc: validation.StringInSlice([]string{
+							string(managedclusters.NginxIngressControllerTypeAnnotationControlled),
+							string(managedclusters.NginxIngressControllerTypeInternal),
+							string(managedclusters.NginxIngressControllerTypeExternal),
+						}, false),
+						AtLeastOneOf: []string{"web_app_routing_ingress.0.default_nginx_controller", "web_app_routing_ingress.0.istio_enabled"},
+					},
+
+					"istio_enabled": {
+						Type:         pluginsdk.TypeBool,
+						Optional:     true,
+						Default:      false,
+						AtLeastOneOf: []string{"web_app_routing_ingress.0.default_nginx_controller", "web_app_routing_ingress.0.istio_enabled"},
+					},
+
+					"web_app_routing_identity": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"client_id": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+
+								"object_id": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+
+								"user_assigned_identity_id": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+
+		"tags": commonschema.Tags(),
+	}
+}

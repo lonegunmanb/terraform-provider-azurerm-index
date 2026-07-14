@@ -2,6 +2,7 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/provider
 import (
 	"os"
 
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -9,6 +10,12 @@ import (
 func expandFeatures(input []interface{}) features.UserFeatures {
 	// these are the defaults if omitted from the config
 	featuresMap := features.Default()
+
+	// populate settings that can be set by env vars _before_ we take the escape hatch for an empty `features` block
+	featuresMap.EnhancedValidation.Locations = features.EnhancedValidationLocationsEnabled()
+	featuresMap.EnhancedValidation.ResourceProviders = features.EnhancedValidationResourceProvidersEnabled()
+	featuresMap.EnhancedValidation.PreflightEnabled = features.EnhancedValidationPreflightEnabled()
+	featuresMap.EnhancedValidation.LocationFallback = features.EnhancedValidationLocationFallback()
 
 	if len(input) == 0 || input[0] == nil {
 		return featuresMap
@@ -269,6 +276,37 @@ func expandFeatures(input []interface{}) features.UserFeatures {
 			databricksRaw := items[0].(map[string]interface{})
 			if v, ok := databricksRaw["force_delete"]; ok {
 				featuresMap.DatabricksWorkspace.ForceDelete = v.(bool)
+			}
+		}
+	}
+
+	if raw, ok := val["enhanced_validation"]; ok {
+		items := raw.([]interface{})
+		if len(items) > 0 && items[0] != nil {
+			evRaw := items[0].(map[string]interface{})
+			if v, ok := evRaw["locations"]; ok {
+				featuresMap.EnhancedValidation.Locations = v.(bool)
+			}
+			if v, ok := evRaw["resource_providers"]; ok {
+				featuresMap.EnhancedValidation.ResourceProviders = v.(bool)
+			}
+			if v, ok := evRaw["preflight_enabled"]; ok {
+				featuresMap.EnhancedValidation.PreflightEnabled = v.(bool) && features.FivePointOh() // If we're not in 5.0 mode, ignore setting this to true.
+			}
+			if v, ok := evRaw["preflight_location_fallback"]; ok {
+				if vStr, ok := v.(string); ok && vStr != "" {
+					featuresMap.EnhancedValidation.LocationFallback = pointer.To(vStr)
+				}
+			}
+		}
+	}
+
+	if raw, ok := val["servicebus"]; ok {
+		items := raw.([]interface{})
+		if len(items) > 0 {
+			servicebusRaw := items[0].(map[string]interface{})
+			if v, ok := servicebusRaw["auto_delete_subscription_default_rule"]; ok {
+				featuresMap.ServiceBus.AutoDeleteSubscriptionDefaultRule = v.(bool)
 			}
 		}
 	}

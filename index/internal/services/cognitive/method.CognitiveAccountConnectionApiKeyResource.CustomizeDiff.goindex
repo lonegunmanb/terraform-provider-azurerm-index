@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2026-03-01/accountconnectionresource"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r CognitiveAccountConnectionApiKeyResource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model CognitiveAccountConnectionApiKeyModel
+			if err := metadata.DecodeDiff(&model); err != nil {
+				return fmt.Errorf("decoding diff: %+v", err)
+			}
+
+			if model.Category != string(accountconnectionresource.ConnectionCategoryOpenAI) &&
+				model.Category != string(accountconnectionresource.ConnectionCategoryPinecone) &&
+				model.Category != string(accountconnectionresource.ConnectionCategorySerp) &&
+				metadata.ResourceDiff.GetRawConfig().GetAttr("target").IsNull() {
+				return fmt.Errorf("`target` must be specified when `category` is `%s`", model.Category)
+			}
+
+			return nil
+		},
+	}
+}

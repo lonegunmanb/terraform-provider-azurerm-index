@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigingroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rulesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func cdnFrontDoorBatchRuleSetRuleUsesCache(input map[string]interface{}) bool {
+	actionsRaw, ok := input["actions"].([]interface{})
+	if !ok || len(actionsRaw) == 0 || actionsRaw[0] == nil {
+		return false
+	}
+
+	actions, ok := actionsRaw[0].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	routeOverrides, ok := actions["route_configuration_override"].([]interface{})
+	if !ok || len(routeOverrides) == 0 || routeOverrides[0] == nil {
+		return false
+	}
+
+	routeOverride, ok := routeOverrides[0].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	cachingList, ok := routeOverride["caching"].([]interface{})
+	if !ok {
+		return false
+	}
+
+	caching, ok := cachingList[0].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	cacheBehaviour, ok := caching["behaviour"].(string)
+	if !ok {
+		return false
+	}
+
+	return cacheBehaviour != RuleCacheBehaviorDisabled
+}

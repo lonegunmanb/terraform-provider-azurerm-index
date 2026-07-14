@@ -10,7 +10,6 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
-	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
@@ -64,7 +63,7 @@ func resourceContainerRegistryUpdate(d *pluginsdk.ResourceData, meta interface{}
 	if d.HasChange("network_rule_set") {
 		networkRuleSet := expandNetworkRuleSet(d.Get("network_rule_set").([]interface{}))
 		if networkRuleSet != nil && isBasicSku {
-			return fmt.Errorf("`network_rule_set_set` can only be specified for a Premium Sku. If you are reverting from a Premium to Basic SKU plese set network_rule_set = []")
+			return fmt.Errorf("`network_rule_set` can only be specified for a Premium Sku. If you are reverting from a Premium to Basic SKU plese set network_rule_set = []")
 		}
 
 		payload.Properties.NetworkRuleSet = networkRuleSet
@@ -95,6 +94,7 @@ func resourceContainerRegistryUpdate(d *pluginsdk.ResourceData, meta interface{}
 	policyKeys := []string{
 		"quarantine_policy_enabled",
 		"export_policy_enabled",
+		"azuread_authentication_as_arm_policy_enabled",
 	}
 
 	policyKeys = append(policyKeys, []string{"retention_policy_in_days", "trust_policy_enabled"}...)
@@ -152,6 +152,10 @@ func resourceContainerRegistryUpdate(d *pluginsdk.ResourceData, meta interface{}
 		}
 	}
 
+	if d.HasChange("azuread_authentication_as_arm_policy_enabled") {
+		payload.Properties.Policies.AzureADAuthenticationAsArmPolicy = expandAadAuthAsArmPolicy(d.Get("azuread_authentication_as_arm_policy_enabled").(bool))
+	}
+
 	if d.HasChange("admin_enabled") {
 		payload.Properties.AdminUserEnabled = pointer.To(d.Get("admin_enabled").(bool))
 	}
@@ -170,6 +174,14 @@ func resourceContainerRegistryUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 	if d.HasChange("network_rule_bypass_option") {
 		payload.Properties.NetworkRuleBypassOptions = pointer.To(registries.NetworkRuleBypassOptions(d.Get("network_rule_bypass_option").(string)))
+	}
+
+	if d.HasChange("role_assignment_mode") {
+		payload.Properties.RoleAssignmentMode = pointer.ToEnum[registries.RoleAssignmentMode](d.Get("role_assignment_mode").(string))
+	}
+
+	if d.HasChange("network_rule_bypass_for_tasks_enabled") {
+		payload.Properties.NetworkRuleBypassAllowedForTasks = pointer.To(d.Get("network_rule_bypass_for_tasks_enabled").(bool))
 	}
 
 	if d.HasChange("tags") {

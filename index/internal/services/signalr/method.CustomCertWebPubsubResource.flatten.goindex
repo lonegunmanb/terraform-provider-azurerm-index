@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/signalr
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2024-03-01/webpubsub"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r CustomCertWebPubsubResource) flatten(metadata sdk.ResourceMetaData, id *webpubsub.CustomCertificateId, model *webpubsub.CustomCertificate) error {
+	if model == nil {
+		return fmt.Errorf("retrieving %s: got nil model", *id)
+	}
+
+	vaultBasedUri := model.Properties.KeyVaultBaseUri
+	certName := model.Properties.KeyVaultSecretName
+	certVersion := pointer.From(model.Properties.KeyVaultSecretVersion)
+	nestedItem, err := keyvault.NewNestedItemID(vaultBasedUri, keyvault.NestedItemTypeCertificate, certName, certVersion)
+	if err != nil {
+		return err
+	}
+
+	state := CustomCertWebPubsubModel{
+		Name:               id.CustomCertificateName,
+		CustomCertId:       nestedItem.ID(),
+		WebPubsubId:        webpubsub.NewWebPubSubID(id.SubscriptionId, id.ResourceGroupName, id.WebPubSubName).ID(),
+		CertificateVersion: certVersion,
+	}
+
+	if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+		return err
+	}
+
+	return metadata.Encode(&state)
+}

@@ -47,27 +47,22 @@ func buildClient(ctx context.Context, p *schema.Provider, d *schema.ResourceData
 		if err := providerfeatures.ValidateEnhancedValidationEnvVars(); err != nil {
 			return nil, diag.FromErr(err)
 		}
-	} else if os.Getenv("ARM_PROVIDER_ENHANCED_VALIDATION") != "" {
-		return nil, diag.Errorf("the environment variable `ARM_PROVIDER_ENHANCED_VALIDATION` has been removed in v5.0 of the AzureRM Provider - please use the `enhanced_validation` provider block or the replacement environment variables `ARM_PROVIDER_ENHANCED_VALIDATION_LOCATIONS` and `ARM_PROVIDER_ENHANCED_VALIDATION_RESOURCE_PROVIDERS` instead")
-	}
 
-	// Read enhanced_validation block
-	enhancedValidationLocations := providerfeatures.EnhancedValidationLocationsEnabled()
-	enhancedValidationResourceProviders := providerfeatures.EnhancedValidationResourceProvidersEnabled()
-	if raw, ok := d.GetOk("enhanced_validation"); ok {
-		items := raw.([]interface{})
-		if len(items) > 0 && items[0] != nil {
-			evRaw := items[0].(map[string]interface{})
-			if v, ok := evRaw["locations"]; ok {
-				enhancedValidationLocations = v.(bool)
-			}
-			if v, ok := evRaw["resource_providers"]; ok {
-				enhancedValidationResourceProviders = v.(bool)
+		if raw, ok := d.GetOk("enhanced_validation"); ok {
+			items := raw.([]interface{})
+			if len(items) > 0 && items[0] != nil {
+				evRaw := items[0].(map[string]interface{})
+				if v, ok := evRaw["locations"]; ok {
+					features.EnhancedValidation.Locations = v.(bool)
+				}
+				if v, ok := evRaw["resource_providers"]; ok {
+					features.EnhancedValidation.ResourceProviders = v.(bool)
+				}
 			}
 		}
+	} else if os.Getenv("ARM_PROVIDER_ENHANCED_VALIDATION") != "" {
+		return nil, diag.Errorf("the environment variable `ARM_PROVIDER_ENHANCED_VALIDATION` has been removed in v5.0 of the AzureRM Provider - please use the `enhanced_validation` block inside the `features` block or the replacement environment variables `ARM_PROVIDER_ENHANCED_VALIDATION_LOCATIONS` and `ARM_PROVIDER_ENHANCED_VALIDATION_RESOURCE_PROVIDERS` instead")
 	}
-	features.EnhancedValidation.Locations = enhancedValidationLocations
-	features.EnhancedValidation.ResourceProviders = enhancedValidationResourceProviders
 
 	clientBuilder := clients.ClientBuilder{
 		AuthConfig:                  authConfig,

@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/appserviceplans"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/preflight"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/migration"
@@ -26,6 +27,34 @@ func (r ServicePlanResource) CustomizeDiff() sdk.ResourceFunc {
 		Timeout: 5 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
 			rd := metadata.ResourceDiff
+
+			if metadata.Client.Features.EnhancedValidation.PreflightEnabled {
+				// Only perform preflight validation if there are changes. This avoids validation failures and
+				// additional API calls for resources that are unchanged between plan invocations
+				if len(rd.GetChangedKeysPrefix("")) > 0 || rd.Id() == "" {
+					var model ServicePlanModel
+					if err := metadata.DecodeDiff(&model); err != nil {
+						return err
+					}
+
+					req, err := expandCreateForServicePlan(model)
+					if err != nil {
+						return err
+					}
+
+					id := commonids.NewAppServicePlanID(metadata.Client.Account.SubscriptionId, model.ResourceGroup, model.Name)
+
+					preflightValidate, err := preflight.NewValidationRequest(pointer.To(model.Location), pointer.To(id), "2023-12-01", req)
+					if err != nil {
+						return fmt.Errorf("constructing preflight validation request: %w", err)
+					}
+
+					if err = preflightValidate.ValidateResource(ctx, metadata); err != nil {
+						return err
+					}
+				}
+			}
+
 			servicePlanSku := rd.Get("sku_name").(string)
 			_, newAutoScaleEnabled := rd.GetChange("premium_plan_auto_scale_enabled")
 			_, newEcValue := rd.GetChange("maximum_elastic_worker_count")

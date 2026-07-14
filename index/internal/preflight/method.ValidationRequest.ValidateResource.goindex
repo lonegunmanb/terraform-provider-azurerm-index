@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/preflight
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	preflightvalidation "github.com/hashicorp/terraform-provider-azurerm/internal/preflight/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func (v ValidationRequest) ValidateResource(ctx context.Context, metadata sdk.ResourceMetaData) error {
+	client := metadata.Client.Preflight.PreflightClient
+
+	input := preflightvalidation.ResourceValidationRequest{
+		Location:       v.Location,
+		Provider:       v.Provider,
+		Resources:      []preflightvalidation.ResourceValidationRequestResource{v.Resource},
+		Scope:          v.Scope,
+		Type:           v.Type,
+		ValidationType: pointer.To(preflightvalidation.ResourceValidationTypeArmFull),
+	}
+
+	resp, err := client.ValidateResources(ctx, input)
+	if err != nil {
+		if errorDetail := extractErrorDetail(resp.HttpResponse); errorDetail != nil {
+			return errors.New(*errorDetail)
+		}
+
+		return err
+	}
+
+	if resp.Model == nil {
+		return errors.New("missing model in validate response")
+	}
+
+	model := resp.Model
+
+	if len(model.Properties.ValidatedResources) < 1 {
+		return errors.New("validation did not return an error but there were no validated resources")
+	}
+
+	return nil
+}

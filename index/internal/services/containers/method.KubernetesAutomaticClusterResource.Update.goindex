@@ -1,0 +1,93 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-04-01/managedclusters"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r KubernetesAutomaticClusterResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 90 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			clusterClient := metadata.Client.Containers.KubernetesClustersClient_v2026_04_01
+
+			id, err := commonids.ParseKubernetesClusterID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			existing, err := clusterClient.Get(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if existing.Model == nil {
+				return fmt.Errorf("retrieving %s: `model` was nil", *id)
+			}
+			if existing.Model.Properties == nil {
+				return fmt.Errorf("retrieving %s: `properties` was nil", *id)
+			}
+
+			if existing.Model.Identity != nil && existing.Model.Identity.IdentityIds != nil {
+				for k := range existing.Model.Identity.IdentityIds {
+					existing.Model.Identity.IdentityIds[k] = identity.UserAssignedIdentityDetails{}
+				}
+			}
+
+			var model KubernetesAutomaticClusterModel
+			if err := metadata.Decode(&model); err != nil {
+				return fmt.Errorf("decoding: %w", err)
+			}
+
+			props := existing.Model.Properties
+
+			if metadata.ResourceData.HasChange("tags") {
+				existing.Model.Tags = tags.Expand(model.Tags)
+			}
+
+			if metadata.ResourceData.HasChanges("api_server_access", "private_cluster") {
+				props.ApiServerAccessProfile = expandKubernetesAutomaticClusterAPIAccessProfile(model)
+			}
+
+			if metadata.ResourceData.HasChange("identity") {
+				existing.Model.Identity, err = identity.ExpandSystemOrUserAssignedMapFromModel(model.Identity)
+				if err != nil {
+					return fmt.Errorf("expanding identity: %+v", err)
+				}
+			}
+
+			if metadata.ResourceData.HasChange("service_mesh") {
+				props.ServiceMeshProfile = expandKubernetesAutomaticClusterServiceMeshProfile(model.ServiceMeshProfile, props.ServiceMeshProfile)
+			}
+
+			if metadata.ResourceData.HasChange("web_app_routing_ingress") {
+				props.IngressProfile = expandKubernetesAutomaticClusterWebAppRoutingIngress(model.WebAppRoutingIngress)
+			}
+
+			if err := clusterClient.CreateOrUpdateThenPoll(ctx, *id, *existing.Model, managedclusters.DefaultCreateOrUpdateOperationOptions()); err != nil {
+				return fmt.Errorf("updating %s: %w", *id, err)
+			}
+
+			return nil
+		},
+	}
+}

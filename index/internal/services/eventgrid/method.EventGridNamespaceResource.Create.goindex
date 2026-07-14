@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2023-12-15-preview/namespaces"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2025-02-15/topics"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/preflight"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -43,28 +44,9 @@ func (r EventGridNamespaceResource) Create() sdk.ResourceFunc {
 				}
 			}
 
-			identity, err := identity.ExpandSystemAndUserAssignedMapFromModel(model.Identity)
+			namespace, err := expandCreateForEventGridNamespace(model)
 			if err != nil {
-				return fmt.Errorf("expanding `identity`: %+v", err)
-			}
-
-			namespace := namespaces.Namespace{
-				Identity: identity,
-				Location: location.Normalize(model.Location),
-				Name:     pointer.To(model.Name),
-				Properties: &namespaces.NamespaceProperties{
-					InboundIPRules:      expandInboundIPRules(model.InboundIpRules),
-					PublicNetworkAccess: pointer.To(namespaces.PublicNetworkAccess(model.PublicNetworkAccess)),
-				},
-				Sku: &namespaces.NamespaceSku{
-					Capacity: pointer.To(model.Capacity),
-					Name:     pointer.To(namespaces.SkuName(model.Sku)),
-				},
-				Tags: pointer.To(model.Tags),
-			}
-
-			if len(model.TopicSpacesConfiguration) > 0 {
-				namespace.Properties.TopicSpacesConfiguration = expandTopicSpacesConfiguration(model.TopicSpacesConfiguration)
+				return err
 			}
 
 			if err = client.CreateOrUpdateCallbackThenPoll(ctx, id, namespace, metadata.SetIDCallback(&id)); err != nil {

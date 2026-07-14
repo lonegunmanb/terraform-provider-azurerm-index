@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
@@ -44,13 +45,18 @@ func mergeAppSettings(existing []webapps.NameValuePair, old, new map[string]inte
 	oMap := f(old)
 	cMap := f(new)
 
-	if metadata.ResourceData.HasChanges("storage_account_name", "storage_account_access_key") {
+	if metadata.ResourceData.HasChange("storage_key_vault_secret_id") && metadata.ResourceData.Get("storage_key_vault_secret_id").(string) != "" {
+		kvRef := fmt.Sprintf(helpers.StorageStringFmtKV, metadata.ResourceData.Get("storage_key_vault_secret_id").(string))
+		eMap[storageAppSettingName] = kvRef
+		eMap[contentFileConnStringAppSettingName] = kvRef
+	} else if metadata.ResourceData.HasChanges("storage_account_name", "storage_account_access_key") {
 		accountName := metadata.ResourceData.Get("storage_account_name").(string)
 		accountAccessKey := metadata.ResourceData.Get("storage_account_access_key").(string)
 		suffix, _ := metadata.Client.Account.Environment.Storage.DomainSuffix()
 
-		eMap[storageAppSettingName] = fmt.Sprintf(storageConnectionStringFmt, accountName, accountAccessKey, *suffix)
-		eMap[contentFileConnStringAppSettingName] = fmt.Sprintf(storageConnectionStringFmt, accountName, accountAccessKey, *suffix)
+		conn := fmt.Sprintf(helpers.StorageStringFmt, accountName, accountAccessKey, *suffix)
+		eMap[storageAppSettingName] = conn
+		eMap[contentFileConnStringAppSettingName] = conn
 	}
 
 	if metadata.ResourceData.HasChange("storage_account_share_name") {

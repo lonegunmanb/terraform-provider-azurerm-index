@@ -10,7 +10,6 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
-	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
@@ -31,7 +30,6 @@ import (
 )
 func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Containers.ContainerRegistryClient.Registries
-	registriesClient := meta.(*clients.Client).Containers.ContainerRegistryClient.Registries
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
@@ -51,29 +49,11 @@ func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}
 		}
 	}
 
-	sId := commonids.NewSubscriptionID(subscriptionId)
-	availabilityRequest := registries.RegistryNameCheckRequest{
-		Name: id.RegistryName,
-		Type: "Microsoft.ContainerRegistry/registries",
-	}
-	resp, err := registriesClient.CheckNameAvailability(ctx, sId, availabilityRequest)
-	if err != nil {
-		return fmt.Errorf("checking if the name %q was available: %+v", id.RegistryName, err)
-	}
-
-	if resp.Model == nil && resp.Model.NameAvailable == nil {
-		return fmt.Errorf("checking name availability for %s: model was nil", id)
-	}
-
-	if available := *resp.Model.NameAvailable; !available {
-		return fmt.Errorf("the name %q used for the Container Registry needs to be globally unique and isn't available: %s", id.RegistryName, *resp.Model.Message)
-	}
-
 	sku := d.Get("sku").(string)
 
 	networkRuleSet := expandNetworkRuleSet(d.Get("network_rule_set").([]interface{}))
 	if networkRuleSet != nil && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
-		return fmt.Errorf("`network_rule_set_set` can only be specified for a Premium Sku. If you are reverting from a Premium to Basic SKU please set network_rule_set = []")
+		return fmt.Errorf("`network_rule_set` can only be specified for a Premium Sku. If you are reverting from a Premium to Basic SKU please set network_rule_set = []")
 	}
 
 	identity, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))
@@ -118,16 +98,19 @@ func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}
 			Encryption:       expandEncryption(d.Get("encryption").([]interface{})),
 			NetworkRuleSet:   networkRuleSet,
 			Policies: &registries.Policies{
-				QuarantinePolicy: expandQuarantinePolicy(d.Get("quarantine_policy_enabled").(bool)),
-				RetentionPolicy:  retentionPolicy,
-				TrustPolicy:      trustPolicy,
-				ExportPolicy:     expandExportPolicy(d.Get("export_policy_enabled").(bool)),
+				QuarantinePolicy:                 expandQuarantinePolicy(d.Get("quarantine_policy_enabled").(bool)),
+				RetentionPolicy:                  retentionPolicy,
+				TrustPolicy:                      trustPolicy,
+				ExportPolicy:                     expandExportPolicy(d.Get("export_policy_enabled").(bool)),
+				AzureADAuthenticationAsArmPolicy: expandAadAuthAsArmPolicy(d.Get("azuread_authentication_as_arm_policy_enabled").(bool)),
 			},
-			PublicNetworkAccess:      &publicNetworkAccess,
-			ZoneRedundancy:           &zoneRedundancy,
-			AnonymousPullEnabled:     pointer.To(d.Get("anonymous_pull_enabled").(bool)),
-			DataEndpointEnabled:      pointer.To(d.Get("data_endpoint_enabled").(bool)),
-			NetworkRuleBypassOptions: pointer.To(registries.NetworkRuleBypassOptions(d.Get("network_rule_bypass_option").(string))),
+			PublicNetworkAccess:              &publicNetworkAccess,
+			ZoneRedundancy:                   &zoneRedundancy,
+			AnonymousPullEnabled:             pointer.To(d.Get("anonymous_pull_enabled").(bool)),
+			DataEndpointEnabled:              pointer.To(d.Get("data_endpoint_enabled").(bool)),
+			NetworkRuleBypassOptions:         pointer.To(registries.NetworkRuleBypassOptions(d.Get("network_rule_bypass_option").(string))),
+			RoleAssignmentMode:               pointer.ToEnum[registries.RoleAssignmentMode](d.Get("role_assignment_mode").(string)),
+			NetworkRuleBypassAllowedForTasks: pointer.To(d.Get("network_rule_bypass_for_tasks_enabled").(bool)),
 		},
 
 		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),

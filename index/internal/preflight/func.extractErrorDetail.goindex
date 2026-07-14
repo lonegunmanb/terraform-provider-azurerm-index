@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/preflight
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	preflightvalidation "github.com/hashicorp/terraform-provider-azurerm/internal/preflight/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func extractErrorDetail(resp *http.Response) *string {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	var errorResp errorResponse
+	if err := json.Unmarshal(bodyBytes, &errorResp); err != nil {
+		return nil
+	}
+
+	var lines []string
+
+	// nested error messages
+	var collect func(d ErrorDetail, indent int)
+	collect = func(d ErrorDetail, indent int) {
+		prefix := strings.Repeat("  ", indent)
+		if d.Message != "" {
+			if d.Target != nil && *d.Target != "" {
+				lines = append(lines, fmt.Sprintf("%s%s: %s", prefix, *d.Target, d.Message))
+			} else {
+				lines = append(lines, fmt.Sprintf("%s%s", prefix, d.Message))
+			}
+		}
+		for _, child := range d.Details {
+			collect(child, indent+1)
+		}
+	}
+
+	// top-level error message
+	if errorResp.Error.Message != "" {
+		if errorResp.Error.Code != "" {
+			lines = append(lines, fmt.Sprintf("Error (%s): %s", errorResp.Error.Code, errorResp.Error.Message))
+		} else {
+			lines = append(lines, fmt.Sprintf("Error: %s", errorResp.Error.Message))
+		}
+	}
+
+	for _, d := range errorResp.Error.Details {
+		collect(d, 0)
+	}
+
+	if len(lines) > 0 {
+		msg := strings.Join(lines, "\n")
+		return &msg
+	}
+
+	return nil
+}

@@ -1,0 +1,96 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/preflight
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	preflightvalidation "github.com/hashicorp/terraform-provider-azurerm/internal/preflight/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func parseResourceId(id resourceids.ResourceId) (scope, provider, resourceType, resourceName string, err error) {
+	parser := resourceids.NewParserFromResourceIdType(id)
+	parsed, err := parser.Parse(id.ID(), true)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("parsing resource ID: %w", err)
+	}
+
+	segments := id.Segments()
+	providerIdx := -1
+	for i, s := range segments {
+		if s.Type == resourceids.ResourceProviderSegmentType {
+			providerIdx = i
+			provider = *s.FixedValue
+			break
+		}
+	}
+
+	if providerIdx == -1 {
+		return "", "", "", "", fmt.Errorf("resource ID is missing a resource provider segment")
+	}
+
+	var typeSegs []string
+	var nameSegs []string
+
+	for i := providerIdx + 1; i < len(segments); i++ {
+		s := segments[i]
+		switch s.Type {
+		case resourceids.ConstantSegmentType, resourceids.StaticSegmentType:
+			val, ok := parsed.SegmentNamed(s.Name, true)
+			switch {
+			case ok && val != nil:
+				typeSegs = append(typeSegs, *val)
+			case s.FixedValue != nil:
+				typeSegs = append(typeSegs, *s.FixedValue)
+			case s.PossibleValues != nil && len(*s.PossibleValues) > 0:
+				typeSegs = append(typeSegs, (*s.PossibleValues)[0])
+			}
+		case resourceids.UserSpecifiedSegmentType:
+			if val, ok := parsed.SegmentNamed(s.Name, true); ok && val != nil {
+				nameSegs = append(nameSegs, *val)
+			}
+		}
+	}
+
+	if len(typeSegs) == 0 {
+		return "", "", "", "", fmt.Errorf("resource ID contains no resource type segments after the provider")
+	}
+
+	resourceType = strings.Join(typeSegs, "/")
+	resourceName = strings.Join(nameSegs, "/")
+
+	var scopeSegments []string
+	cutOffIndex := providerIdx - 1
+	if len(typeSegs) > 1 {
+		for i := len(segments) - 1; i >= 0; i-- {
+			if segments[i].Type == resourceids.ConstantSegmentType || segments[i].Type == resourceids.StaticSegmentType {
+				cutOffIndex = i
+				break
+			}
+		}
+	}
+
+	for i := 0; i < cutOffIndex; i++ {
+		s := segments[i]
+		val, ok := parsed.SegmentNamed(s.Name, true)
+		switch {
+		case ok && val != nil:
+			scopeSegments = append(scopeSegments, *val)
+		case s.FixedValue != nil:
+			scopeSegments = append(scopeSegments, *s.FixedValue)
+		case s.PossibleValues != nil && len(*s.PossibleValues) > 0:
+			scopeSegments = append(scopeSegments, (*s.PossibleValues)[0])
+		}
+	}
+
+	if len(scopeSegments) > 0 {
+		scope = "/" + strings.Join(scopeSegments, "/")
+	}
+
+	return scope, provider, resourceType, resourceName, nil
+}

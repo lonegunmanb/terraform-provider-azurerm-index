@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-04-01/managedclusters"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenKubernetesAutomaticClusterWebAppRoutingIngress(input *managedclusters.ManagedClusterIngressProfile) ([]WebAppRoutingIngressModel, error) {
+	if input == nil || input.WebAppRouting == nil || input.WebAppRouting.Enabled == nil || !*input.WebAppRouting.Enabled {
+		return []WebAppRoutingIngressModel{}, nil
+	}
+
+	dnsZoneIDs := make([]string, 0)
+	if input.WebAppRouting.DnsZoneResourceIds != nil {
+		dnsZoneIDs = pointer.From(input.WebAppRouting.DnsZoneResourceIds)
+	}
+
+	defaultNginxController := ""
+	if input.WebAppRouting.Nginx != nil {
+		ingressControllerType := pointer.From(input.WebAppRouting.Nginx.DefaultIngressControllerType)
+		if ingressControllerType != managedclusters.NginxIngressControllerTypeNone {
+			defaultNginxController = string(ingressControllerType)
+		}
+	}
+
+	istioEnabled := input.WebAppRouting.GatewayAPIImplementations != nil &&
+		input.WebAppRouting.GatewayAPIImplementations.AppRoutingIstio != nil &&
+		pointer.From(input.WebAppRouting.GatewayAPIImplementations.AppRoutingIstio.Mode) == managedclusters.GatewayAPIIstioEnabledEnabled
+
+	webAppRoutingIdentity := make([]WebAppRoutingIdentityModel, 0)
+	if input.WebAppRouting.Identity != nil {
+		parsedResourceId, err := commonids.ParseUserAssignedIdentityIDInsensitively(pointer.From(input.WebAppRouting.Identity.ResourceId))
+		if err != nil {
+			return nil, fmt.Errorf("parsing `web_app_routing_ingress.0.web_app_routing_identity.0.user_assigned_identity_id`: %+v", err)
+		}
+
+		webAppRoutingIdentity = append(webAppRoutingIdentity, WebAppRoutingIdentityModel{
+			ClientID:               pointer.From(input.WebAppRouting.Identity.ClientId),
+			ObjectID:               pointer.From(input.WebAppRouting.Identity.ObjectId),
+			UserAssignedIdentityID: parsedResourceId.ID(),
+		})
+	}
+
+	return []WebAppRoutingIngressModel{{
+		DNSZoneIDs:             dnsZoneIDs,
+		IstioEnabled:           istioEnabled,
+		DefaultNginxController: defaultNginxController,
+		WebAppRoutingIdentity:  webAppRoutingIdentity,
+	}}, nil
+}

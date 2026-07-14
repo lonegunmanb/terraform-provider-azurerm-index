@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/virtualnetworks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/appserviceenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/preflight"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func resolvePreflightVnetLocation(ctx context.Context, metadata sdk.ResourceMetaData, model AppServiceEnvironmentV3Model) (vnetLoc string, skip bool) {
+	if model.SubnetId == "" {
+		return "", false
+	}
+
+	subnet, err := commonids.ParseSubnetID(model.SubnetId)
+	if err != nil {
+		metadata.Logger.Info(fmt.Sprintf("skipping preflight validation for %q: 'subnet_id' unknown", model.Name))
+		return "", true
+	}
+
+	vnetId := commonids.NewVirtualNetworkID(subnet.SubscriptionId, subnet.ResourceGroupName, subnet.VirtualNetworkName)
+
+	vnet, err := metadata.Client.Network.VirtualNetworks.Get(ctx, vnetId, virtualnetworks.DefaultGetOperationOptions())
+	if err != nil {
+		if !response.WasNotFound(vnet.HttpResponse) {
+			return "", true
+		}
+
+		// The VNet doesn't exist yet, so we can't determine its location. Rely on the configured
+		// fallback if one is available, otherwise gracefully skip preflight validation.
+		fallback := metadata.Client.Features.EnhancedValidation.LocationFallback
+		if fallback == nil {
+			metadata.Logger.Info(fmt.Sprintf("skipping preflight validation for %q: Virtual Network %q not found and no location fallback configured", model.Name, vnetId.ID()))
+			return "", true
+		}
+
+		metadata.Logger.Info(fmt.Sprintf("Virtual Network %q not found, relying on location fallback for preflight validation", vnetId.ID()))
+		return *fallback, false
+	}
+
+	if vnet.Model == nil || vnet.Model.Location == nil {
+		return "", true
+	}
+
+	return *vnet.Model.Location, false
+}

@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/webpubsub/2024-03-01/webpubsub"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
@@ -38,8 +39,6 @@ func (r CustomCertWebPubsubResource) Read() sdk.ResourceFunc {
 			}
 
 			vaultBasedUri := resp.Model.Properties.KeyVaultBaseUri
-			certName := resp.Model.Properties.KeyVaultSecretName
-
 			subscriptionResourceId := commonids.NewSubscriptionID(id.SubscriptionId)
 			keyVaultIdRaw, err := keyVaultClient.KeyVaultIDFromBaseUrl(ctx, subscriptionResourceId, vaultBasedUri)
 			if err != nil {
@@ -51,25 +50,8 @@ func (r CustomCertWebPubsubResource) Read() sdk.ResourceFunc {
 					return fmt.Errorf("parsing key vault %s: %+v", vaultId, err)
 				}
 			}
-			certVersion := ""
-			if resp.Model.Properties.KeyVaultSecretVersion != nil {
-				certVersion = *resp.Model.Properties.KeyVaultSecretVersion
-			}
-			nestedItem, err := keyvault.NewNestedItemID(vaultBasedUri, keyvault.NestedItemTypeCertificate, certName, certVersion)
-			if err != nil {
-				return err
-			}
 
-			certId := nestedItem.ID()
-
-			state := CustomCertWebPubsubModel{
-				Name:               id.CustomCertificateName,
-				CustomCertId:       certId,
-				WebPubsubId:        webpubsub.NewWebPubSubID(id.SubscriptionId, id.ResourceGroupName, id.WebPubSubName).ID(),
-				CertificateVersion: pointer.From(resp.Model.Properties.KeyVaultSecretVersion),
-			}
-
-			return metadata.Encode(&state)
+			return r.flatten(metadata, id, resp.Model)
 		},
 	}
 }

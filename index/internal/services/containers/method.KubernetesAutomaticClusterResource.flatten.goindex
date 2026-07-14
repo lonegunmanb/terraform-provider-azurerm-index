@@ -1,0 +1,97 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-04-01/managedclusters"
+	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r KubernetesAutomaticClusterResource) flatten(ctx context.Context, metadata sdk.ResourceMetaData, id *commonids.KubernetesClusterId, model *managedclusters.ManagedCluster, includeResource bool) error {
+	client := metadata.Client.Containers.KubernetesClustersClient_v2026_04_01
+
+	state := KubernetesAutomaticClusterModel{
+		Name:              id.ManagedClusterName,
+		ResourceGroupName: id.ResourceGroupName,
+	}
+
+	if model != nil {
+		state.Location = location.Normalize(model.Location)
+
+		state.Tags = tags.Flatten(model.Tags)
+
+		if props := model.Properties; props != nil {
+			state.FQDN = pointer.From(props.Fqdn)
+			state.PortalFQDN = pointer.From(props.AzurePortalFQDN)
+			state.PrivateFQDN = pointer.From(props.PrivateFQDN)
+
+			state.CurrentKubernetesVersion = pointer.From(props.CurrentKubernetesVersion)
+			if props.OidcIssuerProfile != nil {
+				state.OIDCIssuerURL = pointer.From(props.OidcIssuerProfile.IssuerURL)
+			}
+
+			if nodeResourceGroup := pointer.From(props.NodeResourceGroup); nodeResourceGroup != "" {
+				state.NodeResourceGroupID = commonids.NewResourceGroupID(id.SubscriptionId, nodeResourceGroup).ID()
+			}
+			var err error
+
+			state.APIServerAccessProfile, state.PrivateCluster, err = flattenKubernetesAutomaticClusterAPIAccessProfile(props.ApiServerAccessProfile)
+			if err != nil {
+				return fmt.Errorf("flattening API access profile: %w", err)
+			}
+
+			state.HostedSystemProfile = flattenKubernetesAutomaticClusterHostedSystemProfile(props.HostedSystemProfile)
+
+			flattenedIdentity, err := identity.FlattenSystemOrUserAssignedMapToModel(model.Identity)
+			if err != nil {
+				return fmt.Errorf("flattening identity: %w", err)
+			}
+			state.Identity = pointer.From(flattenedIdentity)
+
+			state.ServiceMeshProfile = flattenKubernetesAutomaticClusterServiceMeshProfile(props.ServiceMeshProfile)
+
+			webAppRoutingIngress, err := flattenKubernetesAutomaticClusterWebAppRoutingIngress(props.IngressProfile)
+			if err != nil {
+				return fmt.Errorf("flattening Web App Routing Ingress: %w", err)
+			}
+			state.WebAppRoutingIngress = webAppRoutingIngress
+		}
+
+		if includeResource {
+			credentials, err := client.ListClusterUserCredentials(ctx, *id, managedclusters.ListClusterUserCredentialsOperationOptions{})
+			if err != nil {
+				return fmt.Errorf("retrieving User Credentials for %s: %+v", id, err)
+			}
+			if credentials.Model == nil {
+				return fmt.Errorf("retrieving User Credentials for %s: payload is empty", id)
+			}
+
+			kubeConfigRaw, kubeConfig := flattenKubernetesClusterCredentialsTyped(credentials.Model, "clusterUser")
+			state.KubeConfigRaw = pointer.From(kubeConfigRaw)
+			state.KubeConfig = kubeConfig
+		}
+	}
+
+	if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+		return err
+	}
+
+	return metadata.Encode(&state)
+}

@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storageaccounts"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/shim"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/jackofallops/giovanni/storage/2023-11-03/table/tables"
+)
+func expandTablePropertiesModel(model *AccountTablePropertiesModel, props *tables.StorageServiceProperties) {
+	if len(model.CorsRule) >= 1 {
+		corsRules := make([]tables.CorsRule, 0)
+		for _, corsRule := range model.CorsRule {
+			corsRules = append(corsRules, tables.CorsRule{
+				AllowedOrigins:  strings.Join(corsRule.AllowedOrigins, ","),
+				AllowedMethods:  strings.Join(corsRule.AllowedMethods, ","),
+				AllowedHeaders:  strings.Join(corsRule.AllowedHeaders, ","),
+				ExposedHeaders:  strings.Join(corsRule.ExposedHeaders, ","),
+				MaxAgeInSeconds: int(corsRule.MaxAgeSeconds),
+			})
+		}
+
+		props.Cors.CorsRule = corsRules
+	}
+
+	if len(model.HourMetrics) == 1 {
+		metrics := model.HourMetrics[0]
+		props.HourMetrics.Enabled = true
+		props.HourMetrics.Version = metrics.Version
+		if metrics.RetentionPolicyDays != 0 {
+			props.HourMetrics.RetentionPolicy = tables.RetentionPolicy{
+				Days:    int(metrics.RetentionPolicyDays),
+				Enabled: true,
+			}
+		}
+
+		props.HourMetrics.IncludeAPIs = pointer.To(metrics.IncludeAPIS)
+	}
+
+	if len(model.MinuteMetrics) != 0 {
+		metrics := model.MinuteMetrics[0]
+		props.MinuteMetrics.Enabled = true
+		props.MinuteMetrics.Version = metrics.Version
+		if metrics.RetentionPolicyDays != 0 {
+			props.MinuteMetrics.RetentionPolicy = tables.RetentionPolicy{
+				Days:    int(metrics.RetentionPolicyDays),
+				Enabled: true,
+			}
+		}
+
+		props.MinuteMetrics.IncludeAPIs = pointer.To(metrics.IncludeAPIS)
+	}
+
+	if len(model.Logging) != 0 {
+		logging := model.Logging[0]
+		props.Logging.Version = logging.Version
+		props.Logging.Delete = logging.Delete
+		props.Logging.Read = logging.Read
+		props.Logging.Write = logging.Write
+		if logging.RetentionPolicyDays != 0 {
+			props.Logging.RetentionPolicy = tables.RetentionPolicy{
+				Enabled: true,
+				Days:    int(logging.RetentionPolicyDays),
+			}
+		}
+	}
+}

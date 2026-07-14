@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/appserviceplans"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/preflight"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/migration"
@@ -45,36 +46,9 @@ func (r ServicePlanResource) Create() sdk.ResourceFunc {
 				}
 			}
 
-			appServicePlan := appserviceplans.AppServicePlan{
-				Properties: &appserviceplans.AppServicePlanProperties{
-					PerSiteScaling:      pointer.To(servicePlan.PerSiteScaling),
-					Reserved:            pointer.To(servicePlan.OSType == OSTypeLinux),
-					HyperV:              pointer.To(servicePlan.OSType == OSTypeWindowsContainer),
-					ElasticScaleEnabled: pointer.To(servicePlan.PremiumPlanAutoScaleEnabled),
-					ZoneRedundant:       pointer.To(servicePlan.ZoneBalancing),
-				},
-				Sku: &appserviceplans.SkuDescription{
-					Name: pointer.To(servicePlan.Sku),
-				},
-				Location: location.Normalize(servicePlan.Location),
-				Tags:     pointer.To(servicePlan.Tags),
-			}
-
-			if servicePlan.AppServiceEnvironmentId != "" {
-				if !strings.HasPrefix(servicePlan.Sku, "I") {
-					return errors.New("'App Service Environment' based Service Plans can only be used with Isolated SKUs")
-				}
-				appServicePlan.Properties.HostingEnvironmentProfile = &appserviceplans.HostingEnvironmentProfile{
-					Id: pointer.To(servicePlan.AppServiceEnvironmentId),
-				}
-			}
-
-			if servicePlan.MaximumElasticWorkerCount > 0 {
-				appServicePlan.Properties.MaximumElasticWorkerCount = pointer.To(servicePlan.MaximumElasticWorkerCount)
-			}
-
-			if servicePlan.WorkerCount != 0 {
-				appServicePlan.Sku.Capacity = pointer.To(servicePlan.WorkerCount)
+			appServicePlan, err := expandCreateForServicePlan(servicePlan)
+			if err != nil {
+				return err
 			}
 
 			if err := client.CreateOrUpdateCallbackThenPoll(ctx, id, appServicePlan, metadata.SetIDAndIdentityCallback(&id)); err != nil {

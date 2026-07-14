@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigingroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/profiles"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rulesets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r CdnFrontDoorBatchRuleSetResource) flatten(metadata sdk.ResourceMetaData, id *rulesets.RuleSetId, model *rulesets.RuleSet) error {
+	state := CdnFrontDoorBatchRuleSetModel{
+		ID:                    id.ID(),
+		Name:                  id.RuleSetName,
+		CdnFrontdoorProfileID: profiles.NewProfileID(id.SubscriptionId, id.ResourceGroupName, id.ProfileName).ID(),
+	}
+
+	if model != nil && model.Properties != nil {
+		rulesetsState, err := flattenCdnFrontDoorBatchRuleSetRules(model.Properties.Rules)
+		if err != nil {
+			return fmt.Errorf("flattening `rules`: %+v", err)
+		}
+		state.Rule = rulesetsState
+	}
+
+	if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+		return err
+	}
+
+	return metadata.Encode(&state)
+}

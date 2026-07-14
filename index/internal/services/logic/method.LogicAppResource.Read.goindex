@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
@@ -99,19 +100,10 @@ func (r LogicAppResource) Read() sdk.ResourceFunc {
 
 				connectionString := appSettings[storageAppSettingName]
 
-				for _, part := range strings.Split(connectionString, ";") {
-					if strings.HasPrefix(part, "AccountName") {
-						accountNameParts := strings.Split(part, "AccountName=")
-						if len(accountNameParts) > 1 {
-							state.StorageAccountName = accountNameParts[1]
-						}
-					}
-					if strings.HasPrefix(part, "AccountKey") {
-						accountKeyParts := strings.Split(part, "AccountKey=")
-						if len(accountKeyParts) > 1 {
-							state.StorageAccountAccessKey = accountKeyParts[1]
-						}
-					}
+				if strings.HasPrefix(connectionString, "@Microsoft.KeyVault") {
+					state.StorageKeyVaultSecretID = strings.TrimPrefix(strings.TrimSuffix(connectionString, ")"), "@Microsoft.KeyVault(SecretUri=")
+				} else {
+					state.StorageAccountName, state.StorageAccountAccessKey = helpers.ParseWebJobsStorageString(connectionString)
 				}
 
 				if v, ok := appSettings[functionVersionAppSettingName]; ok {

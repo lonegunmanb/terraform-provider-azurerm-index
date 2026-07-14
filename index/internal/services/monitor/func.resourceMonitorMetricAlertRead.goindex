@@ -15,6 +15,7 @@ import (
 	components "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2020-02-02/componentsapis"
 	webtests "github.com/hashicorp/go-azure-sdk/resource-manager/applicationinsights/2022-06-15/webtestsapis"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2018-03-01/metricalerts"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
@@ -44,58 +45,8 @@ func resourceMonitorMetricAlertRead(d *pluginsdk.ResourceData, meta interface{})
 		return fmt.Errorf("getting Monitor %s: %+v", *id, err)
 	}
 
-	d.Set("name", id.MetricAlertName)
-	d.Set("resource_group_name", id.ResourceGroupName)
-
-	if model := resp.Model; model != nil {
-		props := model.Properties
-		d.Set("enabled", props.Enabled)
-		d.Set("auto_mitigate", props.AutoMitigate)
-		d.Set("description", props.Description)
-		d.Set("severity", props.Severity)
-		d.Set("frequency", props.EvaluationFrequency)
-		d.Set("window_size", props.WindowSize)
-		if err := d.Set("scopes", props.Scopes); err != nil {
-			return fmt.Errorf("setting `scopes`: %+v", err)
-		}
-
-		// Determine the correct criteria schema to set
-		var criteriaSchema string
-		switch c := props.Criteria.(type) {
-		case metricalerts.MetricAlertSingleResourceMultipleMetricCriteria:
-			criteriaSchema = "criteria"
-		case metricalerts.MetricAlertMultipleResourceMultipleMetricCriteria:
-			if c.AllOf == nil || len(*c.AllOf) == 0 {
-				return fmt.Errorf("nil or empty contained criteria of MultipleResourceMultipleMetricCriteria")
-			}
-			// `MinItems` defined in schema guaranteed there is at least one element.
-			switch (*c.AllOf)[0].(type) {
-			case metricalerts.DynamicMetricCriteria:
-				criteriaSchema = "dynamic_criteria"
-			case metricalerts.MetricCriteria:
-				criteriaSchema = "criteria"
-			}
-		case metricalerts.WebtestLocationAvailabilityCriteria:
-			criteriaSchema = "application_insights_web_test_location_availability_criteria"
-		default:
-			return fmt.Errorf("unknown criteria type")
-		}
-
-		monitorMetricAlertCriteria := flattenMonitorMetricAlertCriteria(props.Criteria)
-		// lintignore:R001
-		if err := d.Set(criteriaSchema, monitorMetricAlertCriteria); err != nil {
-			return fmt.Errorf("failed setting `%s`: %+v", criteriaSchema, err)
-		}
-
-		if err := d.Set("action", flattenMonitorMetricAlertAction(props.Actions)); err != nil {
-			return fmt.Errorf("setting `action`: %+v", err)
-		}
-		d.Set("target_resource_type", props.TargetResourceType)
-		d.Set("target_resource_location", props.TargetResourceRegion)
-
-		if err = d.Set("tags", utils.FlattenPtrMapStringString(model.Tags)); err != nil {
-			return err
-		}
+	if err := resourceMonitorMetricAlertFlatten(d, id, resp.Model); err != nil {
+		return err
 	}
 
 	return nil

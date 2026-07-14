@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/virtualnetworks"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/appserviceenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/preflight"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/web/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -63,20 +64,7 @@ func (r AppServiceEnvironmentV3Resource) Create() sdk.ResourceFunc {
 				}
 			}
 
-			envelope := appserviceenvironments.AppServiceEnvironmentResource{
-				Kind:     pointer.To(KindASEV3),
-				Location: location.Normalize(vnetLoc),
-				Properties: &appserviceenvironments.AppServiceEnvironment{
-					DedicatedHostCount:        pointer.To(model.DedicatedHostCount),
-					ClusterSettings:           expandClusterSettingsModel(model.ClusterSetting),
-					InternalLoadBalancingMode: pointer.To(appserviceenvironments.LoadBalancingMode(model.InternalLoadBalancingMode)),
-					VirtualNetwork: appserviceenvironments.VirtualNetworkProfile{
-						Id: model.SubnetId,
-					},
-					ZoneRedundant: pointer.To(model.ZoneRedundant),
-				},
-				Tags: pointer.To(model.Tags),
-			}
+			envelope := expandCreateForAppServiceEnvironmentV3(model, vnetLoc)
 
 			if err := client.CreateOrUpdateCallbackThenPoll(ctx, id, envelope, metadata.SetIDCallback(&id)); err != nil {
 				return fmt.Errorf("creating %s: %+v", id, err)
