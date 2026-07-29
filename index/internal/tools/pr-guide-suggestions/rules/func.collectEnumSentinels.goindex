@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/rules
+import (
+	"fmt"
+	"go/ast"
+	"go/token"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/astutil"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree"
+)
+func collectEnumSentinels(arg ast.Expr, found map[string]bool) {
+	cl, ok := arg.(*ast.CompositeLit)
+	if !ok {
+		return
+	}
+	if at, ok := cl.Type.(*ast.ArrayType); !ok || !astutil.IsStringType(at.Elt) {
+		return
+	}
+	for _, elt := range cl.Elts {
+		tok, isLiteral := enumToken(elt)
+		if tok == "" {
+			continue
+		}
+		for _, s := range noneValues {
+			if isLiteral {
+				if tok == s {
+					found[s] = true
+				}
+			} else if strings.HasSuffix(tok, s) {
+				found[s] = true
+			}
+		}
+	}
+}

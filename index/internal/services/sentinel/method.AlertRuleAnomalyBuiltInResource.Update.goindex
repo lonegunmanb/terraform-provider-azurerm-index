@@ -6,70 +6,60 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2023-09-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2022-10-01-preview/securitymlanalyticssettings"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/azuresdkhacks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
 )
 func (r AlertRuleAnomalyBuiltInResource) Update() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Timeout: 30 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
-			var metaModel AlertRuleAnomalyBuiltInModel
-			if err := metadata.Decode(&metaModel); err != nil {
+			var config AlertRuleAnomalyBuiltInModel
+			if err := metadata.Decode(&config); err != nil {
 				return fmt.Errorf("decoding: %+v", err)
 			}
 
 			client := metadata.Client.Sentinel.AnalyticsSettingsClient
 
-			id, err := parse.MLAnalyticsSettingsID(metadata.ResourceData.Id())
+			id, err := securitymlanalyticssettings.ParseSecurityMLAnalyticsSettingID(metadata.ResourceData.Id())
 			if err != nil {
-				return fmt.Errorf("parsing: %+v", err)
+				return err
 			}
 
-			workspaceId, err := workspaces.ParseWorkspaceID(metaModel.WorkspaceId)
+			existing, err := client.Get(ctx, *id)
 			if err != nil {
-				return fmt.Errorf("parsing workspace id: %+v", err)
+				return fmt.Errorf("retrieving %s: %+v", id, err)
 			}
 
-			existing, err := AlertRuleAnomalyReadWithPredicate(ctx, client.BaseClient, *workspaceId, func(v *azuresdkhacks.AnomalySecurityMLAnalyticsSettings) bool {
-				if v.ID != nil && strings.EqualFold(*v.ID, id.ID()) {
-					return true
-				}
-				return false
-			})
-			if err != nil {
-				return fmt.Errorf("retrieving %s: %+v", *id, err)
-			}
-			if existing == nil {
-				return fmt.Errorf("retrieving %s: not found", *id)
+			if existing.Model == nil {
+				return fmt.Errorf("retrieving %s: `model` was nil", *id)
 			}
 
-			param := securityinsight.AnomalySecurityMLAnalyticsSettings{
-				Kind: securityinsight.KindBasicSecurityMLAnalyticsSettingKindAnomaly,
-				AnomalySecurityMLAnalyticsSettingsProperties: &securityinsight.AnomalySecurityMLAnalyticsSettingsProperties{
-					Description:              existing.Description,
-					DisplayName:              existing.DisplayName,
-					RequiredDataConnectors:   existing.RequiredDataConnectors,
-					Tactics:                  existing.Tactics,
-					Techniques:               existing.Techniques,
-					AnomalyVersion:           existing.AnomalyVersion,
-					Frequency:                existing.Frequency,
-					IsDefaultSettings:        existing.IsDefaultSettings,
-					AnomalySettingsVersion:   existing.AnomalySettingsVersion,
-					SettingsDefinitionID:     existing.SettingsDefinitionID,
-					Enabled:                  pointer.To(metaModel.Enabled),
-					SettingsStatus:           securityinsight.SettingsStatus(metaModel.Mode),
-					CustomizableObservations: existing.CustomizableObservations,
-				},
+			v, ok := existing.Model.(securitymlanalyticssettings.AnomalySecurityMLAnalyticsSettings)
+			if !ok {
+				return fmt.Errorf("retrieving %s: expected type `%T`, got `%T`", id, securitymlanalyticssettings.AnomalySecurityMLAnalyticsSettings{}, existing.Model)
 			}
 
-			if _, err = client.CreateOrUpdate(ctx, id.ResourceGroup, id.WorkspaceName, id.SecurityMLAnalyticsSettingName, param); err != nil {
+			if v.Properties == nil {
+				return fmt.Errorf("retrieving %s: `properties` was nil", id)
+			}
+			props := v.Properties
+
+			rd := metadata.ResourceData
+
+			if rd.HasChange("enabled") {
+				props.Enabled = config.Enabled
+			}
+
+			if rd.HasChange("mode") {
+				props.SettingsStatus = securitymlanalyticssettings.SettingsStatus(config.Mode)
+			}
+
+			if _, err = client.CreateOrUpdate(ctx, *id, v); err != nil {
 				return fmt.Errorf("updating %s: %+v", id, err)
 			}
 

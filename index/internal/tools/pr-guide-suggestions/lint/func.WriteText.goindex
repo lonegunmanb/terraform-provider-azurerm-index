@@ -1,0 +1,27 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/lint
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"path/filepath"
+	"strings"
+)
+func WriteText(w io.Writer, findings []Finding, root string) {
+	for _, f := range findings {
+		loc := f.File
+		if rel, err := filepath.Rel(root, f.File); err == nil && !strings.HasPrefix(rel, "..") {
+			loc = rel
+		}
+		msg := f.Message
+		if f.Resource != "" {
+			msg = f.Resource + ": " + msg
+		}
+		fmt.Fprintf(w, "%s:%d:%d: %s [%s] %s\n", loc, f.Line, f.Column, f.Severity, f.RuleID, msg)
+		if f.Fix != "" {
+			fmt.Fprintf(w, "    → fix: %s\n", f.Fix)
+		}
+	}
+
+	errors, warnings := counts(findings)
+	fmt.Fprintf(w, "\n%d finding(s): %d error(s), %d warning(s)\n", len(findings), errors, warnings)
+}

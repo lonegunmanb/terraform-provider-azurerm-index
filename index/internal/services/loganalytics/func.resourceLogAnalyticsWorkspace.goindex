@@ -16,10 +16,9 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2023-03-11/datacollectionrules"
 	sharedKeyWorkspaces "github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2023-09-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2025-07-01/workspaces"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics/validate"
@@ -87,19 +86,28 @@ func resourceLogAnalyticsWorkspace() *pluginsdk.Resource {
 
 			"identity": commonschema.SystemOrUserAssignedIdentityOptional(),
 
-			"internet_ingestion_enabled": {
-				Type:     pluginsdk.TypeBool,
+			"internet_ingestion_access_type": {
+				Type:     pluginsdk.TypeString,
 				Optional: true,
-				Default:  true,
+				Default:  string(workspaces.PublicNetworkAccessTypeEnabled),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(workspaces.PublicNetworkAccessTypeEnabled),
+					string(workspaces.PublicNetworkAccessTypeDisabled),
+					string(workspaces.PublicNetworkAccessTypeSecuredByPerimeter),
+				}, false),
 			},
 
-			"internet_query_enabled": {
-				Type:     pluginsdk.TypeBool,
+			"internet_query_access_type": {
+				Type:     pluginsdk.TypeString,
 				Optional: true,
-				Default:  true,
+				Default:  string(workspaces.PublicNetworkAccessTypeEnabled),
+				ValidateFunc: validation.StringInSlice([]string{
+					string(workspaces.PublicNetworkAccessTypeEnabled),
+					string(workspaces.PublicNetworkAccessTypeDisabled),
+					string(workspaces.PublicNetworkAccessTypeSecuredByPerimeter),
+				}, false),
 			},
 
-			// TODO 4.0: Clean up lacluster "workaround" to make it more readable and easier to understand. (@WodansSon already has the code written for the clean up)
 			"sku": {
 				Type:     pluginsdk.TypeString,
 				Optional: true,
@@ -121,17 +129,17 @@ func resourceLogAnalyticsWorkspace() *pluginsdk.Resource {
 				Type:     pluginsdk.TypeInt,
 				Optional: true,
 				ValidateFunc: validation.IntInSlice([]int{
-					int(workspaces.CapacityReservationLevelOneHundred),
-					int(workspaces.CapacityReservationLevelTwoHundred),
-					int(workspaces.CapacityReservationLevelThreeHundred),
-					int(workspaces.CapacityReservationLevelFourHundred),
-					int(workspaces.CapacityReservationLevelFiveHundred),
-					int(workspaces.CapacityReservationLevelOneThousand),
-					int(workspaces.CapacityReservationLevelTwoThousand),
-					int(workspaces.CapacityReservationLevelFiveThousand),
-					int(workspaces.CapacityReservationLevelOneZeroThousand),
-					int(workspaces.CapacityReservationLevelTwoFiveThousand),
-					int(workspaces.CapacityReservationLevelFiveZeroThousand),
+					100,
+					200,
+					300,
+					400,
+					500,
+					1000,
+					2000,
+					5000,
+					10000,
+					25000,
+					50000,
 				}),
 			},
 
@@ -179,23 +187,6 @@ func resourceLogAnalyticsWorkspace() *pluginsdk.Resource {
 
 			"tags": commonschema.Tags(),
 		},
-	}
-
-	if !features.FivePointOh() {
-		resource.Schema["local_authentication_disabled"] = &pluginsdk.Schema{
-			Type:          pluginsdk.TypeBool,
-			Optional:      true,
-			Computed:      true,
-			Deprecated:    "`local_authentication_disabled` has been deprecated in favour of `local_authentication_enabled` and will be removed in v5.0 of the AzureRM Provider",
-			ConflictsWith: []string{"local_authentication_enabled"},
-		}
-
-		resource.Schema["local_authentication_enabled"] = &pluginsdk.Schema{
-			Type:          pluginsdk.TypeBool,
-			Optional:      true,
-			Computed:      true,
-			ConflictsWith: []string{"local_authentication_disabled"},
-		}
 	}
 
 	return resource

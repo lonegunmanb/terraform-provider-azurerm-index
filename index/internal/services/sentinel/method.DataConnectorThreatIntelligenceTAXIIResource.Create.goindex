@@ -4,15 +4,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Azure/go-autorest/autorest/date"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2023-09-01/workspaces"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2025-07-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2022-10-01-preview/dataconnectors"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
 )
 func (r DataConnectorThreatIntelligenceTAXIIResource) Create() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
@@ -46,16 +44,16 @@ func (r DataConnectorThreatIntelligenceTAXIIResource) Create() sdk.ResourceFunc 
 			}
 			wspId := *wsp.Model.Properties.CustomerId
 
-			id := parse.NewDataConnectorID(workspaceId.SubscriptionId, workspaceId.ResourceGroupName, workspaceId.WorkspaceName, plan.Name)
+			id := dataconnectors.NewDataConnectorID(workspaceId.SubscriptionId, workspaceId.ResourceGroupName, workspaceId.WorkspaceName, plan.Name)
 
 			if !metadata.Client.Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
-				existing, err := client.Get(ctx, id.ResourceGroup, id.WorkspaceName, id.Name)
+				existing, err := client.Get(ctx, id)
 				if err != nil {
-					if !utils.ResponseWasNotFound(existing.Response) {
+					if !response.WasNotFound(existing.HttpResponse) {
 						return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
 					}
 				}
-				if !utils.ResponseWasNotFound(existing.Response) {
+				if !response.WasNotFound(existing.HttpResponse) {
 					return metadata.ResourceRequiresImport(r.ResourceType(), id)
 				}
 			}
@@ -68,36 +66,34 @@ func (r DataConnectorThreatIntelligenceTAXIIResource) Create() sdk.ResourceFunc 
 			// Format is guaranteed by schema validation
 			lookbackDate, _ := time.Parse(time.RFC3339, plan.LookbackDate)
 
-			params := securityinsight.TiTaxiiDataConnector{
+			params := dataconnectors.TiTaxiiDataConnector{
 				Name: &plan.Name,
-				TiTaxiiDataConnectorProperties: &securityinsight.TiTaxiiDataConnectorProperties{
-					WorkspaceID:      &wspId,
-					FriendlyName:     &plan.DisplayName,
-					TaxiiServer:      &plan.APIRootURL,
-					CollectionID:     &plan.CollectionID,
-					PollingFrequency: securityinsight.PollingFrequency(plan.PollingFrequency),
-					TaxiiLookbackPeriod: &date.Time{
-						Time: lookbackDate,
-					},
-					DataTypes: &securityinsight.TiTaxiiDataConnectorDataTypes{
-						TaxiiClient: &securityinsight.TiTaxiiDataConnectorDataTypesTaxiiClient{
-							State: securityinsight.DataTypeStateEnabled,
+				Properties: &dataconnectors.TiTaxiiDataConnectorProperties{
+					WorkspaceId:         &wspId,
+					FriendlyName:        &plan.DisplayName,
+					TaxiiServer:         &plan.APIRootURL,
+					CollectionId:        &plan.CollectionID,
+					PollingFrequency:    dataconnectors.PollingFrequency(plan.PollingFrequency),
+					TaxiiLookbackPeriod: pointer.To(lookbackDate.Format(time.RFC3339)),
+					DataTypes: dataconnectors.TiTaxiiDataConnectorDataTypes{
+						TaxiiClient: dataconnectors.DataConnectorDataTypeCommon{
+							State: dataconnectors.DataTypeStateEnabled,
 						},
 					},
-					TenantID: &tenantId,
+					TenantId: tenantId,
 				},
-				Kind: securityinsight.KindBasicDataConnectorKindThreatIntelligenceTaxii,
+				Kind: dataconnectors.DataConnectorKindThreatIntelligenceTaxii,
 			}
 
 			if plan.UserName != "" {
-				params.UserName = &plan.UserName
+				params.Properties.UserName = &plan.UserName
 			}
 
 			if plan.Password != "" {
-				params.Password = &plan.Password
+				params.Properties.Password = &plan.Password
 			}
 
-			if _, err = client.CreateOrUpdate(ctx, id.ResourceGroup, id.WorkspaceName, id.Name, params); err != nil {
+			if _, err = client.CreateOrUpdate(ctx, id, params); err != nil {
 				return fmt.Errorf("creating %s: %+v", id, err)
 			}
 

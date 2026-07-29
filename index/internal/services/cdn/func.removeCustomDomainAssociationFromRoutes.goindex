@@ -1,31 +1,28 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
 import (
+	"context"
 	"fmt"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afddomains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/routes"
 	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func removeCustomDomainAssociationFromRoutes(d *pluginsdk.ResourceData, meta interface{}, routes *[]parse.FrontDoorRouteId, customDomainID *parse.FrontDoorCustomDomainId) error {
-	if len(*routes) != 0 && routes != nil {
+func removeCustomDomainAssociationFromRoutes(ctx context.Context, meta interface{}, routes *[]routes.RouteId, customDomainID *afddomains.CustomDomainId) error {
+	if routes != nil && len(*routes) != 0 {
 		for _, route := range *routes {
 			// lock the route resource for update...
-			locks.ByName(route.RouteName, cdnFrontDoorRouteResourceName)
-			defer locks.UnlockByName(route.RouteName, cdnFrontDoorRouteResourceName)
+			locks.ByID(route.ID())
+			defer locks.UnlockByID(route.ID())
 
 			// Check to see if the route still exists and grab its properties...
 			// NOTE: cdnFrontDoorRouteResourceName is defined in the "cdn_frontdoor_route_disable_link_to_default_domain_resource" file
 			// ignore the error because that could just mean that the route has already been deleted...
-			customDomains, props, err := getRouteProperties(d, meta, &route, cdnFrontDoorCustomDomainResourceName)
+			customDomains, props, err := getRouteProperties(ctx, meta, &route, cdnFrontDoorCustomDomainResourceName)
 			if err == nil {
 				// Check to make sure the custom domain is still associated with the route
 				isAssociated := sliceContainsString(customDomains, customDomainID.ID())
@@ -33,7 +30,7 @@ func removeCustomDomainAssociationFromRoutes(d *pluginsdk.ResourceData, meta int
 				if isAssociated {
 					// it is, now removed the association...
 					newDomains := sliceRemoveString(customDomains, customDomainID.ID())
-					if err := updateRouteAssociations(d, meta, &route, newDomains, props, customDomainID); err != nil {
+					if err := updateRouteAssociations(ctx, meta, &route, newDomains, props, customDomainID); err != nil {
 						return err
 					}
 				}

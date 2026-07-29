@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serversecurityalertpolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -17,7 +18,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceMsSqlServerSecurityAlertPolicy() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	r := &pluginsdk.Resource{
 		Create: resourceMsSqlServerSecurityAlertPolicyCreate,
 		Read:   resourceMsSqlServerSecurityAlertPolicyRead,
 		Update: resourceMsSqlServerSecurityAlertPolicyUpdate,
@@ -61,7 +62,7 @@ func resourceMsSqlServerSecurityAlertPolicy() *pluginsdk.Resource {
 				},
 			},
 
-			"email_account_admins": {
+			"email_account_admins_enabled": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
 				Default:  false,
@@ -106,4 +107,27 @@ func resourceMsSqlServerSecurityAlertPolicy() *pluginsdk.Resource {
 			},
 		},
 	}
+
+	if !features.FivePointOh() {
+		r.Schema["email_account_admins"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Computed: true,
+			ConflictsWith: []string{
+				"email_account_admins_enabled",
+			},
+			Deprecated: "`email_account_admins` has been deprecated in favour of `email_account_admins_enabled` and will be removed in v5.0 of the AzureRM Provider",
+		}
+
+		r.Schema["email_account_admins_enabled"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeBool,
+			Optional: true,
+			Computed: true,
+			ConflictsWith: []string{
+				"email_account_admins",
+			},
+		}
+	}
+
+	return r
 }

@@ -1,7 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -24,7 +23,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -33,7 +31,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
-	resource := &pluginsdk.Resource{
+	return &pluginsdk.Resource{
 		Create: resourceOrchestratedVirtualMachineScaleSetCreate,
 		Read:   resourceOrchestratedVirtualMachineScaleSetRead,
 		Update: resourceOrchestratedVirtualMachineScaleSetUpdate,
@@ -53,7 +51,7 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 
 		// The plan was to remove support the legacy Orchestrated Virtual Machine Scale Set in 3.0.
 		// Turns out it's still in use
-		// TODO: Revisit in 4.0
+		// TODO: Revisit for 6.0
 		// TODO: exposing requireGuestProvisionSignal once it's available
 		// https://github.com/Azure/azure-rest-api-specs/pull/7246
 
@@ -382,15 +380,6 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 						return nil
 					}
 
-					// TODO: Remove in v5.0
-					if !features.FivePointOh() {
-						vmSizesProvided := len(skuProfile["vm_sizes"].(*pluginsdk.Set).List()) > 0
-						vmSizeProvided := len(skuProfile["virtual_machine_size"].(*pluginsdk.Set).List()) > 0
-						if !vmSizesProvided && !vmSizeProvided {
-							return errors.New("either `vm_sizes` or `virtual_machine_size` must be configured in `sku_profile`")
-						}
-					}
-
 					if vmSizes := skuProfile["virtual_machine_size"].(*pluginsdk.Set).List(); len(vmSizes) > 0 {
 						for _, vmSize := range vmSizes {
 							vmSizeMap := vmSize.(map[string]interface{})
@@ -463,29 +452,4 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 			}),
 		),
 	}
-
-	if !features.FivePointOh() {
-		skuProfileSchema := resource.Schema["sku_profile"].Elem.(*pluginsdk.Resource).Schema
-		skuProfileSchema["vm_sizes"] = &pluginsdk.Schema{
-			Type:          pluginsdk.TypeSet,
-			Optional:      true,
-			Computed:      true,
-			MinItems:      1,
-			ConflictsWith: []string{"sku_profile.0.virtual_machine_size"},
-			Deprecated:    "The `vm_sizes` field has been deprecated and will be removed in v5.0 of the AzureRM Provider. Please use the `virtual_machine_size` block instead.",
-			Elem: &pluginsdk.Schema{
-				Type:         pluginsdk.TypeString,
-				ValidateFunc: computeValidate.SkuProfileVMSizeName,
-			},
-		}
-
-		skuProfileVirtualMachineSize := skuProfileSchema["virtual_machine_size"]
-		skuProfileVirtualMachineSize.Required = false
-		skuProfileVirtualMachineSize.Optional = true
-		skuProfileVirtualMachineSize.Computed = true
-		skuProfileVirtualMachineSize.MinItems = 1
-		skuProfileVirtualMachineSize.ConflictsWith = []string{"sku_profile.0.vm_sizes"}
-	}
-
-	return resource
 }

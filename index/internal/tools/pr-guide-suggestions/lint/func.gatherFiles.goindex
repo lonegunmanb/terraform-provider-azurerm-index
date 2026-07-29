@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/lint
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree"
+)
+func gatherFiles(targets []string) ([]string, error) {
+	seen := map[string]bool{}
+	var files []string
+	add := func(p string) {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			abs = p
+		}
+		if !seen[abs] {
+			seen[abs] = true
+			files = append(files, abs)
+		}
+	}
+
+	for _, t := range targets {
+		info, err := os.Stat(t)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			add(t)
+			continue
+		}
+		err = filepath.WalkDir(t, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			add(path)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	sort.Strings(files)
+	return files, nil
+}

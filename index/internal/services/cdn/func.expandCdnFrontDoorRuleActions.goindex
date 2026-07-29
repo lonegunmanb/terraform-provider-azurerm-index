@@ -1,0 +1,99 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigins"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rules"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandCdnFrontDoorRuleActions(input []CdnFrontDoorRuleActionsModel) ([]rules.DeliveryRuleAction, error) {
+	results := make([]rules.DeliveryRuleAction, 0)
+	if len(input) == 0 {
+		return results, nil
+	}
+
+	actions := input[0]
+	if err := validateCdnFrontDoorRuleActionCounts(countCdnFrontDoorBatchRuleActions(input)); err != nil {
+		return nil, err
+	}
+
+	for _, item := range actions.URLRedirect {
+		results = append(results, rules.URLRedirectAction{
+			Name: rules.DeliveryRuleActionNameURLRedirect,
+			Parameters: rules.URLRedirectActionParameters{
+				TypeName:            rules.DeliveryRuleActionParametersTypeDeliveryRuleURLRedirectActionParameters,
+				RedirectType:        rules.RedirectType(item.RedirectType),
+				DestinationProtocol: pointer.ToEnum[rules.DestinationProtocol](item.RedirectProtocol),
+				CustomPath:          pointer.To(item.DestinationPath),
+				CustomHostname:      pointer.To(item.DestinationHostName),
+				CustomQueryString:   pointer.To(item.QueryString),
+				CustomFragment:      pointer.To(item.DestinationFragment),
+			},
+		})
+	}
+
+	for _, item := range actions.URLRewrite {
+		results = append(results, rules.URLRewriteAction{
+			Name: rules.DeliveryRuleActionNameURLRewrite,
+			Parameters: rules.URLRewriteActionParameters{
+				TypeName:              rules.DeliveryRuleActionParametersTypeDeliveryRuleURLRewriteActionParameters,
+				SourcePattern:         item.SourcePattern,
+				Destination:           item.DestinationPath,
+				PreserveUnmatchedPath: pointer.To(item.PreserveUnmatchedPathEnabled),
+			},
+		})
+	}
+
+	for _, item := range actions.ModifyRequestHeader {
+		if err := validateCdnFrontDoorRuleModifyHeaderAction("modify_request_header", item.Operator, item.HeaderValue); err != nil {
+			return nil, err
+		}
+		results = append(results, rules.DeliveryRuleRequestHeaderAction{
+			Name: rules.DeliveryRuleActionNameModifyRequestHeader,
+			Parameters: rules.HeaderActionParameters{
+				TypeName:     rules.DeliveryRuleActionParametersTypeDeliveryRuleHeaderActionParameters,
+				HeaderAction: rules.HeaderAction(item.Operator),
+				HeaderName:   item.HeaderName,
+				Value:        pointer.To(item.HeaderValue),
+			},
+		})
+	}
+
+	for _, item := range actions.ModifyResponseHeader {
+		if err := validateCdnFrontDoorRuleModifyHeaderAction("modify_response_header", item.Operator, item.HeaderValue); err != nil {
+			return nil, err
+		}
+		results = append(results, rules.DeliveryRuleResponseHeaderAction{
+			Name: rules.DeliveryRuleActionNameModifyResponseHeader,
+			Parameters: rules.HeaderActionParameters{
+				TypeName:     rules.DeliveryRuleActionParametersTypeDeliveryRuleHeaderActionParameters,
+				HeaderAction: rules.HeaderAction(item.Operator),
+				HeaderName:   item.HeaderName,
+				Value:        pointer.To(item.HeaderValue),
+			},
+		})
+	}
+
+	for _, item := range actions.RouteConfigurationOverride {
+		expandedCache, err := expandCdnFrontDoorRuleRouteConfigurationOverrideCaching(item.Caching)
+		if err != nil {
+			return nil, fmt.Errorf("expanding `route_configuration_override.0.caching`: %+v", err)
+		}
+
+		results = append(results, rules.DeliveryRuleRouteConfigurationOverrideAction{
+			Name: rules.DeliveryRuleActionNameRouteConfigurationOverride,
+			Parameters: rules.RouteConfigurationOverrideActionParameters{
+				TypeName:            rules.DeliveryRuleActionParametersTypeDeliveryRuleRouteConfigurationOverrideActionParameters,
+				CacheConfiguration:  expandedCache,
+				OriginGroupOverride: expandCdnFrontDoorRuleRouteConfigurationOverrideOriginGroup(item.OriginGroup),
+			},
+		})
+	}
+
+	return results, nil
+}

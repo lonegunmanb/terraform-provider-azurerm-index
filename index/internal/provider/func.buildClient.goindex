@@ -13,22 +13,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	providerfeatures "github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/resourceproviders"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func buildClient(ctx context.Context, p *schema.Provider, d *schema.ResourceData, authConfig *auth.Credentials, testName string) (*clients.Client, diag.Diagnostics) {
 	providerRegistrations := d.Get("resource_provider_registrations").(string)
-
-	if !providerfeatures.FivePointOh() {
-		if d.Get("skip_provider_registration").(bool) {
-			if providerRegistrations != resourceproviders.ProviderRegistrationsLegacy {
-				return nil, diag.Errorf("provider property `skip_provider_registration` cannot be set at the same time as `resource_provider_registrations`, please remove `skip_provider_registration` from your configuration or unset the `ARM_SKIP_PROVIDER_REGISTRATION` environment variable")
-			}
-			providerRegistrations = resourceproviders.ProviderRegistrationsNone
-		}
-	}
 
 	requiredResourceProviders, err := resourceproviders.GetResourceProvidersSet(providerRegistrations)
 	if err != nil {
@@ -42,25 +32,8 @@ func buildClient(ctx context.Context, p *schema.Provider, d *schema.ResourceData
 	requiredResourceProviders.Merge(additionalProvidersToRegister)
 
 	features := expandFeatures(d.Get("features").([]interface{}))
-	// In 4.x, validate that the legacy and specific enhanced validation env vars don't conflict
-	if !providerfeatures.FivePointOh() {
-		if err := providerfeatures.ValidateEnhancedValidationEnvVars(); err != nil {
-			return nil, diag.FromErr(err)
-		}
 
-		if raw, ok := d.GetOk("enhanced_validation"); ok {
-			items := raw.([]interface{})
-			if len(items) > 0 && items[0] != nil {
-				evRaw := items[0].(map[string]interface{})
-				if v, ok := evRaw["locations"]; ok {
-					features.EnhancedValidation.Locations = v.(bool)
-				}
-				if v, ok := evRaw["resource_providers"]; ok {
-					features.EnhancedValidation.ResourceProviders = v.(bool)
-				}
-			}
-		}
-	} else if os.Getenv("ARM_PROVIDER_ENHANCED_VALIDATION") != "" {
+	if os.Getenv("ARM_PROVIDER_ENHANCED_VALIDATION") != "" {
 		return nil, diag.Errorf("the environment variable `ARM_PROVIDER_ENHANCED_VALIDATION` has been removed in v5.0 of the AzureRM Provider - please use the `enhanced_validation` block inside the `features` block or the replacement environment variables `ARM_PROVIDER_ENHANCED_VALIDATION_LOCATIONS` and `ARM_PROVIDER_ENHANCED_VALIDATION_RESOURCE_PROVIDERS` instead")
 	}
 

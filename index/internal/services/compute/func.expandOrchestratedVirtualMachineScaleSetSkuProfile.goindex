@@ -1,7 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -24,7 +23,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -32,7 +30,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func expandOrchestratedVirtualMachineScaleSetSkuProfile(d *pluginsdk.ResourceData, input []interface{}) *virtualmachinescalesets.SkuProfile {
+func expandOrchestratedVirtualMachineScaleSetSkuProfile(input []interface{}) *virtualmachinescalesets.SkuProfile {
 	if len(input) == 0 || input[0] == nil {
 		return nil
 	}
@@ -41,64 +39,20 @@ func expandOrchestratedVirtualMachineScaleSetSkuProfile(d *pluginsdk.ResourceDat
 	allocationStrategy := v["allocation_strategy"].(string)
 	vmSizes := make([]virtualmachinescalesets.SkuProfileVMSize, 0)
 
-	if !features.FivePointOh() {
-		// In v4.x, we must use GetRawConfig to get only user-configured values, not merged with O+C state
-		rawConfig := d.GetRawConfig()
-		if !rawConfig.IsNull() {
-			if skuProfile := rawConfig.AsValueMap()["sku_profile"]; !skuProfile.IsNull() {
-				if skuProfiles := skuProfile.AsValueSlice(); len(skuProfiles) > 0 && !skuProfiles[0].IsNull() {
-					skuProfileConfig := skuProfiles[0].AsValueMap()
-
-					if vmSizesField := skuProfileConfig["vm_sizes"]; !vmSizesField.IsNull() {
-						vmSizesSlice := vmSizesField.AsValueSet().Values()
-						for _, vmSizeVal := range vmSizesSlice {
-							vmSizes = append(vmSizes, virtualmachinescalesets.SkuProfileVMSize{
-								Name: pointer.To(vmSizeVal.AsString()),
-							})
-						}
-					}
-
-					if vmSizeField := skuProfileConfig["virtual_machine_size"]; !vmSizeField.IsNull() {
-						vmSizeSlice := vmSizeField.AsValueSet().Values()
-						for _, vmSizeVal := range vmSizeSlice {
-							if vmSizeVal.IsNull() {
-								continue
-							}
-
-							vmSizeMap := vmSizeVal.AsValueMap()
-							vmSize := virtualmachinescalesets.SkuProfileVMSize{
-								Name: pointer.To(vmSizeMap["name"].AsString()),
-							}
-
-							if rankVal := vmSizeMap["rank"]; !rankVal.IsNull() {
-								rank, _ := rankVal.AsBigFloat().Int64()
-								vmSize.Rank = pointer.To(rank - 1)
-							}
-
-							vmSizes = append(vmSizes, vmSize)
-						}
-					}
-				}
-			}
+	vmSizeRaw := v["virtual_machine_size"].(*pluginsdk.Set).List()
+	for _, vmSizeRaw := range vmSizeRaw {
+		vmSizeMap := vmSizeRaw.(map[string]interface{})
+		vmSize := virtualmachinescalesets.SkuProfileVMSize{
+			Name: pointer.To(vmSizeMap["name"].(string)),
 		}
-	}
 
-	if features.FivePointOh() {
-		vmSizeRaw := v["virtual_machine_size"].(*pluginsdk.Set).List()
-		for _, vmSizeRaw := range vmSizeRaw {
-			vmSizeMap := vmSizeRaw.(map[string]interface{})
-			vmSize := virtualmachinescalesets.SkuProfileVMSize{
-				Name: pointer.To(vmSizeMap["name"].(string)),
-			}
-
-			// `rank` is optional, so an omitted value decodes to Go's zero value.
-			// Only send it when the user explicitly configured it.
-			if rank := vmSizeMap["rank"].(int); rank > 0 {
-				vmSize.Rank = pointer.To(int64(rank - 1))
-			}
-
-			vmSizes = append(vmSizes, vmSize)
+		// `rank` is optional, so an omitted value decodes to Go's zero value.
+		// Only send it when the user explicitly configured it.
+		if rank := vmSizeMap["rank"].(int); rank > 0 {
+			vmSize.Rank = pointer.To(int64(rank - 1))
 		}
+
+		vmSizes = append(vmSizes, vmSize)
 	}
 
 	return &virtualmachinescalesets.SkuProfile{

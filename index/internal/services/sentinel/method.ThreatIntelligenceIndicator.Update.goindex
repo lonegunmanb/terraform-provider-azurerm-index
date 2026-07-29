@@ -6,26 +6,23 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2022-10-01-preview/threatintelligence"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/azuresdkhacks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
 )
 func (r ThreatIntelligenceIndicator) Update() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Timeout: 30 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
-			client := azuresdkhacks.ThreatIntelligenceIndicatorClient{
-				BaseClient: metadata.Client.Sentinel.ThreatIntelligenceClient.BaseClient,
-			}
+			client := metadata.Client.Sentinel.ThreatIntelligenceClient
 
-			id, err := parse.ThreatIntelligenceIndicatorID(metadata.ResourceData.Id())
+			id, err := threatintelligence.ParseIndicatorID(metadata.ResourceData.Id())
 			if err != nil {
 				return err
 			}
@@ -35,34 +32,44 @@ func (r ThreatIntelligenceIndicator) Update() sdk.ResourceFunc {
 				return fmt.Errorf("decoding: %+v", err)
 			}
 
-			resp, err := client.Get(ctx, id.ResourceGroup, id.WorkspaceName, id.IndicatorName)
+			resp, err := client.IndicatorGet(ctx, *id)
 			if err != nil {
 				return fmt.Errorf("retrieving %s: %+v", *id, err)
 			}
 
-			properties, ok := resp.Value.AsThreatIntelligenceIndicatorModel()
-			if !ok {
-				return fmt.Errorf("retrieving %s: type mismatch", id)
+			if resp.Model == nil {
+				return fmt.Errorf("retrieving %s: `model` was nil", id)
 			}
 
+			v, ok := resp.Model.(threatintelligence.ThreatIntelligenceIndicatorModel)
+			if !ok {
+				return fmt.Errorf("retrieving %s: type mismatch, got %T", id, resp.Model)
+			}
+
+			if v.Properties == nil {
+				return fmt.Errorf("retrieving %s: `properties` was nil", id)
+			}
+			previousEtag := pointer.From(v.Etag)
+			props := v.Properties
+			currentEtag := v.Etag
+
 			if metadata.ResourceData.HasChange("confidence") {
+				props.Confidence = pointer.To(model.Confidence)
 				if model.Confidence == -1 {
-					properties.Confidence = nil
-				} else {
-					properties.Confidence = pointer.To(int32(model.Confidence))
+					props.Confidence = nil
 				}
 			}
 
 			if metadata.ResourceData.HasChange("created_by") {
-				properties.CreatedByRef = &model.CreatedByRef
+				props.CreatedByRef = &model.CreatedByRef
 			}
 
 			if metadata.ResourceData.HasChange("description") {
-				properties.Description = &model.Description
+				props.Description = &model.Description
 			}
 
 			if metadata.ResourceData.HasChange("display_name") {
-				properties.DisplayName = &model.DisplayName
+				props.DisplayName = &model.DisplayName
 			}
 
 			if metadata.ResourceData.HasChange("extension") {
@@ -70,35 +77,31 @@ func (r ThreatIntelligenceIndicator) Update() sdk.ResourceFunc {
 				if err != nil {
 					return err
 				}
-				properties.Extensions = extensionsValue
+				props.Extensions = &extensionsValue
 			}
 
 			if metadata.ResourceData.HasChange("external_reference") {
-				properties.ExternalReferences = expandThreatIntelligenceExternalReferenceModel(model.ExternalRefrence)
+				props.ExternalReferences = expandThreatIntelligenceExternalReferenceModel(model.ExternalReference)
 			}
 
 			if metadata.ResourceData.HasChange("granular_marking") {
-				properties.GranularMarkings = expandThreatIntelligenceGranularMarkingModelModel(model.GranularMarkings)
+				props.GranularMarkings = expandThreatIntelligenceGranularMarkingModelModel(model.GranularMarkings)
 			}
 
 			if metadata.ResourceData.HasChange("indicator_type") {
-				properties.IndicatorTypes = &model.IndicatorTypes
+				props.IndicatorTypes = &model.IndicatorTypes
 			}
 
 			if metadata.ResourceData.HasChange("kill_chain_phase") {
-				properties.KillChainPhases = expandThreatIntelligenceKillChainPhaseModel(model.KillChainPhases)
-			}
-
-			if metadata.ResourceData.HasChange("tags") {
-				properties.Labels = &model.Labels
+				props.KillChainPhases = expandThreatIntelligenceKillChainPhaseModel(model.KillChainPhases)
 			}
 
 			if metadata.ResourceData.HasChange("language") {
-				properties.Language = &model.Language
+				props.Language = &model.Language
 			}
 
 			if metadata.ResourceData.HasChange("object_marking_refs") {
-				properties.ObjectMarkingRefs = &model.ObjectMarking
+				props.ObjectMarkingRefs = &model.ObjectMarking
 			}
 
 			if metadata.ResourceData.HasChange("pattern") {
@@ -106,39 +109,68 @@ func (r ThreatIntelligenceIndicator) Update() sdk.ResourceFunc {
 				if err != nil {
 					return err
 				}
-				properties.Pattern = &patternValue
+				props.Pattern = &patternValue
 			}
 
 			if metadata.ResourceData.HasChange("pattern_type") {
-				properties.PatternType = &model.PatternType
+				props.PatternType = &model.PatternType
 			}
 
 			if metadata.ResourceData.HasChange("pattern_version") {
-				properties.PatternVersion = &model.PatternVersion
+				props.PatternVersion = &model.PatternVersion
 			}
 
 			if metadata.ResourceData.HasChange("revoked") {
-				properties.Revoked = &model.Revoked
+				props.Revoked = &model.Revoked
 			}
-
 			if metadata.ResourceData.HasChange("source") {
-				properties.Source = &model.Source
+				props.Source = &model.Source
 			}
 
 			if metadata.ResourceData.HasChange("threat_types") {
-				properties.ThreatTypes = &model.ThreatTypes
+				props.ThreatTypes = &model.ThreatTypes
 			}
 
 			if metadata.ResourceData.HasChange("validate_from_utc") {
-				properties.ValidFrom = &model.ValidFrom
+				props.ValidFrom = &model.ValidFrom
 			}
 
 			if metadata.ResourceData.HasChange("validate_until_utc") {
-				properties.ValidUntil = &model.ValidUntil
+				props.ValidUntil = &model.ValidUntil
 			}
 
-			if _, err := client.Create(ctx, id.ResourceGroup, id.WorkspaceName, id.IndicatorName, *properties); err != nil {
-				return fmt.Errorf("updating %s: %+v", *id, err)
+			props.ExternalLastUpdatedTimeUtc = nil
+			props.LastUpdatedTimeUtc = nil
+			if metadata.ResourceData.HasChangesExcept("tags") {
+				resp, err := client.IndicatorCreate(ctx, *id, v)
+				if err != nil {
+					return fmt.Errorf("updating %s: %+v", *id, err)
+				}
+
+				if updated, ok := resp.Model.(threatintelligence.ThreatIntelligenceIndicatorModel); ok {
+					currentEtag = updated.Etag
+				}
+			}
+
+			if metadata.ResourceData.HasChange("tags") {
+				payload := threatintelligence.ThreatIntelligenceIndicatorModel{
+					Etag: currentEtag,
+					Kind: threatintelligence.ThreatIntelligenceResourceKindEnumIndicator,
+					Properties: &threatintelligence.ThreatIntelligenceIndicatorProperties{
+						ThreatIntelligenceTags: &model.Labels,
+					},
+				}
+				if _, err := client.IndicatorReplaceTags(ctx, *id, payload); err != nil {
+					return fmt.Errorf("replacing tags for %s: %+v", *id, err)
+				}
+			}
+
+			// Normal indicator updates change the ETag but do not change LastUpdatedTimeUtc. Wait until GET consistently
+			// returns a version newer than the one read before the update.
+			pollerType := custompollers.NewThreatIntelligenceIndicatorUpdatePoller(client, *id, previousEtag)
+			poller := pollers.NewPoller(pollerType, 10*time.Second, pollers.DefaultNumberOfDroppedConnectionsToAllow)
+			if err := poller.PollUntilDone(ctx); err != nil {
+				return fmt.Errorf("waiting for update of %s: %+v", *id, err)
 			}
 
 			return nil

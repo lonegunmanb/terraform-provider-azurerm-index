@@ -1,23 +1,24 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afddomains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/routes"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func validateRoutes(d *pluginsdk.ResourceData, meta interface{}, id *parse.FrontDoorCustomDomainId) ([]interface{}, error) {
+func validateRoutes(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}, id *afddomains.CustomDomainId) ([]interface{}, error) {
 	out := make([]interface{}, 0)
 	o, n := d.GetChange("cdn_frontdoor_route_ids")
 	oRoutes := o.([]interface{})
 	nRoutes := n.([]interface{})
 
-	if len(nRoutes) == 0 || nRoutes == nil || id == nil {
+	if len(nRoutes) == 0 || id == nil {
 		return out, nil
 	}
 
@@ -35,7 +36,7 @@ func validateRoutes(d *pluginsdk.ResourceData, meta interface{}, id *parse.Front
 	if len(*nIds) != 0 {
 		for _, v := range *nIds {
 			// Make sure the route exists and get the routes custom domain association list...
-			associations, _, err := getRouteProperties(d, meta, &v, "cdn_frontdoor_custom_domain_association")
+			associations, _, err := getRouteProperties(ctx, meta, &v, "cdn_frontdoor_custom_domain_association")
 			if err != nil {
 				return out, err
 			}
@@ -55,7 +56,7 @@ func validateRoutes(d *pluginsdk.ResourceData, meta interface{}, id *parse.Front
 		// now get the delta between the old and the new list, if any custom domains were removed from
 		// the list we need to remove the custom domain association from those routes...
 		if delta, _ := routeDelta(oIds, nIds); len(*delta) != 0 {
-			if err = removeCustomDomainAssociationFromRoutes(d, meta, delta, id); err != nil {
+			if err = removeCustomDomainAssociationFromRoutes(ctx, meta, delta, id); err != nil {
 				return out, err
 			}
 		}

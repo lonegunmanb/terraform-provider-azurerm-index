@@ -1,22 +1,28 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
 import (
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afddomains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdendpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigingroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigins"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/routes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rulesets"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func expandCdnFrontdoorRouteCacheConfiguration(input []interface{}) *cdn.AfdRouteCacheConfiguration {
+func expandCdnFrontdoorRouteCacheConfiguration(input []interface{}) *routes.AfdRouteCacheConfiguration {
 	// NOTE: If this is not an explicit nil you will receive an "Unsupported QueryStringCachingBehavior type:
 	// Property 'RouteV2.CacheConfiguration.QueryStringCachingBehavior' is required but it was not set" error.
 	// The Frontdoor service treats empty slices as if they are fully defined unlike other services.
@@ -26,15 +32,12 @@ func expandCdnFrontdoorRouteCacheConfiguration(input []interface{}) *cdn.AfdRout
 
 	v := input[0].(map[string]interface{})
 
-	queryStringCachingBehaviorValue := cdn.AfdQueryStringCachingBehavior(v["query_string_caching_behavior"].(string))
-	compressionEnabled := v["compression_enabled"].(bool)
-
-	cacheConfiguration := &cdn.AfdRouteCacheConfiguration{
-		CompressionSettings: &cdn.CompressionSettings{
-			IsCompressionEnabled: pointer.To(compressionEnabled),
+	cacheConfiguration := &routes.AfdRouteCacheConfiguration{
+		CompressionSettings: &routes.CompressionSettings{
+			IsCompressionEnabled: pointer.To(v["compression_enabled"].(bool)),
 		},
 		QueryParameters:            expandStringSliceToCsvFormat(v["query_strings"].([]interface{})),
-		QueryStringCachingBehavior: queryStringCachingBehaviorValue,
+		QueryStringCachingBehavior: pointer.ToEnum[routes.AfdQueryStringCachingBehavior](v["query_string_caching_behavior"].(string)),
 	}
 
 	if contentTypes := v["content_types_to_compress"].([]interface{}); len(contentTypes) > 0 {

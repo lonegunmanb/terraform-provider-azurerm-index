@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"time"
 
-	alertruletemplates "github.com/Azure/azure-sdk-for-go/services/preview/securityinsight/mgmt/2021-09-01-preview/securityinsight" // nolint: staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2023-09-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2022-10-01-preview/alertruletemplates"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2023-12-01-preview/alertrules"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -19,8 +19,8 @@ func (a AlertRuleThreatIntelligenceResource) Update() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Timeout: 30 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
-			var metaModel AlertRuleThreatIntelligenceModel
-			if err := metadata.Decode(&metaModel); err != nil {
+			var config AlertRuleThreatIntelligenceModel
+			if err := metadata.Decode(&config); err != nil {
 				return fmt.Errorf("decoding %+v", err)
 			}
 
@@ -32,7 +32,7 @@ func (a AlertRuleThreatIntelligenceResource) Update() sdk.ResourceFunc {
 			}
 			resp, err := client.Get(ctx, *id)
 			if err != nil {
-				return fmt.Errorf("reading %+v", err)
+				return fmt.Errorf("retrieving %s: %+v", id, err)
 			}
 			if err := assertAlertRuleKind(resp.Model, alertrules.AlertRuleKindThreatIntelligence); err != nil {
 				return fmt.Errorf("asserting alert rule of %q: %+v", id, err)
@@ -40,18 +40,23 @@ func (a AlertRuleThreatIntelligenceResource) Update() sdk.ResourceFunc {
 
 			rule := resp.Model.(alertrules.ThreatIntelligenceAlertRule)
 
+			if rule.Properties == nil {
+				return fmt.Errorf("retrieving %s: `properties` was nil", id)
+			}
+			props := rule.Properties
+
 			if metadata.ResourceData.HasChange("enabled") {
-				rule.Properties.Enabled = metaModel.Enabled
+				props.Enabled = config.Enabled
 			}
 
 			param := alertrules.ThreatIntelligenceAlertRule{
 				Properties: &alertrules.ThreatIntelligenceAlertRuleProperties{
-					Enabled:               rule.Properties.Enabled,
-					AlertRuleTemplateName: rule.Properties.AlertRuleTemplateName,
-					Severity:              rule.Properties.Severity,
-					DisplayName:           rule.Properties.DisplayName,
-					Description:           rule.Properties.Description,
-					Tactics:               rule.Properties.Tactics,
+					Enabled:               props.Enabled,
+					AlertRuleTemplateName: props.AlertRuleTemplateName,
+					Severity:              props.Severity,
+					DisplayName:           props.DisplayName,
+					Description:           props.Description,
+					Tactics:               props.Tactics,
 				},
 			}
 

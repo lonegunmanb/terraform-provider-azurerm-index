@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigins"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rules"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenCdnFrontDoorRuleActions(input *[]rules.DeliveryRuleAction) ([]CdnFrontDoorRuleActionsModel, error) {
+	if input == nil {
+		return []CdnFrontDoorRuleActionsModel{}, nil
+	}
+
+	results := make([]CdnFrontDoorRuleActionsModel, 0, len(*input))
+	actions := CdnFrontDoorRuleActionsModel{}
+
+	for _, action := range *input {
+		switch a := action.(type) {
+		case rules.URLRedirectAction:
+			actions.URLRedirect = append(actions.URLRedirect, CdnFrontDoorRuleURLRedirectActionModel{
+				RedirectType:        string(a.Parameters.RedirectType),
+				RedirectProtocol:    pointer.FromEnum(a.Parameters.DestinationProtocol),
+				DestinationPath:     pointer.From(a.Parameters.CustomPath),
+				DestinationHostName: pointer.From(a.Parameters.CustomHostname),
+				QueryString:         pointer.From(a.Parameters.CustomQueryString),
+				DestinationFragment: pointer.From(a.Parameters.CustomFragment),
+			})
+		case rules.URLRewriteAction:
+			actions.URLRewrite = append(actions.URLRewrite, CdnFrontDoorRuleURLRewriteActionModel{
+				SourcePattern:                a.Parameters.SourcePattern,
+				DestinationPath:              a.Parameters.Destination,
+				PreserveUnmatchedPathEnabled: pointer.From(a.Parameters.PreserveUnmatchedPath),
+			})
+		case rules.DeliveryRuleRequestHeaderAction:
+			actions.ModifyRequestHeader = append(actions.ModifyRequestHeader, CdnFrontDoorRuleHeaderActionModel{
+				Operator:    string(a.Parameters.HeaderAction),
+				HeaderName:  a.Parameters.HeaderName,
+				HeaderValue: pointer.From(a.Parameters.Value),
+			})
+		case rules.DeliveryRuleResponseHeaderAction:
+			actions.ModifyResponseHeader = append(actions.ModifyResponseHeader, CdnFrontDoorRuleHeaderActionModel{
+				Operator:    string(a.Parameters.HeaderAction),
+				HeaderName:  a.Parameters.HeaderName,
+				HeaderValue: pointer.From(a.Parameters.Value),
+			})
+		case rules.DeliveryRuleRouteConfigurationOverrideAction:
+			flattened, err := flattenCdnFrontDoorRuleRouteConfigurationOverrideAction(a.Parameters)
+			if err != nil {
+				return results, err
+			}
+			actions.RouteConfigurationOverride = append(actions.RouteConfigurationOverride, flattened)
+		default:
+			return results, fmt.Errorf("unsupported action (`%s`) encountered", a.DeliveryRuleAction().Name)
+		}
+	}
+
+	return append(results, actions), nil
+}

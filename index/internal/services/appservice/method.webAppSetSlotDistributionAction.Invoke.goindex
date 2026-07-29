@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/framework/typehelpers"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/terraform-plugin-framework-validators/float64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework/action"
+	"github.com/hashicorp/terraform-plugin-framework/action/schema"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (a *webAppSetSlotDistributionAction) Invoke(ctx context.Context, request action.InvokeRequest, response *action.InvokeResponse) {
+	client := a.Client.AppService.WebAppsClient
+
+	model := webAppSetSlotDistributionActionModel{}
+
+	response.Diagnostics.Append(request.Config.Get(ctx, &model)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	ctxTimeout := 30 * time.Minute
+	if t := model.Timeout; !t.IsNull() {
+		timeout, err := time.ParseDuration(t.ValueString())
+		if err != nil {
+			sdk.SetResponseErrorDiagnostic(response, "parsing `timeout`", err)
+			return
+		}
+		ctxTimeout = timeout
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, ctxTimeout)
+	defer cancel()
+
+	appId, err := commonids.ParseWebAppID(model.AppServiceId.ValueString())
+	if err != nil {
+		sdk.SetResponseErrorDiagnostic(response, "id parsing error", err)
+		return
+	}
+
+	siteConfigEnvelope := expandWebAppSetSlotDistributionActionModel(ctx, model, &response.Diagnostics)
+	if response.Diagnostics.HasError() || siteConfigEnvelope == nil {
+		return
+	}
+
+	response.SendProgress(action.InvokeProgressEvent{
+		Message: fmt.Sprintf("Assigning new Slot Distribution Rules for AppServiceId '%s'", model.AppServiceId),
+	})
+
+	if _, err := client.UpdateConfiguration(ctx, *appId, *siteConfigEnvelope); err != nil {
+		sdk.SetResponseErrorDiagnostic(response, fmt.Sprintf("error updating configuration for AppServiceId '%s'", model.AppServiceId), err)
+		return
+	}
+
+	response.SendProgress(action.InvokeProgressEvent{
+		Message: fmt.Sprintf("Completed setting of Slot Distribution Rules for AppServiceId '%s'", model.AppServiceId),
+	})
+}

@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigins"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rules"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func expandCdnFrontDoorRuleRouteConfigurationOverrideCaching(input []CdnFrontDoorRuleRouteConfigurationOverrideCachingModel) (*rules.CacheConfiguration, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	v := input[0]
+	if v.Behaviour == RuleCacheBehaviorDisabled {
+		if v.Duration != "" {
+			return nil, fmt.Errorf("when `route_configuration_override.caching.behaviour` is set to `Disabled`, you cannot define `route_configuration_override.caching.duration`, got `%s`", v.Duration)
+		}
+
+		if len(v.QueryStringParameters) != 0 {
+			return nil, fmt.Errorf("when `route_configuration_override.caching.behaviour` is set to `Disabled`, you cannot define any `route_configuration_override.caching.query_string_parameters`, got `%d` parameters", len(v.QueryStringParameters))
+		}
+
+		if v.QueryStringBehaviour != "" {
+			return nil, fmt.Errorf("when `route_configuration_override.caching.behaviour` is set to `Disabled`, you cannot define `route_configuration_override.caching.query_string_behaviour`, got `%s`", v.QueryStringBehaviour)
+		}
+
+		if v.CompressionEnabled {
+			return nil, fmt.Errorf("when `route_configuration_override.caching.behaviour` is set to `Disabled`, you cannot define `route_configuration_override.caching.compression_enabled`, got `%t`", v.CompressionEnabled)
+		}
+
+		return nil, nil
+	}
+
+	if v.QueryStringBehaviour == "" {
+		return nil, fmt.Errorf("when `route_configuration_override.caching.behaviour` is set to `%s`, you must also define `route_configuration_override.caching.query_string_behaviour`", v.Behaviour)
+	}
+
+	// `HonorOrigin` must not carry an explicit cache duration.
+	if v.Behaviour == string(rules.RuleCacheBehaviorHonorOrigin) {
+		if v.Duration != "" {
+			return nil, fmt.Errorf("when `route_configuration_override.caching.behaviour` is set to `%s`, you cannot define `route_configuration_override.caching.duration`, got `%s`", rules.RuleCacheBehaviorHonorOrigin, v.Duration)
+		}
+	} else if v.Duration == "" {
+		return nil, fmt.Errorf("when `route_configuration_override.caching.behaviour` is set to `%s`, you must also define `route_configuration_override.caching.duration`", v.Behaviour)
+	}
+
+	switch rules.RuleQueryStringCachingBehavior(v.QueryStringBehaviour) {
+	case rules.RuleQueryStringCachingBehaviorIncludeSpecifiedQueryStrings, rules.RuleQueryStringCachingBehaviorIgnoreSpecifiedQueryStrings:
+		if len(v.QueryStringParameters) == 0 {
+			return nil, fmt.Errorf("when `route_configuration_override.caching.query_string_behaviour` is set to `%s`, you must also define one or more `route_configuration_override.caching.query_string_parameters`", v.QueryStringBehaviour)
+		}
+	case rules.RuleQueryStringCachingBehaviorUseQueryString, rules.RuleQueryStringCachingBehaviorIgnoreQueryString:
+		if len(v.QueryStringParameters) > 0 {
+			return nil, fmt.Errorf("when `route_configuration_override.caching.query_string_behaviour` is set to `%s`, you cannot define `route_configuration_override.caching.query_string_parameters`", v.QueryStringBehaviour)
+		}
+	}
+
+	compressionEnabled := rules.RuleIsCompressionEnabledDisabled
+	if v.CompressionEnabled {
+		compressionEnabled = rules.RuleIsCompressionEnabledEnabled
+	}
+
+	queryParameters := (*string)(nil)
+	if len(v.QueryStringParameters) > 0 {
+		queryParameters = pointer.To(strings.Join(v.QueryStringParameters, ","))
+	}
+
+	return &rules.CacheConfiguration{
+		CacheBehavior:              pointer.ToEnum[rules.RuleCacheBehavior](v.Behaviour),
+		CacheDuration:              pointer.ToOrNil(v.Duration),
+		IsCompressionEnabled:       pointer.To(compressionEnabled),
+		QueryParameters:            queryParameters,
+		QueryStringCachingBehavior: pointer.ToOrNil(rules.RuleQueryStringCachingBehavior(v.QueryStringBehaviour)),
+	}, nil
+}

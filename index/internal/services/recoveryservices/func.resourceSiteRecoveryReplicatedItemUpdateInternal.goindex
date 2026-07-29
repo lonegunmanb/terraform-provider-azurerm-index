@@ -65,39 +65,16 @@ func resourceSiteRecoveryReplicatedItemUpdateInternal(ctx context.Context, d *pl
 		targetAvailabilitySetID = nil
 	}
 
-	nicList := d.Get("network_interface").(*pluginsdk.Set).List()
+	nicList := d.Get("network_interface").([]interface{})
 	vmNics := make([]replicationprotecteditems.VMNicInputDetails, 0, len(nicList))
 	for _, raw := range nicList {
 		vmNicInput := raw.(map[string]interface{})
 		sourceNicId := vmNicInput["source_network_interface_id"].(string)
-		targetStaticIp := vmNicInput["target_static_ip"].(string)
-		targetSubnetName := vmNicInput["target_subnet_name"].(string)
-		recoveryPublicIPAddressID := vmNicInput["recovery_public_ip_address_id"].(string)
-		testStaticIp := vmNicInput["failover_test_static_ip"].(string)
-		testSubNetName := vmNicInput["failover_test_subnet_name"].(string)
-		testPublicIpAddressID := vmNicInput["failover_test_public_ip_address_id"].(string)
-
-		var recoveryLoadBalancerBackendPoolIds *[]string
-		if ids, ok := vmNicInput["recovery_load_balancer_backend_address_pool_ids"].(*schema.Set); ok && ids.Len() > 0 {
-			recoveryLoadBalancerBackendPoolIds = utils.ExpandStringSlice(ids.List())
-		}
-
 		nicId := findNicId(state, sourceNicId)
 		if nicId == nil {
 			return fmt.Errorf("updating replicated vm %s (vault %s): Trying to update NIC that is not known by Azure %s", name, vaultName, sourceNicId)
 		}
-		ipConfig := []replicationprotecteditems.IPConfigInputDetails{
-			{
-				RecoverySubnetName:              &targetSubnetName,
-				RecoveryStaticIPAddress:         &targetStaticIp,
-				RecoveryLBBackendAddressPoolIds: recoveryLoadBalancerBackendPoolIds,
-				RecoveryPublicIPAddressId:       &recoveryPublicIPAddressID,
-				TfoStaticIPAddress:              &testStaticIp,
-				TfoPublicIPAddressId:            &testPublicIpAddressID,
-				TfoSubnetName:                   &testSubNetName,
-				IsPrimary:                       pointer.To(true), // currently we can only set one IPconfig for a nic, so we dont need to expose this to users.
-			},
-		}
+		ipConfig := expandSiteRecoveryReplicatedVMIPConfig(vmNicInput)
 		vmNics = append(vmNics, replicationprotecteditems.VMNicInputDetails{
 			NicId:     nicId,
 			IPConfigs: &ipConfig,

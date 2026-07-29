@@ -1,0 +1,30 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/rules
+import (
+	"fmt"
+	"go/ast"
+	"go/token"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/astutil"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree"
+)
+func acceptedNoneValues(vf ast.Expr) []string {
+	found := map[string]bool{}
+	ast.Inspect(vf, func(nd ast.Node) bool {
+		call, ok := nd.(*ast.CallExpr)
+		if !ok || !isSelectorCall(call, "StringInSlice") || len(call.Args) == 0 {
+			return true
+		}
+		collectEnumSentinels(call.Args[0], found)
+		return true
+	})
+
+	var out []string
+	for _, s := range noneValues {
+		if found[s] {
+			out = append(out, s)
+		}
+	}
+	return out
+}

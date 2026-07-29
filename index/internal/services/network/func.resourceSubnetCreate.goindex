@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"regexp"
@@ -13,12 +14,17 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2023-11-01/serviceendpointpolicies"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/ipampools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/routetables"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/subnets"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -27,72 +33,69 @@ import (
 func resourceSubnetCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).Network.Subnets
 	vnetClient := meta.(*clients.Client).Network.VirtualNetworks
-	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	id := commonids.NewSubnetID(subscriptionId, d.Get("resource_group_name").(string), d.Get("virtual_network_name").(string), d.Get("name").(string))
+	id := commonids.NewSubnetID(meta.(*clients.Client).Account.SubscriptionId, d.Get("resource_group_name").(string), d.Get("virtual_network_name").(string), d.Get("name").(string))
 
-	if !meta.(*clients.Client).Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
-		existing, err := client.Get(ctx, id, subnets.DefaultGetOperationOptions())
+	nsg, err := expandSubnetNetworkSecurityGroupID(d)
+	if err != nil {
+		return fmt.Errorf("expanding Network Security Group ID: %+v", err)
+	}
+	if nsg != nil && nsg.Id != nil {
+		nsgId, err := networksecuritygroups.ParseNetworkSecurityGroupID(*nsg.Id)
 		if err != nil {
-			if !response.WasNotFound(existing.HttpResponse) {
-				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
-			}
+			return err
 		}
-
-		if !response.WasNotFound(existing.HttpResponse) {
-			return tf.ImportAsExistsError("azurerm_subnet", id.ID())
-		}
-	}
-	locks.ByName(id.VirtualNetworkName, VirtualNetworkResourceName)
-	defer locks.UnlockByName(id.VirtualNetworkName, VirtualNetworkResourceName)
-
-	properties := subnets.SubnetPropertiesFormat{}
-	if value, ok := d.GetOk("address_prefixes"); ok {
-		var addressPrefixes []string
-		for _, item := range value.([]interface{}) {
-			addressPrefixes = append(addressPrefixes, item.(string))
-		}
-		properties.AddressPrefixes = &addressPrefixes
-	}
-	if properties.AddressPrefixes != nil && len(*properties.AddressPrefixes) == 1 {
-		properties.AddressPrefix = &(*properties.AddressPrefixes)[0]
-		properties.AddressPrefixes = nil
+		locks.ByID(nsgId.ID())
+		defer locks.UnlockByID(nsgId.ID())
 	}
 
-	properties.IPamPoolPrefixAllocations = expandSubnetIPAddressPool(d.Get("ip_address_pool").([]interface{}))
+	rt, err := expandSubnetRouteTableID(d)
+	if err != nil {
+		return fmt.Errorf("expanding Route Table ID: %+v", err)
+	}
+	if rt != nil && rt.Id != nil {
+		rtId, err := routetables.ParseRouteTableID(*rt.Id)
+		if err != nil {
+			return err
+		}
+		locks.ByID(rtId.ID())
+		defer locks.UnlockByID(rtId.ID())
+	}
 
-	// To enable private endpoints you must disable the network policies for the subnet because
-	// Network policies like network security groups are not supported by private endpoints.
-	var privateEndpointNetworkPolicies subnets.VirtualNetworkPrivateEndpointNetworkPolicies
-	var privateLinkServiceNetworkPolicies subnets.VirtualNetworkPrivateLinkServiceNetworkPolicies
+	vnetId := commonids.NewVirtualNetworkID(id.SubscriptionId, id.ResourceGroupName, id.VirtualNetworkName)
+	locks.ByID(vnetId.ID())
+	defer locks.UnlockByID(vnetId.ID())
 
-	privateEndpointNetworkPoliciesRaw := d.Get("private_endpoint_network_policies").(string)
-	privateLinkServiceNetworkPoliciesRaw := d.Get("private_link_service_network_policies_enabled").(bool)
+	locks.ByID(id.ID())
+	defer locks.UnlockByID(id.ID())
 
-	privateEndpointNetworkPolicies = subnets.VirtualNetworkPrivateEndpointNetworkPolicies(privateEndpointNetworkPoliciesRaw)
-	privateLinkServiceNetworkPolicies = subnets.VirtualNetworkPrivateLinkServiceNetworkPolicies(expandSubnetNetworkPolicy(privateLinkServiceNetworkPoliciesRaw))
-
-	properties.PrivateEndpointNetworkPolicies = pointer.To(privateEndpointNetworkPolicies)
-	properties.PrivateLinkServiceNetworkPolicies = pointer.To(privateLinkServiceNetworkPolicies)
-
-	serviceEndpointPoliciesRaw := d.Get("service_endpoint_policy_ids").(*pluginsdk.Set).List()
-	properties.ServiceEndpointPolicies = expandSubnetServiceEndpointPolicies(serviceEndpointPoliciesRaw)
-
-	serviceEndpointsRaw := d.Get("service_endpoints").(*pluginsdk.Set).List()
-	properties.ServiceEndpoints = expandSubnetServiceEndpoints(serviceEndpointsRaw)
-
-	properties.SharingScope = pointer.ToEnum[subnets.SharingScope](d.Get("sharing_scope").(string))
-
-	properties.DefaultOutboundAccess = pointer.To(d.Get("default_outbound_access_enabled").(bool))
-
-	delegationsRaw := d.Get("delegation").([]interface{})
-	properties.Delegations = expandSubnetDelegation(delegationsRaw)
+	existing, err := client.Get(ctx, id, subnets.DefaultGetOperationOptions())
+	if !response.WasNotFound(existing.HttpResponse) {
+		if err != nil {
+			return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
+		}
+		return tf.ImportAsExistsError("azurerm_subnet", id.ID())
+	}
 
 	subnet := subnets.Subnet{
-		Name:       pointer.To(id.SubnetName),
-		Properties: &properties,
+		Name: pointer.To(id.SubnetName),
+		Properties: &subnets.SubnetPropertiesFormat{
+			AddressPrefixes:                   utils.ExpandStringSlice(d.Get("address_prefixes").([]any)),
+			DefaultOutboundAccess:             pointer.To(d.Get("default_outbound_access_enabled").(bool)),
+			Delegations:                       expandSubnetDelegation(d.Get("delegation").([]interface{})),
+			IPamPoolPrefixAllocations:         expandSubnetIPAddressPool(d.Get("ip_address_pool").([]interface{})),
+			PrivateEndpointNetworkPolicies:    pointer.ToEnum[subnets.VirtualNetworkPrivateEndpointNetworkPolicies](d.Get("private_endpoint_network_policies").(string)),
+			PrivateLinkServiceNetworkPolicies: expandSubnetNetworkPolicy(d.Get("private_link_service_network_policies_enabled").(bool)),
+			ServiceEndpoints:                  expandSubnetServiceEndpoint(d.Get("service_endpoint").([]interface{})),
+			ServiceEndpointPolicies:           expandSubnetServiceEndpointPolicies(d.Get("service_endpoint_policy_ids").(*pluginsdk.Set).List()),
+			SharingScope:                      pointer.ToEnum[subnets.SharingScope](d.Get("sharing_scope").(string)),
+
+			// Write-only
+			NetworkSecurityGroup: nsg,
+			RouteTable:           rt,
+		},
 	}
 
 	if err := client.CreateOrUpdateCallbackThenPoll(ctx, id, subnet, sdk.SetIDAndIdentityCallback(meta, &id, d)); err != nil {
@@ -103,26 +106,29 @@ func resourceSubnetCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 		return err
 	}
 
-	timeout, _ := ctx.Deadline()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("internal-error: context had no deadline")
+	}
 
 	stateConf := &pluginsdk.StateChangeConf{
 		Pending:    []string{string(subnets.ProvisioningStateUpdating)},
 		Target:     []string{string(subnets.ProvisioningStateSucceeded)},
 		Refresh:    SubnetProvisioningStateRefreshFunc(ctx, client, id),
 		MinTimeout: 1 * time.Minute,
-		Timeout:    time.Until(timeout),
+		Timeout:    time.Until(deadline),
 	}
-	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+
+	if _, err = stateConf.WaitForStateContext(ctx); err != nil {
 		return fmt.Errorf("waiting for provisioning state of %s: %+v", id, err)
 	}
 
-	vnetId := commonids.NewVirtualNetworkID(id.SubscriptionId, id.ResourceGroupName, id.VirtualNetworkName)
 	vnetStateConf := &pluginsdk.StateChangeConf{
 		Pending:    []string{string(subnets.ProvisioningStateUpdating)},
 		Target:     []string{string(subnets.ProvisioningStateSucceeded)},
 		Refresh:    VirtualNetworkProvisioningStateRefreshFunc(ctx, vnetClient, vnetId),
 		MinTimeout: 1 * time.Minute,
-		Timeout:    time.Until(timeout),
+		Timeout:    time.Until(deadline),
 	}
 	if _, err := vnetStateConf.WaitForStateContext(ctx); err != nil {
 		return fmt.Errorf("waiting for provisioning state of virtual network for %s: %+v", id, err)

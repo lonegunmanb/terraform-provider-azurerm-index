@@ -1,0 +1,289 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-04-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (KubernetesAutomaticClusterDataSource) Attributes() map[string]*pluginsdk.Schema {
+	return map[string]*pluginsdk.Schema{
+		"location": commonschema.LocationComputed(),
+
+		"api_server_access": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"authorized_ip_ranges": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+					},
+					"subnet_id": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+				},
+			},
+		},
+
+		"current_kubernetes_version": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"dns_prefix": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"fully_qualified_domain_name": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"hosted_system": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"node_subnet_id": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+					"system_node_subnet_id": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+				},
+			},
+		},
+
+		"identity": commonschema.SystemOrUserAssignedIdentityComputed(),
+
+		"kube_config": {
+			Type:      pluginsdk.TypeList,
+			Computed:  true,
+			Sensitive: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"host": {
+						Type:      pluginsdk.TypeString,
+						Computed:  true,
+						Sensitive: true,
+					},
+					"username": {
+						Type:      pluginsdk.TypeString,
+						Computed:  true,
+						Sensitive: true,
+					},
+					"password": {
+						Type:      pluginsdk.TypeString,
+						Computed:  true,
+						Sensitive: true,
+					},
+					"client_certificate": {
+						Type:      pluginsdk.TypeString,
+						Computed:  true,
+						Sensitive: true,
+					},
+					"client_key": {
+						Type:      pluginsdk.TypeString,
+						Computed:  true,
+						Sensitive: true,
+					},
+					"cluster_ca_certificate": {
+						Type:      pluginsdk.TypeString,
+						Computed:  true,
+						Sensitive: true,
+					},
+				},
+			},
+		},
+
+		"kube_config_raw": {
+			Type:      pluginsdk.TypeString,
+			Computed:  true,
+			Sensitive: true,
+		},
+
+		"kubelet_identity": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"client_id": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+					"object_id": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+					"user_assigned_identity_id": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+				},
+			},
+		},
+
+		"kubernetes_version": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"node_resource_group": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"node_resource_group_id": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"portal_fully_qualified_domain_name": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"private_fully_qualified_domain_name": {
+			Type:     pluginsdk.TypeString,
+			Computed: true,
+		},
+
+		"private_cluster": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"public_fully_qualified_domain_name_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Computed: true,
+					},
+					"private_dns_zone_id": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+				},
+			},
+		},
+
+		"service_mesh": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"internal_ingress_gateway_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Computed: true,
+					},
+					"external_ingress_gateway_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Computed: true,
+					},
+					"certificate_authority": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"key_vault_id": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+								"root_certificate_object_name": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+								"certificate_chain_object_name": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+								"certificate_object_name": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+								"key_object_name": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+							},
+						},
+					},
+					"proxy_redirect_mechanism": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+
+					"revisions": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Schema{
+							Type: pluginsdk.TypeString,
+						},
+					},
+				},
+			},
+		},
+
+		"tags": commonschema.TagsDataSource(),
+
+		"web_app_routing_ingress": {
+			Type:     pluginsdk.TypeList,
+			Computed: true,
+			Elem: &pluginsdk.Resource{
+				Schema: map[string]*pluginsdk.Schema{
+					"dns_zone_ids": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem:     &pluginsdk.Schema{Type: pluginsdk.TypeString},
+					},
+					"default_nginx_controller": {
+						Type:     pluginsdk.TypeString,
+						Computed: true,
+					},
+					"istio_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Computed: true,
+					},
+					"web_app_routing_identity": {
+						Type:     pluginsdk.TypeList,
+						Computed: true,
+						Elem: &pluginsdk.Resource{
+							Schema: map[string]*pluginsdk.Schema{
+								"client_id": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+								"object_id": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+								"user_assigned_identity_id": {
+									Type:     pluginsdk.TypeString,
+									Computed: true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}

@@ -1,0 +1,28 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree
+import (
+	"go/ast"
+	"go/token"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/astutil"
+)
+func (idx *funcIndex) schemaElemMap(schemaLit *ast.CompositeLit) (*ast.CompositeLit, bool) {
+	elem, ok := unwrapCompositeLit(compositeField(schemaLit, "Elem"))
+	if !ok || !isSelectorNamed(elem.Type, "Resource") {
+		return nil, false
+	}
+	sv := compositeField(elem, "Schema")
+	if cl, ok := sv.(*ast.CompositeLit); ok && isSchemaMap(cl) {
+		return cl, true
+	}
+	if name, ok := localCallName(sv); ok {
+		if cl, ok := idx.mapLit[name]; ok {
+			return cl, true
+		}
+	}
+	if cl, ok := iifeCompositeLit(sv); ok && isSchemaMap(cl) {
+		return cl, true
+	}
+	return nil, false
+}

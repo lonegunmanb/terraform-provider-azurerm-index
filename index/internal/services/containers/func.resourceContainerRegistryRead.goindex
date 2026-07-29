@@ -98,9 +98,11 @@ func resourceContainerRegistryRead(d *pluginsdk.ResourceData, meta interface{}) 
 				}
 				d.Set("retention_policy_in_days", retentionInDays)
 
-				if policies.TrustPolicy != nil && policies.TrustPolicy.Status != nil {
-					policyEnabled := *policies.TrustPolicy.Status == registries.PolicyStatusEnabled
-					d.Set("trust_policy_enabled", policyEnabled)
+				if !features.FivePointOh() {
+					if policies.TrustPolicy != nil && policies.TrustPolicy.Status != nil {
+						policyEnabled := *policies.TrustPolicy.Status == registries.PolicyStatusEnabled
+						d.Set("trust_policy_enabled", policyEnabled)
+					}
 				}
 				d.Set("quarantine_policy_enabled", flattenQuarantinePolicy(props.Policies))
 				d.Set("export_policy_enabled", flattenExportPolicy(props.Policies))
@@ -149,7 +151,11 @@ func resourceContainerRegistryRead(d *pluginsdk.ResourceData, meta interface{}) 
 				replication["location"] = valueLocation
 				replication["tags"] = tags.Flatten(value.Tags)
 				replication["zone_redundancy_enabled"] = *value.Properties.ZoneRedundancy == replications.ZoneRedundancyEnabled
-				replication["regional_endpoint_enabled"] = value.Properties.RegionEndpointEnabled != nil && *value.Properties.RegionEndpointEnabled
+				regionEndpointEnabled := value.Properties.RegionEndpointEnabled != nil && *value.Properties.RegionEndpointEnabled
+				replication["global_endpoint_routing_enabled"] = regionEndpointEnabled
+				if !features.FivePointOh() {
+					replication["regional_endpoint_enabled"] = regionEndpointEnabled
+				}
 				geoReplications = append(geoReplications, replication)
 			}
 		}

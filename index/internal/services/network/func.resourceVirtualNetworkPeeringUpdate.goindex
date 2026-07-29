@@ -28,8 +28,15 @@ func resourceVirtualNetworkPeeringUpdate(d *pluginsdk.ResourceData, meta interfa
 		return err
 	}
 
-	locks.ByID(virtualNetworkPeeringResourceType)
-	defer locks.UnlockByID(virtualNetworkPeeringResourceType)
+	vnetId := commonids.NewVirtualNetworkID(id.SubscriptionId, id.ResourceGroupName, id.VirtualNetworkName)
+	remoteVnetId, err := commonids.ParseVirtualNetworkID(d.Get("remote_virtual_network_id").(string))
+	if err != nil {
+		return err
+	}
+
+	vnetIDsToLock := []string{vnetId.ID(), remoteVnetId.ID()}
+	locks.MultipleByID(&vnetIDsToLock)
+	defer locks.UnlockMultipleByID(&vnetIDsToLock)
 
 	existing, err := client.Get(ctx, *id)
 	if err != nil {

@@ -97,7 +97,10 @@ func resourceContainerRegistryUpdate(d *pluginsdk.ResourceData, meta interface{}
 		"azuread_authentication_as_arm_policy_enabled",
 	}
 
-	policyKeys = append(policyKeys, []string{"retention_policy_in_days", "trust_policy_enabled"}...)
+	policyKeys = append(policyKeys, "retention_policy_in_days")
+	if !features.FivePointOh() {
+		policyKeys = append(policyKeys, "trust_policy_enabled")
+	}
 
 	if d.HasChanges(policyKeys...) {
 		payload.Properties.Policies = &registries.Policies{}
@@ -116,14 +119,16 @@ func resourceContainerRegistryUpdate(d *pluginsdk.ResourceData, meta interface{}
 		}
 	}
 
-	if d.HasChange("trust_policy_enabled") {
-		payload.Properties.Policies.TrustPolicy = &registries.TrustPolicy{
-			Status: pointer.To(registries.PolicyStatusDisabled),
-		}
-
-		if v := d.Get("trust_policy_enabled").(bool); v {
+	if !features.FivePointOh() {
+		if d.HasChange("trust_policy_enabled") {
 			payload.Properties.Policies.TrustPolicy = &registries.TrustPolicy{
-				Status: pointer.To(registries.PolicyStatusEnabled),
+				Status: pointer.To(registries.PolicyStatusDisabled),
+			}
+
+			if v := d.Get("trust_policy_enabled").(bool); v {
+				payload.Properties.Policies.TrustPolicy = &registries.TrustPolicy{
+					Status: pointer.To(registries.PolicyStatusEnabled),
+				}
 			}
 		}
 	}

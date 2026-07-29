@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2023-08-01-preview/serversecurityalertpolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -33,7 +34,6 @@ func resourceMsSqlServerSecurityAlertPolicyCreate(d *pluginsdk.ResourceData, met
 
 	var disabledAlerts *[]string
 	var emailAddresses *[]string
-	var emailAdmins *bool
 	var retentionDays *int64
 	var storageAccountAccessKey *string
 	var storageEndpoint *string
@@ -56,12 +56,12 @@ func resourceMsSqlServerSecurityAlertPolicyCreate(d *pluginsdk.ResourceData, met
 	}
 	props.EmailAddresses = emailAddresses
 
-	// NOTE: The API defaults to 'true' for the 'EmailAccountAdmins'
-	// property, the provider defaults to 'false'...
-	if v, ok := d.GetOk("email_account_admins"); ok {
-		emailAdmins = pointer.To(v.(bool))
+	props.EmailAccountAdmins = pointer.To(d.Get("email_account_admins_enabled").(bool))
+	if !features.FivePointOh() {
+		if !pluginsdk.IsExplicitlyNullInConfig(d, "email_account_admins") {
+			props.EmailAccountAdmins = pointer.To(d.Get("email_account_admins").(bool))
+		}
 	}
-	props.EmailAccountAdmins = emailAdmins
 
 	if v, ok := d.GetOk("retention_days"); ok {
 		retentionDays = pointer.To(int64(v.(int)))

@@ -81,11 +81,6 @@ func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}
 		retentionPolicy.Status = pointer.To(registries.PolicyStatusEnabled)
 	}
 
-	trustPolicy := &registries.TrustPolicy{}
-	if v, ok := d.GetOk("trust_policy_enabled"); ok && v.(bool) {
-		trustPolicy.Status = pointer.To(registries.PolicyStatusEnabled)
-	}
-
 	parameters := registries.Registry{
 		Location: location.Normalize(d.Get("location").(string)),
 		Sku: registries.Sku{
@@ -100,7 +95,6 @@ func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}
 			Policies: &registries.Policies{
 				QuarantinePolicy:                 expandQuarantinePolicy(d.Get("quarantine_policy_enabled").(bool)),
 				RetentionPolicy:                  retentionPolicy,
-				TrustPolicy:                      trustPolicy,
 				ExportPolicy:                     expandExportPolicy(d.Get("export_policy_enabled").(bool)),
 				AzureADAuthenticationAsArmPolicy: expandAadAuthAsArmPolicy(d.Get("azuread_authentication_as_arm_policy_enabled").(bool)),
 			},
@@ -114,6 +108,14 @@ func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}
 		},
 
 		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+	}
+
+	if !features.FivePointOh() {
+		trustPolicy := &registries.TrustPolicy{}
+		if v, ok := d.GetOk("trust_policy_enabled"); ok && v.(bool) {
+			trustPolicy.Status = pointer.To(registries.PolicyStatusEnabled)
+		}
+		parameters.Properties.Policies.TrustPolicy = trustPolicy
 	}
 
 	if err := client.CreateCallbackThenPoll(ctx, id, parameters, sdk.SetIDCallback(meta, &id, d)); err != nil {

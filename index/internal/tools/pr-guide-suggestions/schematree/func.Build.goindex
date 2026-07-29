@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree
+import (
+	"go/ast"
+	"go/token"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/astutil"
+)
+func Build(fset *token.FileSet, files []*ast.File) *Result {
+	var schemaMaps []*ast.CompositeLit
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			if cl, ok := n.(*ast.CompositeLit); ok && isSchemaMap(cl) {
+				schemaMaps = append(schemaMaps, cl)
+			}
+			return true
+		})
+	}
+
+	b := &builder{
+		fset:      fset,
+		files:     files,
+		result:    &Result{},
+		resources: resourceNames(files),
+		funcs:     buildFuncIndex(files),
+		walked:    map[*ast.CompositeLit]bool{},
+		stack:     map[*ast.CompositeLit]bool{},
+	}
+
+	// A schema map is inline-"nested" when it is the direct Elem of a block in
+	// another schema map; it is walked as a child of that block rather than as a
+	// root.
+	nested := make(map[*ast.CompositeLit]bool)
+	for _, m := range schemaMaps {
+		for _, kv := range mapEntries(m) {
+			if cl, ok := unwrapSchemaLit(kv.Value); ok {
+				if child, ok := newSchemaLit(cl).ElemResourceSchemaMap(); ok {
+					nested[child] = true
+				}
+			}
+		}
+	}
+
+	// Primary roots are maps that are neither inline-nested nor owned by a schema
+	// helper function (those are reached by resolving the helper call).
+	for _, m := range schemaMaps {
+		if nested[m] || b.funcs.owned[m] {
+			continue
+		}
+		b.walkRoot(m)
+	}
+	// Fallback: lint any remaining map (for example a helper whose caller is not
+	// in the analysed files) so no schema is skipped.
+	for _, m := range schemaMaps {
+		if nested[m] || b.walked[m] {
+			continue
+		}
+		b.walkRoot(m)
+	}
+
+	return b.result
+}

@@ -1,28 +1,25 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
 import (
+	"context"
 	"fmt"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afddomains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/routes"
 	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
-func routeDelta(oldRoutes *[]parse.FrontDoorRouteId, newRoutes *[]parse.FrontDoorRouteId) (*[]parse.FrontDoorRouteId, *[]parse.FrontDoorRouteId) {
-	remove := make([]parse.FrontDoorRouteId, 0)
-	shared := make([]parse.FrontDoorRouteId, 0)
-	if len(*newRoutes) == 0 || newRoutes == nil {
+func routeDelta(oldRoutes *[]routes.RouteId, newRoutes *[]routes.RouteId) (*[]routes.RouteId, *[]routes.RouteId) {
+	remove := make([]routes.RouteId, 0)
+	shared := make([]routes.RouteId, 0)
+	if newRoutes == nil || len(*newRoutes) == 0 {
 		return oldRoutes, &shared
 	}
 
-	if len(*oldRoutes) == 0 || oldRoutes == nil {
+	if oldRoutes == nil || len(*oldRoutes) == 0 {
 		return &remove, &shared
 	}
 

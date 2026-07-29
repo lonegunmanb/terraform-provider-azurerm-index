@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree
+import (
+	"go/ast"
+	"go/token"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/astutil"
+)
+func (b *builder) rootInfo(mapLit *ast.CompositeLit) (resource, kind string) {
+	pos := mapLit.Pos()
+	file := fileContaining(b.files, pos)
+	if file == nil {
+		return "", "resource"
+	}
+
+	kind = "resource"
+	if name := b.fset.File(pos).Name(); strings.Contains(name, "data_source") || strings.Contains(name, "datasource") {
+		kind = "data source"
+	}
+
+	fr := b.resources[file]
+	if recv := enclosingReceiver(file, pos); recv != "" {
+		if name, ok := fr.byReceiver[recv]; ok {
+			return name, kind
+		}
+	}
+	if len(fr.byReceiver) == 1 {
+		for _, name := range fr.byReceiver {
+			return name, kind
+		}
+	}
+
+	return "", kind
+}

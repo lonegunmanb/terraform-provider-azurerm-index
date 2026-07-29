@@ -1,0 +1,29 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/rules
+import (
+	"fmt"
+	"go/ast"
+	"go/token"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/astutil"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree"
+)
+func checkSL004(res *schematree.Result, report ReportFunc) {
+	for _, n := range res.All {
+		if n.Schema == nil || !userSettable(n.Schema) {
+			continue
+		}
+		vf := n.Schema.FieldValue(fieldValidateFunc)
+		if vf == nil {
+			continue
+		}
+
+		accepted := acceptedNoneValues(vf)
+		if len(accepted) == 0 {
+			continue
+		}
+
+		report(n, fmt.Sprintf("property %q accepts %s via validation; omit these values (use Terraform null) and normalise in Create/Read", n.Path, strings.Join(accepted, ", ")), nil)
+	}
+}

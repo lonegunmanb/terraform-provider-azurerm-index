@@ -1,0 +1,66 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigins"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rules"
+	helperValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenCdnFrontDoorRuleConditions(input *[]rules.DeliveryRuleCondition) ([]CdnFrontDoorRuleConditionsModel, error) {
+	if input == nil || len(*input) == 0 {
+		return []CdnFrontDoorRuleConditionsModel{}, nil
+	}
+
+	conditions := CdnFrontDoorRuleConditionsModel{}
+	for _, condition := range *input {
+		switch c := condition.(type) {
+		case rules.DeliveryRuleRemoteAddressCondition:
+			conditions.RemoteAddress = append(conditions.RemoteAddress, flattenCdnFrontDoorRuleConditionBaseModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleRequestMethodCondition:
+			conditions.RequestMethod = append(conditions.RequestMethod, flattenCdnFrontDoorRuleConditionBaseModel(string(c.Parameters.Operator), pointer.FromEnumSlice(c.Parameters.MatchValues), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleQueryStringCondition:
+			conditions.QueryString = append(conditions.QueryString, flattenCdnFrontDoorBatchRuleSetConditionWithTransformsModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRulePostArgsCondition:
+			conditions.PostArgs = append(conditions.PostArgs, flattenCdnFrontDoorRuleConditionWithNameAndTransformsModel(string(c.Parameters.Operator), c.Parameters.Selector, pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleRequestUriCondition:
+			conditions.RequestURL = append(conditions.RequestURL, flattenCdnFrontDoorBatchRuleSetConditionWithTransformsModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleRequestHeaderCondition:
+			conditions.RequestHeader = append(conditions.RequestHeader, flattenCdnFrontDoorRuleConditionWithNameAndTransformsModel(string(c.Parameters.Operator), c.Parameters.Selector, pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleRequestBodyCondition:
+			conditions.RequestBody = append(conditions.RequestBody, flattenCdnFrontDoorBatchRuleSetConditionWithTransformsModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleRequestSchemeCondition:
+			conditions.RequestScheme = append(conditions.RequestScheme, flattenCdnFrontDoorRuleConditionBaseModel(string(c.Parameters.Operator), pointer.FromEnumSlice(c.Parameters.MatchValues), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleURLPathCondition:
+			conditions.RequestPath = append(conditions.RequestPath, flattenCdnFrontDoorBatchRuleSetConditionWithTransformsModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleURLFileExtensionCondition:
+			conditions.RequestFileExtension = append(conditions.RequestFileExtension, flattenCdnFrontDoorBatchRuleSetConditionWithTransformsModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleURLFileNameCondition:
+			conditions.RequestFilename = append(conditions.RequestFilename, flattenCdnFrontDoorBatchRuleSetConditionWithTransformsModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleHTTPVersionCondition:
+			conditions.HTTPVersion = append(conditions.HTTPVersion, flattenCdnFrontDoorRuleConditionBaseModel(string(c.Parameters.Operator), pointer.FromEnumSlice(c.Parameters.MatchValues), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleCookiesCondition:
+			conditions.RequestCookies = append(conditions.RequestCookies, flattenCdnFrontDoorRuleConditionWithNameAndTransformsModel(string(c.Parameters.Operator), c.Parameters.Selector, pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleIsDeviceCondition:
+			conditions.DeviceType = append(conditions.DeviceType, flattenCdnFrontDoorRuleConditionBaseModel(string(c.Parameters.Operator), pointer.FromEnumSlice(c.Parameters.MatchValues), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleSocketAddrCondition:
+			conditions.SocketAddress = append(conditions.SocketAddress, flattenCdnFrontDoorRuleConditionBaseModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleClientPortCondition:
+			conditions.ClientPort = append(conditions.ClientPort, flattenCdnFrontDoorRuleConditionBaseModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleServerPortCondition:
+			conditions.ServerPort = append(conditions.ServerPort, flattenCdnFrontDoorRuleConditionBaseModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleHostNameCondition:
+			conditions.HostName = append(conditions.HostName, flattenCdnFrontDoorBatchRuleSetConditionWithTransformsModel(string(c.Parameters.Operator), pointer.From(c.Parameters.MatchValues), pointer.FromEnumSlice(c.Parameters.Transforms), c.Parameters.NegateCondition))
+		case rules.DeliveryRuleSslProtocolCondition:
+			conditions.SSLProtocol = append(conditions.SSLProtocol, flattenCdnFrontDoorRuleConditionBaseModel(string(c.Parameters.Operator), pointer.FromEnumSlice(c.Parameters.MatchValues), c.Parameters.NegateCondition))
+		default:
+			return []CdnFrontDoorRuleConditionsModel{}, fmt.Errorf("unsupported condition (`%s`) encountered", condition.DeliveryRuleCondition().Name)
+		}
+	}
+
+	return []CdnFrontDoorRuleConditionsModel{conditions}, nil
+}

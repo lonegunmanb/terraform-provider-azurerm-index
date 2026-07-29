@@ -1,0 +1,123 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-04-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (KubernetesAutomaticClusterDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Containers.KubernetesClustersClient_v2026_04_01
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var state KubernetesAutomaticClusterDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %w", err)
+			}
+
+			id := commonids.NewKubernetesClusterID(subscriptionId, state.ResourceGroupName, state.Name)
+
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %w", id, err)
+			}
+
+			userCredentialsResp, err := client.ListClusterUserCredentials(ctx, id, managedclusters.ListClusterUserCredentialsOperationOptions{})
+			if err != nil && !response.WasStatusCode(userCredentialsResp.HttpResponse, http.StatusForbidden) {
+				return fmt.Errorf("retrieving User Credentials for %s: %w", id, err)
+			}
+
+			metadata.SetID(id)
+
+			if model := resp.Model; model != nil {
+				if resp.Model.Sku == nil || resp.Model.Sku.Name == nil {
+					return fmt.Errorf("importing %s: SKU information is missing", id)
+				}
+
+				if pointer.From(resp.Model.Sku.Name) != managedclusters.ManagedClusterSKUNameAutomatic {
+					return fmt.Errorf("importing %s: specified Kubernetes Cluster is not using the SKU `Automatic`, got `%s`", id, pointer.From(resp.Model.Sku.Name))
+				}
+
+				state.Location = location.Normalize(model.Location)
+				state.Tags = tags.Flatten(model.Tags)
+
+				if props := model.Properties; props != nil {
+					state.DNSPrefix = pointer.From(props.DnsPrefix)
+					state.FQDN = pointer.From(props.Fqdn)
+					state.PortalFQDN = pointer.From(props.AzurePortalFQDN)
+					state.PrivateFQDN = pointer.From(props.PrivateFQDN)
+					state.KubernetesVersion = pointer.From(props.KubernetesVersion)
+					state.CurrentKubernetesVersion = pointer.From(props.CurrentKubernetesVersion)
+					state.NodeResourceGroup = pointer.From(props.NodeResourceGroup)
+					if nodeResourceGroup := pointer.From(props.NodeResourceGroup); nodeResourceGroup != "" {
+						state.NodeResourceGroupID = commonids.NewResourceGroupID(id.SubscriptionId, nodeResourceGroup).ID()
+					}
+					state.PrivateCluster, err = flattenKubernetesAutomaticClusterDataSourcePrivateCluster(props.ApiServerAccessProfile)
+					if err != nil {
+						return fmt.Errorf("flattening `private_cluster`: %w", err)
+					}
+
+					// Flatten API server access profile
+					state.APIServerAccess = flattenKubernetesAutomaticClusterDataSourceAPIServerAccessProfile(props.ApiServerAccessProfile)
+
+					// Flatten hosted system profile
+					state.HostedSystemProfile = flattenKubernetesAutomaticClusterDataSourceHostedSystemProfile(props.HostedSystemProfile)
+
+					state.ServiceMeshProfile = flattenKubernetesAutomaticClusterDataSourceServiceMeshProfile(props.ServiceMeshProfile)
+
+					// Flatten web app routing ingress
+					webAppRoutingIngress, err := flattenKubernetesAutomaticClusterDataSourceWebAppRoutingIngress(props.IngressProfile)
+					if err != nil {
+						return fmt.Errorf("flattening `web_app_routing_ingress`: %w", err)
+					}
+					state.WebAppRoutingIngress = webAppRoutingIngress
+				}
+
+				// Flatten identity
+				flattenedIdentity, err := identity.FlattenSystemOrUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return fmt.Errorf("flattening `identity`: %w", err)
+				}
+				state.Identity = pointer.From(flattenedIdentity)
+
+				// Flatten kubelet identity
+				if model.Properties.IdentityProfile != nil {
+					kubeletIdentity, err := flattenKubernetesAutomaticClusterDataSourceIdentityProfile(model.Properties.IdentityProfile)
+					if err != nil {
+						return fmt.Errorf("flattening `kubelet_identity`: %w", err)
+					}
+					state.KubeletIdentity = kubeletIdentity
+				}
+
+				// Flatten kube configs
+				if userCredentialsResp.Model != nil {
+					kubeConfigRaw, kubeConfig := flattenKubernetesAutomaticClusterCredentials(userCredentialsResp.Model, "clusterUser")
+					state.KubeConfigRaw = pointer.From(kubeConfigRaw)
+					state.KubeConfig = kubeConfig
+				}
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

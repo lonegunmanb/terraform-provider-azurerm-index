@@ -1,15 +1,21 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn
 import (
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2021-06-01/cdn" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afddomains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdendpoints"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigingroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afdorigins"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/routes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/rulesets"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/azuresdkhacks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -31,7 +37,7 @@ func resourceCdnFrontDoorRoute() *pluginsdk.Resource {
 		},
 
 		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
-			_, err := parse.FrontDoorRouteID(id)
+			_, err := routes.ParseRouteID(id)
 			return err
 		}),
 
@@ -47,13 +53,13 @@ func resourceCdnFrontDoorRoute() *pluginsdk.Resource {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: validate.FrontDoorEndpointID,
+				ValidateFunc: routes.ValidateAfdEndpointID,
 			},
 
 			"cdn_frontdoor_origin_group_id": {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
-				ValidateFunc: validate.FrontDoorOriginGroupID,
+				ValidateFunc: afdorigingroups.ValidateOriginGroupID,
 			},
 
 			// NOTE: These are not sent to the API, they are only here so Terraform
@@ -64,17 +70,16 @@ func resourceCdnFrontDoorRoute() *pluginsdk.Resource {
 				Optional: true,
 				Elem: &pluginsdk.Schema{
 					Type:         pluginsdk.TypeString,
-					ValidateFunc: validate.FrontDoorOriginID,
+					ValidateFunc: afdorigins.ValidateOriginGroupOriginID,
 				},
 			},
 
 			"cdn_frontdoor_custom_domain_ids": {
 				Type:     pluginsdk.TypeSet,
 				Optional: true,
-
 				Elem: &pluginsdk.Schema{
 					Type:         pluginsdk.TypeString,
-					ValidateFunc: validate.FrontDoorCustomDomainID,
+					ValidateFunc: afddomains.ValidateCustomDomainID,
 				},
 			},
 
@@ -84,19 +89,15 @@ func resourceCdnFrontDoorRoute() *pluginsdk.Resource {
 				Default:  true,
 			},
 
-			// NOTE: Per the service team this cannot just be omitted it must explicitly be set to nil to disable caching
 			"cache": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
 				MaxItems: 1,
-
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
-						// NOTE: CSV string to API
 						"query_strings": {
 							Type:     pluginsdk.TypeList,
 							Optional: true,
-
 							Elem: &pluginsdk.Schema{
 								Type:         pluginsdk.TypeString,
 								ValidateFunc: validation.StringDoesNotContainAny(","),
@@ -106,12 +107,12 @@ func resourceCdnFrontDoorRoute() *pluginsdk.Resource {
 						"query_string_caching_behavior": {
 							Type:     pluginsdk.TypeString,
 							Optional: true,
-							Default:  string(cdn.AfdQueryStringCachingBehaviorIgnoreQueryString),
+							Default:  string(routes.AfdQueryStringCachingBehaviorIgnoreQueryString),
 							ValidateFunc: validation.StringInSlice([]string{
-								string(cdn.AfdQueryStringCachingBehaviorIgnoreQueryString),
-								string(cdn.AfdQueryStringCachingBehaviorIgnoreSpecifiedQueryStrings),
-								string(cdn.AfdQueryStringCachingBehaviorIncludeSpecifiedQueryStrings),
-								string(cdn.AfdQueryStringCachingBehaviorUseQueryString),
+								string(routes.AfdQueryStringCachingBehaviorIgnoreQueryString),
+								string(routes.AfdQueryStringCachingBehaviorIgnoreSpecifiedQueryStrings),
+								string(routes.AfdQueryStringCachingBehaviorIncludeSpecifiedQueryStrings),
+								string(routes.AfdQueryStringCachingBehaviorUseQueryString),
 							}, false),
 						},
 
@@ -124,7 +125,6 @@ func resourceCdnFrontDoorRoute() *pluginsdk.Resource {
 						"content_types_to_compress": {
 							Type:     pluginsdk.TypeList,
 							Optional: true,
-
 							Elem: &pluginsdk.Schema{
 								Type:         pluginsdk.TypeString,
 								ValidateFunc: validation.StringInSlice(frontDoorContentTypes(), false),
@@ -143,11 +143,11 @@ func resourceCdnFrontDoorRoute() *pluginsdk.Resource {
 			"forwarding_protocol": {
 				Type:     pluginsdk.TypeString,
 				Optional: true,
-				Default:  string(cdn.ForwardingProtocolMatchRequest),
+				Default:  string(routes.ForwardingProtocolMatchRequest),
 				ValidateFunc: validation.StringInSlice([]string{
-					string(cdn.ForwardingProtocolHTTPOnly),
-					string(cdn.ForwardingProtocolHTTPSOnly),
-					string(cdn.ForwardingProtocolMatchRequest),
+					string(routes.ForwardingProtocolHTTPOnly),
+					string(routes.ForwardingProtocolHTTPSOnly),
+					string(routes.ForwardingProtocolMatchRequest),
 				}, false),
 			},
 
@@ -174,9 +174,9 @@ func resourceCdnFrontDoorRoute() *pluginsdk.Resource {
 			"cdn_frontdoor_rule_set_ids": {
 				Type:     pluginsdk.TypeSet,
 				Optional: true,
-
 				Elem: &pluginsdk.Schema{
-					Type: pluginsdk.TypeString,
+					Type:         pluginsdk.TypeString,
+					ValidateFunc: rulesets.ValidateRuleSetID,
 				},
 			},
 
@@ -184,12 +184,11 @@ func resourceCdnFrontDoorRoute() *pluginsdk.Resource {
 				Type:     pluginsdk.TypeSet,
 				Required: true,
 				MaxItems: 2,
-
 				Elem: &pluginsdk.Schema{
 					Type: pluginsdk.TypeString,
 					ValidateFunc: validation.StringInSlice([]string{
-						string(cdn.AFDEndpointProtocolsHTTP),
-						string(cdn.AFDEndpointProtocolsHTTPS),
+						string(routes.AFDEndpointProtocolsHTTP),
+						string(routes.AFDEndpointProtocolsHTTPS),
 					}, false),
 				},
 			},

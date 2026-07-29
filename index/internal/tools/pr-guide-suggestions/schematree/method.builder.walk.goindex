@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree
+import (
+	"go/ast"
+	"go/token"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/astutil"
+)
+func (b *builder) walk(mapLit *ast.CompositeLit, parent *Node, prefix string, topLevel bool, resource, kind string) map[string]*Node {
+	b.walked[mapLit] = true
+	b.stack[mapLit] = true
+	defer delete(b.stack, mapLit)
+
+	level := make(map[string]*Node)
+	var order []*Node
+
+	for _, kv := range mapEntries(mapLit) {
+		name, ok := stringLitValue(kv.Key)
+		if !ok {
+			continue
+		}
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+
+		node := &Node{
+			Name:     name,
+			Path:     path,
+			Key:      kv.Key,
+			Value:    kv.Value,
+			Parent:   parent,
+			TopLevel: topLevel,
+			Resource: resource,
+			Kind:     kind,
+		}
+		if cl, ok := b.resolveSchemaLit(kv.Value); ok {
+			node.Schema = newSchemaLit(cl)
+		}
+
+		level[name] = node
+		order = append(order, node)
+		b.result.All = append(b.result.All, node)
+	}
+
+	for _, n := range order {
+		n.Siblings = level
+	}
+
+	for _, n := range order {
+		if n.Schema == nil {
+			continue
+		}
+		childMap, ok := b.blockChildMap(n.Schema)
+		if !ok || b.stack[childMap] {
+			continue
+		}
+		n.Children = b.walk(childMap, n, n.Path, false, resource, kind)
+	}
+
+	return level
+}

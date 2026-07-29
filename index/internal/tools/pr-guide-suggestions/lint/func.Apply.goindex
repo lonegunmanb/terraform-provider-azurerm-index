@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/lint
+import (
+	"fmt"
+	"os"
+	"regexp"
+)
+func Apply(findings []Finding) ([]AppliedRename, error) {
+	type edit struct{ from, to string }
+	byFile := map[string][]edit{}
+	var order []string
+	for _, f := range findings {
+		if f.Rename == nil {
+			continue
+		}
+		if _, seen := byFile[f.File]; !seen {
+			order = append(order, f.File)
+		}
+		byFile[f.File] = append(byFile[f.File], edit{f.Rename.From, f.Rename.To})
+	}
+
+	var applied []AppliedRename
+	for _, file := range order {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			return applied, fmt.Errorf("reading %s: %w", file, err)
+		}
+		info, err := os.Stat(file)
+		if err != nil {
+			return applied, fmt.Errorf("stat %s: %w", file, err)
+		}
+
+		text := string(content)
+		done := map[string]bool{}
+		for _, e := range byFile[file] {
+			if e.from == "" || e.to == "" || e.from == e.to || done[e.from] {
+				continue
+			}
+			re := regexp.MustCompile(`([".])` + regexp.QuoteMeta(e.from) + `([".])`)
+			replaced := re.ReplaceAllString(text, `${1}`+e.to+`${2}`)
+			if replaced == text {
+				continue
+			}
+			text = replaced
+			done[e.from] = true
+			applied = append(applied, AppliedRename{File: file, From: e.from, To: e.to})
+		}
+
+		if text != string(content) {
+			if err := os.WriteFile(file, []byte(text), info.Mode().Perm()); err != nil {
+				return applied, fmt.Errorf("writing %s: %w", file, err)
+			}
+		}
+	}
+	return applied, nil
+}

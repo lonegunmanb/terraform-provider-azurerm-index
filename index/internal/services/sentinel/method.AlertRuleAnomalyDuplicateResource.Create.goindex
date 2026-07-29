@@ -7,112 +7,124 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2023-09-01/workspaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/securityinsights/2022-10-01-preview/securitymlanalyticssettings"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/azuresdkhacks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/sentinel/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	securityinsight "github.com/jackofallops/kermit/sdk/securityinsights/2022-10-01-preview/securityinsights"
 )
 func (r AlertRuleAnomalyDuplicateResource) Create() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Timeout: 30 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
-			var metaModel AlertRuleAnomalyDuplicateModel
-			if err := metadata.Decode(&metaModel); err != nil {
+			var config AlertRuleAnomalyDuplicateModel
+			if err := metadata.Decode(&config); err != nil {
 				return fmt.Errorf("decoding: %+v", err)
 			}
 
 			client := metadata.Client.Sentinel.AnalyticsSettingsClient
 
-			workspaceId, err := workspaces.ParseWorkspaceID(metaModel.WorkspaceId)
+			workspaceId, err := workspaces.ParseWorkspaceID(config.WorkspaceId)
 			if err != nil {
 				return fmt.Errorf("parsing workspace id: %+v", err)
 			}
 
-			builtInAnomalyRule, err := AlertRuleAnomalyReadWithPredicate(ctx, client.BaseClient, *workspaceId, func(v *azuresdkhacks.AnomalySecurityMLAnalyticsSettings) bool {
-				if v.ID != nil && strings.EqualFold(AlertRuleAnomalyIdFromWorkspaceId(*workspaceId, *v.Name), metaModel.BuiltInRuleId) {
-					return true
-				}
-
-				return false
-			})
+			items, err := client.ListComplete(ctx, securitymlanalyticssettings.WorkspaceId(*workspaceId))
 			if err != nil {
-				return fmt.Errorf("reading built-in anomaly rule: %+v", err)
+				return fmt.Errorf("listing alerts rules on %s: %+v", workspaceId, err)
 			}
+
+			var builtInAnomalyRule *securitymlanalyticssettings.AnomalySecurityMLAnalyticsSettings
+			for _, item := range items.Items {
+				if strings.EqualFold(AlertRuleAnomalyIdFromWorkspaceId(*workspaceId, pointer.From(item.SecurityMLAnalyticsSetting().Name)), config.BuiltInRuleId) {
+					v, ok := item.(securitymlanalyticssettings.AnomalySecurityMLAnalyticsSettings)
+					if !ok {
+						continue
+					}
+					builtInAnomalyRule = &v
+					break
+				}
+			}
+
 			if builtInAnomalyRule == nil {
-				return fmt.Errorf("built-in anomaly rule not found")
+				return fmt.Errorf("retrieving built-in anomaly rule (%s): not found", config.BuiltInRuleId)
 			}
 
-			existingDuplicateRule, err := AlertRuleAnomalyReadWithPredicate(ctx, client.BaseClient, *workspaceId, func(v *azuresdkhacks.AnomalySecurityMLAnalyticsSettings) bool {
-				if v.SettingsDefinitionID != nil &&
-					builtInAnomalyRule.SettingsDefinitionID != nil &&
-					strings.EqualFold(v.SettingsDefinitionID.String(), builtInAnomalyRule.SettingsDefinitionID.String()) &&
-					v.Name != nil && builtInAnomalyRule.Name != nil && *v.Name != *builtInAnomalyRule.Name {
-					return true
-				}
-				return false
-			})
-			if err != nil {
-				return fmt.Errorf("checking for presence of existing duplicate rule of built-in rule: %+v", err)
+			if builtInAnomalyRule.Properties == nil {
+				return fmt.Errorf("retrieving built-in anomaly rule (%s): `properties` was nil", config.BuiltInRuleId)
 			}
-			if existingDuplicateRule != nil {
-				parsedExistingId, err := parse.MLAnalyticsSettingsID(AlertRuleAnomalyIdFromWorkspaceId(*workspaceId, *existingDuplicateRule.Name))
+			builtInAnomalyRuleProps := builtInAnomalyRule.Properties
+
+			var duplicateRule *securitymlanalyticssettings.AnomalySecurityMLAnalyticsSettings
+			for _, item := range items.Items {
+				v, ok := item.(securitymlanalyticssettings.AnomalySecurityMLAnalyticsSettings)
+				if !ok {
+					continue
+				}
+				if v.Properties != nil && builtInAnomalyRule.Properties != nil {
+					if vSettingsID := pointer.From(v.Properties.SettingsDefinitionId); strings.EqualFold(vSettingsID, pointer.From(builtInAnomalyRule.Properties.SettingsDefinitionId)) && vSettingsID != "" {
+						if vName := pointer.From(v.Name); vName != pointer.From(builtInAnomalyRule.Name) && vName != "" {
+							duplicateRule = &v
+							break
+						}
+					}
+				}
+			}
+
+			if duplicateRule != nil {
+				parsedExistingId, err := securitymlanalyticssettings.ParseSecurityMLAnalyticsSettingID(AlertRuleAnomalyIdFromWorkspaceId(*workspaceId, pointer.From(duplicateRule.Name)))
 				if err != nil {
-					return fmt.Errorf("parsing: %+v", err)
+					return err
 				}
-				return fmt.Errorf("only one duplicate rule of the same built-in rule is allowed, there is an existing duplicate rule of %s with id %q", *builtInAnomalyRule.DisplayName, parsedExistingId.ID())
+				return fmt.Errorf("only one duplicate rule of the same built-in rule is allowed, there is an existing duplicate rule with id %s", parsedExistingId.ID())
 			}
 
-			id := parse.NewMLAnalyticsSettingsID(workspaceId.SubscriptionId, workspaceId.ResourceGroupName, workspaceId.WorkspaceName, uuid.New().String())
-			// no need to do another existing check, it will be checked by finding existing duplicate rule of the template.
+			id := securitymlanalyticssettings.NewSecurityMLAnalyticsSettingID(workspaceId.SubscriptionId, workspaceId.ResourceGroupName, workspaceId.WorkspaceName, uuid.New().String())
 
-			if builtInAnomalyRule.SettingsStatus == securityinsight.SettingsStatusProduction && metaModel.Mode == string(securityinsight.SettingsStatusProduction) {
-				return fmt.Errorf("built-in anomaly rule %s is in production mode, it's not allowed to create duplicate rule in production mode", *builtInAnomalyRule.DisplayName)
+			if builtInAnomalyRule.Properties.SettingsStatus == securitymlanalyticssettings.SettingsStatusProduction && config.Mode == string(securitymlanalyticssettings.SettingsStatusProduction) {
+				return fmt.Errorf("built-in anomaly rule %s is in production mode, creating duplicate rules in production mode is not supported", builtInAnomalyRule.Properties.DisplayName)
 			}
 
-			param := securityinsight.AnomalySecurityMLAnalyticsSettings{
-				Kind: securityinsight.KindBasicSecurityMLAnalyticsSettingKindAnomaly,
-				AnomalySecurityMLAnalyticsSettingsProperties: &securityinsight.AnomalySecurityMLAnalyticsSettingsProperties{
-					Description:            builtInAnomalyRule.Description,
-					DisplayName:            pointer.To(metaModel.DisplayName),
-					RequiredDataConnectors: builtInAnomalyRule.RequiredDataConnectors,
-					Tactics:                builtInAnomalyRule.Tactics,
-					Techniques:             builtInAnomalyRule.Techniques,
-					AnomalyVersion:         builtInAnomalyRule.AnomalyVersion,
-					Frequency:              builtInAnomalyRule.Frequency,
-					IsDefaultSettings:      pointer.To(false), // for duplicate one, it's not default settings.
-					AnomalySettingsVersion: builtInAnomalyRule.AnomalySettingsVersion,
-					SettingsDefinitionID:   builtInAnomalyRule.SettingsDefinitionID,
-					Enabled:                pointer.To(metaModel.Enabled),
-					SettingsStatus:         securityinsight.SettingsStatusFlighting,
+			param := securitymlanalyticssettings.AnomalySecurityMLAnalyticsSettings{
+				Kind: securitymlanalyticssettings.SecurityMLAnalyticsSettingsKindAnomaly,
+				Properties: &securitymlanalyticssettings.AnomalySecurityMLAnalyticsSettingsProperties{
+					Description:            builtInAnomalyRuleProps.Description,
+					DisplayName:            config.DisplayName,
+					RequiredDataConnectors: builtInAnomalyRuleProps.RequiredDataConnectors,
+					Tactics:                builtInAnomalyRuleProps.Tactics,
+					Techniques:             builtInAnomalyRuleProps.Techniques,
+					AnomalyVersion:         builtInAnomalyRuleProps.AnomalyVersion,
+					Frequency:              builtInAnomalyRuleProps.Frequency,
+					IsDefaultSettings:      false, // for duplicate one, it's not default settings.
+					AnomalySettingsVersion: builtInAnomalyRuleProps.AnomalySettingsVersion,
+					SettingsDefinitionId:   builtInAnomalyRuleProps.SettingsDefinitionId,
+					Enabled:                config.Enabled,
+					SettingsStatus:         securitymlanalyticssettings.SettingsStatusFlighting,
 				},
 			}
 
-			customizableObservations := &azuresdkhacks.AnomalySecurityMLAnalyticsCustomizableObservations{}
-			customizableObservations.MultiSelectObservations, err = expandAlertRuleAnomalyMultiSelectObservations(builtInAnomalyRule.CustomizableObservations.MultiSelectObservations, metaModel.MultiSelectObservation)
+			customizableObservations := &securitymlanalyticssettings.AnomalySecurityMLAnalyticsCustomizableObservations{}
+			customizableObservations.MultiSelectObservations, err = expandAlertRuleAnomalyMultiSelectObservations(builtInAnomalyRuleProps.CustomizableObservations, config.MultiSelectObservation)
 			if err != nil {
 				return fmt.Errorf("expanding `multi_select_observation`: %+v", err)
 			}
-			customizableObservations.SingleSelectObservations, err = expandAlertRuleAnomalySingleSelectObservations(builtInAnomalyRule.CustomizableObservations.SingleSelectObservations, metaModel.SingleSelectObservation)
+			customizableObservations.SingleSelectObservations, err = expandAlertRuleAnomalySingleSelectObservations(builtInAnomalyRuleProps.CustomizableObservations, config.SingleSelectObservation)
 			if err != nil {
 				return fmt.Errorf("expanding `single_select_observation`: %+v", err)
 			}
-			customizableObservations.PrioritizeExcludeObservations, err = expandAlertRuleAnomalyPrioritizeExcludeObservations(builtInAnomalyRule.CustomizableObservations.PrioritizeExcludeObservations, metaModel.PrioritizeExcludeObservation)
+			customizableObservations.PrioritizeExcludeObservations, err = expandAlertRuleAnomalyPrioritizeExcludeObservations(builtInAnomalyRuleProps.CustomizableObservations, config.PrioritizeExcludeObservation)
 			if err != nil {
 				return fmt.Errorf("expanding `prioritize_exclude_observation`: %+v", err)
 			}
-			customizableObservations.ThresholdObservations, err = expandAlertRuleAnomalyThresholdObservations(builtInAnomalyRule.CustomizableObservations.ThresholdObservations, metaModel.ThresholdObservation)
+			customizableObservations.ThresholdObservations, err = expandAlertRuleAnomalyThresholdObservations(builtInAnomalyRuleProps.CustomizableObservations, config.ThresholdObservation)
 			if err != nil {
 				return fmt.Errorf("expanding `threshold_observation`: %+v", err)
 			}
+			param.Properties.CustomizableObservations = customizableObservations
 
-			param.CustomizableObservations = customizableObservations
-
-			if _, err = client.CreateOrUpdate(ctx, id.ResourceGroup, id.WorkspaceName, id.SecurityMLAnalyticsSettingName, param); err != nil {
+			if _, err = client.CreateOrUpdate(ctx, id, param); err != nil {
 				return fmt.Errorf("creating %s: %+v", id, err)
 			}
 

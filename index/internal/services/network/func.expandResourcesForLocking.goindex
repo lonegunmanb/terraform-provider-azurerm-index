@@ -23,6 +23,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/ipampools"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/virtualnetworks"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -34,8 +35,8 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func expandResourcesForLocking(d *pluginsdk.ResourceData) ([]string, []string, error) {
-	nsgNames := make([]string, 0)
-	routeTableNames := make([]string, 0)
+	nsgIds := make([]string, 0)
+	routeTableIds := make([]string, 0)
 
 	if v, ok := d.GetOk("subnet"); ok {
 		subnets := v.(*pluginsdk.Set).List()
@@ -51,11 +52,7 @@ func expandResourcesForLocking(d *pluginsdk.ResourceData) ([]string, []string, e
 				if err != nil {
 					return nil, nil, err
 				}
-
-				networkSecurityGroupName := parsedNsgID.NetworkSecurityGroupName
-				if !utils.SliceContainsValue(nsgNames, networkSecurityGroupName) {
-					nsgNames = append(nsgNames, networkSecurityGroupName)
-				}
+				nsgIds = append(nsgIds, parsedNsgID.ID())
 			}
 
 			routeTableId := subnet["route_table_id"].(string)
@@ -64,13 +61,10 @@ func expandResourcesForLocking(d *pluginsdk.ResourceData) ([]string, []string, e
 				if err != nil {
 					return nil, nil, err
 				}
-				routeTableName := parsedRouteTableID.RouteTableName
-				if !utils.SliceContainsValue(routeTableNames, routeTableName) {
-					routeTableNames = append(routeTableNames, routeTableName)
-				}
+				routeTableIds = append(routeTableIds, parsedRouteTableID.ID())
 			}
 		}
 	}
 
-	return nsgNames, routeTableNames, nil
+	return nsgIds, routeTableIds, nil
 }

@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2026-03-01/raipolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r CognitiveAccountRaiPolicyResource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			if metadata.ResourceDiff == nil {
+				return nil
+			}
+
+			rawFilters, ok := metadata.ResourceDiff.GetOk("content_filter")
+			if !ok {
+				return nil
+			}
+
+			filters, ok := rawFilters.([]interface{})
+			if !ok {
+				return nil
+			}
+
+			for i, rawFilter := range filters {
+				filter, ok := rawFilter.(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				name, _ := filter["name"].(string)
+				severityThreshold, _ := filter["severity_threshold"].(string)
+
+				if severityThreshold == "" {
+					continue
+				}
+
+				for _, notApplicable := range severityThresholdNotApplicableFilterNames {
+					if name == notApplicable {
+						return fmt.Errorf("`severity_threshold` is not applicable for `content_filter[%d]` with name %q", i, name)
+					}
+				}
+			}
+
+			return nil
+		},
+	}
+}
