@@ -1,7 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,10 +20,10 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/fileservices"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storageaccounts"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	providerhelpers "github.com/hashicorp/terraform-provider-azurerm/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	keyVaultsClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
@@ -35,9 +34,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
-	"github.com/jackofallops/giovanni/storage/2023-11-03/queue/queues"
 )
 func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceData, id commonids.StorageAccountId, account *storageaccounts.StorageAccount, meta interface{}, includeResource bool) error {
 	if account == nil {
@@ -56,18 +52,10 @@ func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceDat
 	}
 
 	storageClient := meta.(*clients.Client).Storage.ResourceManager
-	storageUtils := meta.(*clients.Client).Storage
 	client := storageClient.StorageAccounts
-	dataPlaneAvailable := meta.(*clients.Client).Features.Storage.DataPlaneAvailable
 	storageDomainSuffix, ok := meta.(*clients.Client).Account.Environment.Storage.DomainSuffix()
 	if !ok {
 		return fmt.Errorf("could not determine Storage domain suffix for environment %q", meta.(*clients.Client).Account.Environment.Name)
-	}
-
-	// we then need to find the storage account
-	details, err := storageUtils.GetAccount(ctx, id)
-	if err != nil {
-		return fmt.Errorf("retrieving %s: %+v", id, err)
 	}
 
 	listKeysOpts := storageaccounts.DefaultListKeysOperationOptions()
@@ -132,9 +120,6 @@ func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceDat
 		// NOTE: The Storage API returns `null` rather than the default value in the API response for existing
 		// resources when a new field gets added - meaning we need to default the values below.
 		allowBlobPublicAccess := false
-		if !features.FivePointOh() {
-			allowBlobPublicAccess = true
-		}
 		if props.AllowBlobPublicAccess != nil {
 			allowBlobPublicAccess = *props.AllowBlobPublicAccess
 		}
@@ -283,52 +268,6 @@ func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceDat
 	}
 	if err := d.Set("share_properties", shareProperties); err != nil {
 		return fmt.Errorf("setting `share_properties` for %s: %+v", id, err)
-	}
-
-	if !features.FivePointOh() && dataPlaneAvailable {
-		dataPlaneClient := meta.(*clients.Client).Storage
-		queueProperties := make([]interface{}, 0)
-		if supportLevel.supportQueue {
-			queueClient, err := dataPlaneClient.QueuesDataPlaneClient(ctx, *details, dataPlaneClient.DataPlaneOperationSupportingAnyAuthMethod())
-			if err != nil {
-				return fmt.Errorf("building Queues Client: %s", err)
-			}
-
-			queueProps, err := queueClient.GetServiceProperties(ctx)
-			if err != nil {
-				// Queue properties is a data plane only service, so we tolerate connection errors here in case of
-				// firewalls and other connectivity issues that are not guaranteed.
-				if !connectionError(err) {
-					return fmt.Errorf("retrieving queue properties for %s: %+v", id, err)
-				}
-			}
-
-			queueProperties = flattenAccountQueueProperties(queueProps)
-		}
-		if err := d.Set("queue_properties", queueProperties); err != nil {
-			return fmt.Errorf("setting `queue_properties`: %+v", err)
-		}
-
-		staticWebsiteProperties := make([]interface{}, 0)
-		if supportLevel.supportStaticWebsite {
-			accountsClient, err := dataPlaneClient.AccountsDataPlaneClient(ctx, *details, dataPlaneClient.DataPlaneOperationSupportingAnyAuthMethod())
-			if err != nil {
-				return fmt.Errorf("building Accounts Data Plane Client: %s", err)
-			}
-
-			staticWebsiteProps, err := accountsClient.GetServiceProperties(ctx, id.StorageAccountName)
-			if err != nil {
-				if !connectionError(err) {
-					return fmt.Errorf("retrieving static website properties for %s: %+v", id, err)
-				}
-			}
-
-			staticWebsiteProperties = flattenAccountStaticWebsiteProperties(staticWebsiteProps)
-		}
-
-		if err = d.Set("static_website", staticWebsiteProperties); err != nil {
-			return fmt.Errorf("setting `static_website`: %+v", err)
-		}
 	}
 
 	return nil

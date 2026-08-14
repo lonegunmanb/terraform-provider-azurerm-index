@@ -3,7 +3,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -15,7 +14,6 @@ import (
 	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
@@ -36,10 +34,6 @@ func expandAfdDomainTlsParameters(d *pluginsdk.ResourceData, input []interface{}
 	certType := v["certificate_type"].(string)
 	secretRaw := v["cdn_frontdoor_secret_id"].(string)
 	secretWasConfigured := false
-	minimumVersionConfigured := false
-	minimumTlsVersionConfigured := false
-
-	var minTlsVersion string
 
 	if rawConfig := d.GetRawConfig(); !rawConfig.IsNull() {
 		tlsConfig := rawConfig.GetAttr("tls")
@@ -47,26 +41,11 @@ func expandAfdDomainTlsParameters(d *pluginsdk.ResourceData, input []interface{}
 			tlsBlock := tlsConfig.AsValueSlice()[0]
 			if !tlsBlock.IsNull() {
 				secretWasConfigured = !tlsBlock.GetAttr("cdn_frontdoor_secret_id").IsNull()
-				minimumVersionConfigured = !tlsBlock.GetAttr("minimum_version").IsNull()
-				if !features.FivePointOh() {
-					minimumTlsVersionConfigured = !tlsBlock.GetAttr("minimum_tls_version").IsNull()
-				}
 			}
 		}
 	}
 
-	if !features.FivePointOh() {
-		switch {
-		case minimumVersionConfigured:
-			minTlsVersion = v["minimum_version"].(string)
-		case minimumTlsVersionConfigured:
-			minTlsVersion = v["minimum_tls_version"].(string)
-		default:
-			minTlsVersion = string(afddomains.AfdMinimumTlsVersionTLSOneTwo)
-		}
-	} else {
-		minTlsVersion = v["minimum_version"].(string)
-	}
+	minTlsVersion := v["minimum_version"].(string)
 
 	cipherSuiteRaw := v["cipher_suite"].([]interface{})
 

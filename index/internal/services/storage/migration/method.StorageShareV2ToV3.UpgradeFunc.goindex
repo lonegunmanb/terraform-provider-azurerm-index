@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/fileshares"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (StorageShareV2ToV3) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		oldID, ok := rawState["id"].(string)
+		if !ok {
+			return rawState, fmt.Errorf("expected `id` to be of type string, got %T", rawState["id"])
+		}
+
+		// Some instances of this resource may already be using the resource manager ID, in which case this is a no-op
+		if _, err := fileshares.ParseShareID(oldID); err == nil {
+			return rawState, nil
+		}
+
+		storageAccountID, err := resolveStorageAccountIDForStateUpgrade(ctx, meta, rawState, func(idStr string) (*commonids.StorageAccountId, error) {
+			id, err := fileshares.ParseShareIDInsensitively(idStr)
+			if err != nil {
+				return nil, err
+			}
+			return new(commonids.NewStorageAccountID(id.SubscriptionId, id.ResourceGroupName, id.StorageAccountName)), nil
+		})
+		if err != nil {
+			return rawState, err
+		}
+
+		nameRaw, ok := rawState["name"]
+		if !ok {
+			return rawState, errors.New("expected a `name` attribute to be present in state")
+		}
+
+		name, ok := nameRaw.(string)
+		if !ok {
+			return rawState, fmt.Errorf("expected `name` to be of type string, got %T", nameRaw)
+		}
+
+		rawState["id"] = fileshares.NewShareID(storageAccountID.SubscriptionId, storageAccountID.ResourceGroupName, storageAccountID.StorageAccountName, name).ID()
+
+		return rawState, nil
+	}
+}

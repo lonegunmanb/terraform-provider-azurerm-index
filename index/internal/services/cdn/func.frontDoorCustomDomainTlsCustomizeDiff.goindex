@@ -3,7 +3,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -15,7 +14,6 @@ import (
 	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/validate"
@@ -39,8 +37,6 @@ func frontDoorCustomDomainTlsCustomizeDiff(_ context.Context, diff *pluginsdk.Re
 	}
 
 	rawConfig := diff.GetRawConfig()
-	minimumVersionConfigured := false
-	minimumTlsVersionConfigured := false
 	tls13Configured := false
 
 	if !rawConfig.IsNull() {
@@ -48,11 +44,6 @@ func frontDoorCustomDomainTlsCustomizeDiff(_ context.Context, diff *pluginsdk.Re
 		if !tlsConfig.IsNull() && tlsConfig.LengthInt() > 0 {
 			tlsBlock := tlsConfig.AsValueSlice()[0]
 			if !tlsBlock.IsNull() {
-				minimumVersionConfigured = !tlsBlock.GetAttr("minimum_version").IsNull()
-				if !features.FivePointOh() {
-					minimumTlsVersionConfigured = !tlsBlock.GetAttr("minimum_tls_version").IsNull()
-				}
-
 				cipherConfig := tlsBlock.GetAttr("cipher_suite")
 				if !cipherConfig.IsNull() && cipherConfig.LengthInt() > 0 {
 					cipherBlock := cipherConfig.AsValueSlice()[0]
@@ -67,14 +58,6 @@ func frontDoorCustomDomainTlsCustomizeDiff(_ context.Context, diff *pluginsdk.Re
 						}
 					}
 				}
-			}
-		}
-	}
-
-	if !features.FivePointOh() {
-		if minimumTlsVersionConfigured {
-			if minTlsVersion := tls["minimum_tls_version"].(string); strings.EqualFold(minTlsVersion, string(afddomains.AfdMinimumTlsVersionTLSOneZero)) {
-				return errors.New("support for TLS 1.0 and 1.1 was retired on March 1, 2025. Please use `minimum_version = \"TLS12\"` instead")
 			}
 		}
 	}
@@ -184,22 +167,11 @@ func frontDoorCustomDomainTlsCustomizeDiff(_ context.Context, diff *pluginsdk.Re
 
 		minimumVersion := ""
 
-		if !features.FivePointOh() {
-			switch {
-			case minimumVersionConfigured:
-				minimumVersion = tls["minimum_version"].(string)
-			case minimumTlsVersionConfigured:
-				minimumVersion = tls["minimum_tls_version"].(string)
-			default:
-				minimumVersion = string(afddomains.AfdMinimumTlsVersionTLSOneTwo)
-			}
-		} else {
-			if rawMin := tls["minimum_version"]; rawMin != nil {
-				if minStr, ok := rawMin.(string); ok {
-					minimumVersion = minStr
-				} else {
-					return errors.New("unexpected value for `tls.minimum_version`: expected string")
-				}
+		if rawMin := tls["minimum_version"]; rawMin != nil {
+			if minStr, ok := rawMin.(string); ok {
+				minimumVersion = minStr
+			} else {
+				return errors.New("unexpected value for `tls.minimum_version`: expected string")
 			}
 		}
 

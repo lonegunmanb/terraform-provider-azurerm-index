@@ -17,7 +17,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func (br assignmentBaseResource) updateFunc() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
@@ -27,6 +26,11 @@ func (br assignmentBaseResource) updateFunc() sdk.ResourceFunc {
 			id, err := policyassignments.ParseScopedPolicyAssignmentID(metadata.ResourceData.Id())
 			if err != nil {
 				return err
+			}
+
+			var config assignmentBaseModel
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
 			}
 
 			getResp, err := client.Get(ctx, *id)
@@ -48,27 +52,26 @@ func (br assignmentBaseResource) updateFunc() sdk.ResourceFunc {
 			}
 
 			if metadata.ResourceData.HasChange("description") {
-				update.Properties.Description = pointer.To(metadata.ResourceData.Get("description").(string))
+				update.Properties.Description = pointer.To(config.Description)
 			}
 			if metadata.ResourceData.HasChange("display_name") {
-				update.Properties.DisplayName = pointer.To(metadata.ResourceData.Get("display_name").(string))
+				update.Properties.DisplayName = pointer.To(config.DisplayName)
 			}
 			if metadata.ResourceData.HasChange("enforce") {
-				update.Properties.EnforcementMode = convertEnforcementMode(metadata.ResourceData.Get("enforce").(bool))
+				update.Properties.EnforcementMode = convertEnforcementMode(config.Enforce)
 			}
 			if metadata.ResourceData.HasChange("location") {
-				update.Location = pointer.To(metadata.ResourceData.Get("location").(string))
+				update.Location = pointer.To(config.Location)
 			}
 			if metadata.ResourceData.HasChange("policy_definition_id") {
-				update.Properties.PolicyDefinitionId = pointer.To(metadata.ResourceData.Get("policy_definition_id").(string))
+				update.Properties.PolicyDefinitionId = pointer.To(config.PolicyDefinitionId)
 			}
 
 			if metadata.ResourceData.HasChange("identity") {
 				if update.Location == nil {
 					return fmt.Errorf("`location` must be set when `identity` is assigned")
 				}
-				identityRaw := metadata.ResourceData.Get("identity").([]interface{})
-				identityIns, err := identity.ExpandSystemOrUserAssignedMap(identityRaw)
+				identityIns, err := identity.ExpandSystemOrUserAssignedMapFromModel(config.Identity)
 				if err != nil {
 					return fmt.Errorf("expanding `identity`: %+v", err)
 				}
@@ -76,10 +79,9 @@ func (br assignmentBaseResource) updateFunc() sdk.ResourceFunc {
 			}
 
 			if metadata.ResourceData.HasChange("metadata") {
-				v := metadata.ResourceData.Get("metadata").(string)
 				m := map[string]interface{}{}
-				if v != "" {
-					m, err = pluginsdk.ExpandJsonFromString(v)
+				if config.Metadata != "" {
+					m, err = pluginsdk.ExpandJsonFromString(config.Metadata)
 					if err != nil {
 						return fmt.Errorf("parsing metadata: %+v", err)
 					}
@@ -89,31 +91,35 @@ func (br assignmentBaseResource) updateFunc() sdk.ResourceFunc {
 			}
 
 			if metadata.ResourceData.HasChange("not_scopes") {
-				update.Properties.NotScopes = expandAzureRmPolicyNotScopes(metadata.ResourceData.Get("not_scopes").([]interface{}))
+				notScopes := config.NotScopes
+				if notScopes == nil {
+					notScopes = make([]string, 0)
+				}
+				update.Properties.NotScopes = &notScopes
 			}
 
 			if metadata.ResourceData.HasChange("non_compliance_message") {
-				update.Properties.NonComplianceMessages = br.expandNonComplianceMessages(metadata.ResourceData.Get("non_compliance_message").([]interface{}))
+				update.Properties.NonComplianceMessages = br.expandNonComplianceMessages(config.NonComplianceMessage)
 			}
 
 			if metadata.ResourceData.HasChange("parameters") {
 				m := map[string]policyassignments.ParameterValuesValue{}
 
-				if v := metadata.ResourceData.Get("parameters").(string); v != "" {
-					m, err = expandParameterValuesValueFromString(v)
+				if config.Parameters != "" {
+					m, err = expandParameterValuesValueFromString(config.Parameters)
 					if err != nil {
-						return fmt.Errorf("expanding JSON for `parameters` %q: %+v", v, err)
+						return fmt.Errorf("expanding JSON for `parameters` %q: %+v", config.Parameters, err)
 					}
 				}
 				update.Properties.Parameters = &m
 			}
 
 			if metadata.ResourceData.HasChange("overrides") {
-				update.Properties.Overrides = br.expandOverrides(metadata.ResourceData.Get("overrides").([]interface{}))
+				update.Properties.Overrides = br.expandOverrides(config.Overrides)
 			}
 
 			if metadata.ResourceData.HasChange("resource_selectors") {
-				update.Properties.ResourceSelectors = br.expandResourceSelectors(metadata.ResourceData.Get("resource_selectors").([]interface{}))
+				update.Properties.ResourceSelectors = br.expandResourceSelectors(config.ResourceSelectors)
 			}
 
 			// NOTE: there isn't an Update endpoint

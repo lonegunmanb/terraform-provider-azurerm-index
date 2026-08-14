@@ -2,7 +2,6 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/services/storag
 import (
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -11,11 +10,9 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storagequeues"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -23,22 +20,13 @@ import (
 	"github.com/jackofallops/giovanni/storage/2023-11-03/queue/queues"
 )
 func resourceStorageQueue() *pluginsdk.Resource {
-	r := &pluginsdk.Resource{
+	return &pluginsdk.Resource{
 		Create: resourceStorageQueueCreate,
 		Read:   resourceStorageQueueRead,
 		Update: resourceStorageQueueUpdate,
 		Delete: resourceStorageQueueDelete,
 
 		Importer: helpers.ImporterValidatingStorageResourceId(func(id, storageDomainSuffix string) error {
-			if !features.FivePointOh() {
-				if strings.HasPrefix(id, "/subscriptions/") {
-					_, err := storagequeues.ParseQueueID(id)
-					return err
-				}
-				_, err := queues.ParseQueueID(id, storageDomainSuffix)
-				return err
-			}
-
 			_, err := storagequeues.ParseQueueID(id)
 			return err
 		}),
@@ -79,31 +67,4 @@ func resourceStorageQueue() *pluginsdk.Resource {
 			},
 		},
 	}
-
-	if !features.FivePointOh() {
-		r.Schema["storage_account_name"] = &pluginsdk.Schema{
-			Type:         pluginsdk.TypeString,
-			Optional:     true,
-			ValidateFunc: validate.StorageAccountName,
-			ExactlyOneOf: []string{"storage_account_id", "storage_account_name"},
-			Deprecated:   "the `storage_account_name` property has been deprecated in favour of `storage_account_id` and will be removed in version 5.0 of the Provider.",
-		}
-
-		r.Schema["storage_account_id"] = &pluginsdk.Schema{
-			Type:         pluginsdk.TypeString,
-			Optional:     true,
-			ValidateFunc: commonids.ValidateStorageAccountID,
-			ExactlyOneOf: []string{"storage_account_id", "storage_account_name"},
-		}
-
-		r.Schema["resource_manager_id"] = &pluginsdk.Schema{
-			Type:       pluginsdk.TypeString,
-			Computed:   true,
-			Deprecated: "the `resource_manager_id` property has been deprecated in favour of `id` and will be removed in version 5.0 of the Provider.",
-		}
-
-		r.CustomizeDiff = helpers.LegacyStorageAccountResourceCustomizeDiff
-	}
-
-	return r
 }

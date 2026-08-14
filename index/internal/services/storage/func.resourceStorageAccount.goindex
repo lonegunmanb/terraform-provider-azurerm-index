@@ -1,7 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,10 +20,10 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/fileservices"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storageaccounts"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	providerhelpers "github.com/hashicorp/terraform-provider-azurerm/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	keyVaultsClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
@@ -35,12 +34,9 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
-	"github.com/jackofallops/giovanni/storage/2023-11-03/queue/queues"
 )
 func resourceStorageAccount() *pluginsdk.Resource {
-	resource := &pluginsdk.Resource{
+	return &pluginsdk.Resource{
 		Create: resourceStorageAccountCreate,
 		Read:   resourceStorageAccountRead,
 		Update: resourceStorageAccountUpdate,
@@ -1103,39 +1099,19 @@ func resourceStorageAccount() *pluginsdk.Resource {
 					}
 				}
 
-				if !features.FivePointOh() && !v.(*clients.Client).Features.Storage.DataPlaneAvailable {
-					rawQueueProperties, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("queue_properties"))
-					if diags.HasError() {
-						return nil
-					}
-
-					if !rawQueueProperties.IsNull() && rawQueueProperties.IsKnown() && rawQueueProperties.LengthInt() > 0 {
-						return errors.New("cannot configure 'queue_properties' when the Provider Feature 'data_plane_available' is set to 'false'")
-					}
-
-					rawStaticWebsiteProperties, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("static_website"))
-					if diags.HasError() {
-						return nil
-					}
-
-					if !rawStaticWebsiteProperties.IsNull() && rawStaticWebsiteProperties.IsKnown() && rawStaticWebsiteProperties.LengthInt() > 0 {
-						return errors.New("cannot configure 'static_website' when the Provider Feature 'data_plane_available' is set to 'false'")
-					}
-				}
-
 				if d.HasChange("immutability_policy.0.state") {
 					old, new := d.GetChange("immutability_policy.0.state")
 
 					// The initial value can be either "Disabled" or "Unlocked".
 					// API error: InvalidStorageAccountImmutabilityPolicy: Storage account immutability policy state can be set to "Unlocked, Disabled".
-					//            Note that the immutability state can either be Disabled or Unlocked during account creation
+					//      Note that the immutability state can either be Disabled or Unlocked during account creation
 					if old == "" && (new.(string) != string(storageaccounts.AccountImmutabilityPolicyStateDisabled) && new.(string) != string(storageaccounts.AccountImmutabilityPolicyStateUnlocked)) {
 						return fmt.Errorf("initial value of `immutability_policy.0.state` can be either Disabled or Unlocked, got=%s", new)
 					}
 
 					// Only "Unlocked" state can be updated to "Locked"
 					// API error: InvalidStorageAccountImmutabilityPolicy: Storage account immutability policy state can be set to "Unlocked, Disabled".
-					//            Note that the immutability state can either be Disabled or Unlocked during account creation
+					//      Note that the immutability state can either be Disabled or Unlocked during account creation
 					if new.(string) == string(storageaccounts.AccountImmutabilityPolicyStateLocked) && old.(string) != string(storageaccounts.AccountImmutabilityPolicyStateUnlocked) {
 						return fmt.Errorf("`immutability_policy.0.state` can only be set to Locked from Unlocked, got=%s", old)
 					}
@@ -1172,181 +1148,4 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			}),
 		),
 	}
-
-	if !features.FivePointOh() {
-		// lintignore:XS003
-		resource.Schema["static_website"] = &pluginsdk.Schema{
-			Type:     pluginsdk.TypeList,
-			Optional: true,
-			Computed: true,
-			MaxItems: 1,
-			Elem: &pluginsdk.Resource{
-				Schema: map[string]*pluginsdk.Schema{
-					"error_404_document": {
-						Type:         pluginsdk.TypeString,
-						Optional:     true,
-						ValidateFunc: validation.StringIsNotEmpty,
-					},
-					"index_document": {
-						Type:         pluginsdk.TypeString,
-						Optional:     true,
-						ValidateFunc: validation.StringIsNotEmpty,
-					},
-				},
-			},
-			Deprecated: "this block has been deprecated and superseded by the `azurerm_storage_account_static_website` resource and will be removed in v5.0 of the AzureRM provider",
-		}
-
-		resource.Schema["customer_managed_key"] = &pluginsdk.Schema{
-			Type:     pluginsdk.TypeList,
-			Optional: true,
-			MaxItems: 1,
-			Elem: &pluginsdk.Resource{
-				Schema: map[string]*pluginsdk.Schema{
-					"key_vault_key_id": {
-						Type:         pluginsdk.TypeString,
-						Optional:     true,
-						Computed:     true,
-						ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeKey),
-						ExactlyOneOf: []string{"customer_managed_key.0.managed_hsm_key_id", "customer_managed_key.0.key_vault_key_id"},
-					},
-
-					"managed_hsm_key_id": {
-						Type:         pluginsdk.TypeString,
-						Optional:     true,
-						Computed:     true,
-						ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeKey),
-						ExactlyOneOf: []string{"customer_managed_key.0.managed_hsm_key_id", "customer_managed_key.0.key_vault_key_id"},
-						Deprecated:   "`managed_hsm_key_id` has been deprecated in favour of `key_vault_key_id` and will be removed in v5.0 of the AzureRM provider",
-					},
-
-					"user_assigned_identity_id": {
-						Type:         pluginsdk.TypeString,
-						Required:     true,
-						ValidateFunc: commonids.ValidateUserAssignedIdentityID,
-					},
-				},
-			},
-		}
-
-		resource.Schema["min_tls_version"] = &pluginsdk.Schema{
-			Type:     pluginsdk.TypeString,
-			Optional: true,
-			Default:  string(storageaccounts.MinimumTlsVersionTLSOneTwo),
-			ValidateFunc: validation.StringInSlice([]string{
-				string(storageaccounts.MinimumTlsVersionTLSOneZero),
-				string(storageaccounts.MinimumTlsVersionTLSOneOne),
-				string(storageaccounts.MinimumTlsVersionTLSOneTwo),
-			}, false),
-		}
-
-		resource.Schema["queue_properties"] = &pluginsdk.Schema{
-			Type:     pluginsdk.TypeList,
-			Optional: true,
-			Computed: true,
-			MaxItems: 1,
-			Elem: &pluginsdk.Resource{
-				Schema: map[string]*pluginsdk.Schema{
-					"cors_rule": helpers.SchemaStorageAccountCorsRule(false),
-					"hour_metrics": {
-						Type:     pluginsdk.TypeList,
-						Optional: true,
-						Computed: true,
-						MaxItems: 1,
-						Elem: &pluginsdk.Resource{
-							Schema: map[string]*pluginsdk.Schema{
-								"version": {
-									Type:         pluginsdk.TypeString,
-									Required:     true,
-									ValidateFunc: validation.StringIsNotEmpty,
-								},
-								"enabled": {
-									Type:     pluginsdk.TypeBool,
-									Required: true,
-								},
-								"include_apis": {
-									Type:     pluginsdk.TypeBool,
-									Optional: true,
-								},
-								"retention_policy_days": {
-									Type:         pluginsdk.TypeInt,
-									Optional:     true,
-									ValidateFunc: validation.IntBetween(1, 365),
-								},
-							},
-						},
-					},
-					"logging": {
-						Type:     pluginsdk.TypeList,
-						Optional: true,
-						Computed: true,
-						MaxItems: 1,
-						Elem: &pluginsdk.Resource{
-							Schema: map[string]*pluginsdk.Schema{
-								"version": {
-									Type:         pluginsdk.TypeString,
-									Required:     true,
-									ValidateFunc: validation.StringIsNotEmpty,
-								},
-								"delete": {
-									Type:     pluginsdk.TypeBool,
-									Required: true,
-								},
-								"read": {
-									Type:     pluginsdk.TypeBool,
-									Required: true,
-								},
-								"write": {
-									Type:     pluginsdk.TypeBool,
-									Required: true,
-								},
-								"retention_policy_days": {
-									Type:         pluginsdk.TypeInt,
-									Optional:     true,
-									ValidateFunc: validation.IntBetween(1, 365),
-								},
-							},
-						},
-					},
-					"minute_metrics": {
-						Type:     pluginsdk.TypeList,
-						Optional: true,
-						Computed: true,
-						MaxItems: 1,
-						Elem: &pluginsdk.Resource{
-							Schema: map[string]*pluginsdk.Schema{
-								"version": {
-									Type:         pluginsdk.TypeString,
-									Required:     true,
-									ValidateFunc: validation.StringIsNotEmpty,
-								},
-								"enabled": {
-									Type:     pluginsdk.TypeBool,
-									Required: true,
-								},
-								"include_apis": {
-									Type:     pluginsdk.TypeBool,
-									Optional: true,
-								},
-								"retention_policy_days": {
-									Type:         pluginsdk.TypeInt,
-									Optional:     true,
-									ValidateFunc: validation.IntBetween(1, 365),
-								},
-							},
-						},
-					},
-				},
-			},
-			Deprecated: "this block has been deprecated and superseded by the `azurerm_storage_account_queue_properties` resource and will be removed in v5.0 of the AzureRM provider",
-		}
-
-		resource.Schema["allow_nested_items_to_be_public"] = &pluginsdk.Schema{
-			Type:     pluginsdk.TypeBool,
-			Optional: true,
-			Default:  true,
-		}
-	}
-
-	return resource
 }

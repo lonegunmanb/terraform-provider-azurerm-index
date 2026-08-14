@@ -1,7 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,10 +20,10 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/fileservices"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storageaccounts"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	providerhelpers "github.com/hashicorp/terraform-provider-azurerm/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	keyVaultsClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
@@ -35,11 +34,8 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
-	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
-	"github.com/jackofallops/giovanni/storage/2023-11-03/queue/queues"
 )
-func expandAccountCustomerManagedKey(d *pluginsdk.ResourceData, ctx context.Context, keyVaultClient *keyVaultsClient.Client, subscriptionId string, input []interface{}, accountTier storageaccounts.SkuTier, accountKind storageaccounts.Kind, expandedIdentity identity.LegacySystemAndUserAssignedMap, queueEncryptionKeyType, tableEncryptionKeyType storageaccounts.KeyType) (*storageaccounts.Encryption, error) {
+func expandAccountCustomerManagedKey(ctx context.Context, keyVaultClient *keyVaultsClient.Client, subscriptionId string, input []interface{}, accountTier storageaccounts.SkuTier, accountKind storageaccounts.Kind, expandedIdentity identity.LegacySystemAndUserAssignedMap, queueEncryptionKeyType, tableEncryptionKeyType storageaccounts.KeyType) (*storageaccounts.Encryption, error) {
 	if accountKind == storageaccounts.KindStorage {
 		if queueEncryptionKeyType == storageaccounts.KeyTypeAccount {
 			return nil, fmt.Errorf("`queue_encryption_key_type = %q` cannot be used with account kind `%q`", string(storageaccounts.KeyTypeAccount), string(storageaccounts.KindStorage))
@@ -72,69 +68,43 @@ func expandAccountCustomerManagedKey(d *pluginsdk.ResourceData, ctx context.Cont
 
 	v := input[0].(map[string]interface{})
 
-	setInConfig := func(d *pluginsdk.ResourceData) bool {
-		if features.FivePointOh() {
-			// If we're in 5.0 only `key_vault_key_id` exists, so no need to check
-			return true
-		}
-
-		raw, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("customer_managed_key.0.key_vault_key_id"))
-		return !diags.HasError() && !raw.IsNull()
+	keyID, err := keyvault.ParseNestedItemID(v["key_vault_key_id"].(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
+	if err != nil {
+		return nil, err
 	}
 
-	var keyID *keyvault.NestedItemID
-	// When cleaning up `features.FivePointOh()` flags, this condition can be removed as `key_vault_key_id` will be required in 5.0.
-	// The variable instantiation above can be removed as well, and `keyId` below can be renamed to `KeyID`.
-	if keyVaultKeyId, ok := v["key_vault_key_id"]; ok && setInConfig(d) {
-		keyId, err := keyvault.ParseNestedItemID(keyVaultKeyId.(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
+	if !keyID.IsManagedHSM() {
+		subscriptionResourceId := commonids.NewSubscriptionID(subscriptionId)
+		keyVaultIdRaw, err := keyVaultClient.KeyVaultIDFromBaseUrl(ctx, subscriptionResourceId, keyID.KeyVaultBaseURL)
+		if err != nil {
+			return nil, err
+		}
+		if keyVaultIdRaw == nil {
+			return nil, fmt.Errorf("unable to find the Resource Manager ID for the Key Vault URI %q in %s", keyID.KeyVaultBaseURL, subscriptionResourceId)
+		}
+		keyVaultId, err := commonids.ParseKeyVaultID(*keyVaultIdRaw)
 		if err != nil {
 			return nil, err
 		}
 
-		if !keyId.IsManagedHSM() {
-			subscriptionResourceId := commonids.NewSubscriptionID(subscriptionId)
-			keyVaultIdRaw, err := keyVaultClient.KeyVaultIDFromBaseUrl(ctx, subscriptionResourceId, keyId.KeyVaultBaseURL)
-			if err != nil {
-				return nil, err
-			}
-			if keyVaultIdRaw == nil {
-				return nil, fmt.Errorf("unable to find the Resource Manager ID for the Key Vault URI %q in %s", keyId.KeyVaultBaseURL, subscriptionResourceId)
-			}
-			keyVaultId, err := commonids.ParseKeyVaultID(*keyVaultIdRaw)
-			if err != nil {
-				return nil, err
-			}
-
-			vaultsClient := keyVaultClient.VaultsClient
-			keyVault, err := vaultsClient.Get(ctx, *keyVaultId)
-			if err != nil {
-				return nil, fmt.Errorf("retrieving %s: %+v", *keyVaultId, err)
-			}
-
-			softDeleteEnabled := false
-			purgeProtectionEnabled := false
-			if model := keyVault.Model; model != nil {
-				if esd := model.Properties.EnableSoftDelete; esd != nil {
-					softDeleteEnabled = *esd
-				}
-				if epp := model.Properties.EnablePurgeProtection; epp != nil {
-					purgeProtectionEnabled = *epp
-				}
-			}
-			if !softDeleteEnabled || !purgeProtectionEnabled {
-				return nil, fmt.Errorf("%s must be configured for both Purge Protection and Soft Delete", *keyVaultId)
-			}
+		vaultsClient := keyVaultClient.VaultsClient
+		keyVault, err := vaultsClient.Get(ctx, *keyVaultId)
+		if err != nil {
+			return nil, fmt.Errorf("retrieving %s: %+v", *keyVaultId, err)
 		}
 
-		keyID = keyId
-	} else if !features.FivePointOh() {
-		if managedHSMKeyId, ok := v["managed_hsm_key_id"]; ok && managedHSMKeyId != "" {
-			keyId, err := keyvault.ParseNestedItemID(managedHSMKeyId.(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
-			if err != nil {
-				return nil, err
+		softDeleteEnabled := false
+		purgeProtectionEnabled := false
+		if model := keyVault.Model; model != nil {
+			if esd := model.Properties.EnableSoftDelete; esd != nil {
+				softDeleteEnabled = *esd
 			}
-
-			keyID = keyId
+			if epp := model.Properties.EnablePurgeProtection; epp != nil {
+				purgeProtectionEnabled = *epp
+			}
+		}
+		if !softDeleteEnabled || !purgeProtectionEnabled {
+			return nil, fmt.Errorf("%s must be configured for both Purge Protection and Soft Delete", *keyVaultId)
 		}
 	}
 

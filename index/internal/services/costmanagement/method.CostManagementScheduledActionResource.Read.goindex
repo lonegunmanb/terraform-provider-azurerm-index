@@ -9,11 +9,9 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2023-08-01/scheduledactions"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2023-08-01/views"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func (r CostManagementScheduledActionResource) Read() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
@@ -34,33 +32,48 @@ func (r CostManagementScheduledActionResource) Read() sdk.ResourceFunc {
 				return fmt.Errorf("reading %s: %+v", *id, err)
 			}
 
-			metadata.ResourceData.Set("name", id.ScheduledActionName)
+			state := CostManagementScheduledActionModel{
+				Name: id.ScheduledActionName,
+			}
 
 			if model := resp.Model; model != nil {
 				if props := model.Properties; props != nil {
-					metadata.ResourceData.Set("display_name", props.DisplayName)
-					metadata.ResourceData.Set("email_address_sender", props.NotificationEmail)
+					state.DisplayName = props.DisplayName
+					state.EmailAddressSender = pointer.From(props.NotificationEmail)
+
 					viewId, err := views.ParseScopedViewID(props.ViewId)
 					if err != nil {
 						return err
 					}
-					metadata.ResourceData.Set("view_id", viewId.ID())
+					state.ViewId = viewId.ID()
 
-					metadata.ResourceData.Set("email_subject", props.Notification.Subject)
-					metadata.ResourceData.Set("email_addresses", props.Notification.To)
-					metadata.ResourceData.Set("message", props.Notification.Message)
+					state.EmailSubject = props.Notification.Subject
+					state.EmailAddresses = props.Notification.To
+					state.Message = pointer.From(props.Notification.Message)
 
-					metadata.ResourceData.Set("frequency", props.Schedule.Frequency)
-					metadata.ResourceData.Set("days_of_week", props.Schedule.DaysOfWeek)
-					metadata.ResourceData.Set("weeks_of_month", props.Schedule.WeeksOfMonth)
-					metadata.ResourceData.Set("hour_of_day", props.Schedule.HourOfDay)
-					metadata.ResourceData.Set("day_of_month", props.Schedule.DayOfMonth)
-					metadata.ResourceData.Set("start_date", props.Schedule.StartDate)
-					metadata.ResourceData.Set("end_date", props.Schedule.EndDate)
+					state.Frequency = string(props.Schedule.Frequency)
+					if props.Schedule.DaysOfWeek != nil {
+						daysOfWeek := make([]string, 0)
+						for _, v := range *props.Schedule.DaysOfWeek {
+							daysOfWeek = append(daysOfWeek, string(v))
+						}
+						state.DaysOfWeek = daysOfWeek
+					}
+					if props.Schedule.WeeksOfMonth != nil {
+						weeksOfMonth := make([]string, 0)
+						for _, v := range *props.Schedule.WeeksOfMonth {
+							weeksOfMonth = append(weeksOfMonth, string(v))
+						}
+						state.WeeksOfMonth = weeksOfMonth
+					}
+					state.HourOfDay = pointer.From(props.Schedule.HourOfDay)
+					state.DayOfMonth = pointer.From(props.Schedule.DayOfMonth)
+					state.StartDate = props.Schedule.StartDate
+					state.EndDate = props.Schedule.EndDate
 				}
 			}
 
-			return nil
+			return metadata.Encode(&state)
 		},
 	}
 }

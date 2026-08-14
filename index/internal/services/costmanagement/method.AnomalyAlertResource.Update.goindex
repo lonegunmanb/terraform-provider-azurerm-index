@@ -13,7 +13,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/costmanagement/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func (r AnomalyAlertResource) Update() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
@@ -24,6 +23,11 @@ func (r AnomalyAlertResource) Update() sdk.ResourceFunc {
 			id, err := scheduledactions.ParseScopedScheduledActionID(metadata.ResourceData.Id())
 			if err != nil {
 				return err
+			}
+
+			var config AnomalyAlertModel
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
 			}
 
 			resp, err := client.GetByScope(ctx, *id)
@@ -37,14 +41,9 @@ func (r AnomalyAlertResource) Update() sdk.ResourceFunc {
 				}
 			}
 
-			emailAddressesRaw := metadata.ResourceData.Get("email_addresses").(*pluginsdk.Set).List()
-			emailAddresses := utils.ExpandStringSlice(emailAddressesRaw)
-
-			var subscriptionId string
-			if v, ok := metadata.ResourceData.GetOk("subscription_id"); ok {
-				subscriptionId = v.(string)
-			} else {
-				subscriptionId = fmt.Sprint("/subscriptions/", metadata.Client.Account.SubscriptionId)
+			subscriptionId := config.SubscriptionId
+			if subscriptionId == "" {
+				subscriptionId = commonids.NewSubscriptionID(metadata.Client.Account.SubscriptionId).ID()
 			}
 			viewId := views.NewScopedViewID(subscriptionId, "ms:DailyAnomalyByResourceGroup")
 
@@ -54,22 +53,23 @@ func (r AnomalyAlertResource) Update() sdk.ResourceFunc {
 			schedule.SetEndDateAsTime(time.Now().AddDate(1, 0, 0))
 			schedule.SetStartDateAsTime(time.Now())
 
-			notificationEmail := (*emailAddresses)[0]
-			if v, ok := metadata.ResourceData.GetOk("notification_email"); ok {
-				notificationEmail = v.(string)
+			notificationEmail := config.EmailAddresses[0]
+			if config.NotificationEmail != "" {
+				notificationEmail = config.NotificationEmail
 			}
+
 			param := scheduledactions.ScheduledAction{
 				Kind: pointer.To(scheduledactions.ScheduledActionKindInsightAlert),
 				ETag: resp.Model.ETag,
 				Properties: &scheduledactions.ScheduledActionProperties{
-					DisplayName:       metadata.ResourceData.Get("display_name").(string),
+					DisplayName:       config.DisplayName,
 					Status:            scheduledactions.ScheduledActionStatusEnabled,
 					ViewId:            viewId.ID(),
 					NotificationEmail: &notificationEmail,
 					Notification: scheduledactions.NotificationProperties{
-						Subject: metadata.ResourceData.Get("email_subject").(string),
-						Message: pointer.To(metadata.ResourceData.Get("message").(string)),
-						To:      *emailAddresses,
+						Subject: config.EmailSubject,
+						Message: pointer.To(config.Message),
+						To:      config.EmailAddresses,
 					},
 					Schedule: schedule,
 				},

@@ -17,13 +17,18 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func (br assignmentBaseResource) createFunc(resourceName, scopeFieldName string) sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
 			client := metadata.Client.Policy.AssignmentsClient
-			id := policyassignments.NewScopedPolicyAssignmentID(metadata.ResourceData.Get(scopeFieldName).(string), metadata.ResourceData.Get("name").(string))
+
+			var config assignmentBaseModel
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := policyassignments.NewScopedPolicyAssignmentID(metadata.ResourceData.Get(scopeFieldName).(string), config.Name)
 
 			if !metadata.Client.Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
 				existing, err := client.Get(ctx, id)
@@ -40,36 +45,36 @@ func (br assignmentBaseResource) createFunc(resourceName, scopeFieldName string)
 
 			assignment := policyassignments.PolicyAssignment{
 				Properties: &policyassignments.PolicyAssignmentProperties{
-					PolicyDefinitionId: pointer.To(metadata.ResourceData.Get("policy_definition_id").(string)),
-					DisplayName:        pointer.To(metadata.ResourceData.Get("display_name").(string)),
+					PolicyDefinitionId: pointer.To(config.PolicyDefinitionId),
+					DisplayName:        pointer.To(config.DisplayName),
 					Scope:              pointer.To(id.Scope),
-					EnforcementMode:    convertEnforcementMode(metadata.ResourceData.Get("enforce").(bool)),
+					EnforcementMode:    convertEnforcementMode(config.Enforce),
 				},
 			}
 
-			if v := metadata.ResourceData.Get("description").(string); v != "" {
-				assignment.Properties.Description = pointer.To(v)
+			if config.Description != "" {
+				assignment.Properties.Description = pointer.To(config.Description)
 			}
 
-			if v := metadata.ResourceData.Get("location").(string); v != "" {
-				assignment.Location = pointer.To(location.Normalize(v))
+			if config.Location != "" {
+				assignment.Location = pointer.To(location.Normalize(config.Location))
 			}
 
-			if v, ok := metadata.ResourceData.GetOk("identity"); ok {
+			if len(config.Identity) > 0 {
 				if assignment.Location == nil {
 					return fmt.Errorf("`location` must be set when `identity` is assigned")
 				}
-				identityIns, err := identity.ExpandSystemOrUserAssignedMap(v.([]interface{}))
+				identityIns, err := identity.ExpandSystemOrUserAssignedMapFromModel(config.Identity)
 				if err != nil {
 					return fmt.Errorf("expanding `identity`: %+v", err)
 				}
 				assignment.Identity = identityIns
 			}
 
-			if v := metadata.ResourceData.Get("parameters").(string); v != "" {
-				expandedParams, err := expandParameterValuesValueFromString(v)
+			if config.Parameters != "" {
+				expandedParams, err := expandParameterValuesValueFromString(config.Parameters)
 				if err != nil {
-					return fmt.Errorf("expanding JSON for `parameters` %q: %+v", v, err)
+					return fmt.Errorf("expanding JSON for `parameters` %q: %+v", config.Parameters, err)
 				}
 
 				if expandedParams != nil {
@@ -77,8 +82,8 @@ func (br assignmentBaseResource) createFunc(resourceName, scopeFieldName string)
 				}
 			}
 
-			if metaDataString := metadata.ResourceData.Get("metadata").(string); metaDataString != "" {
-				metaData, err := pluginsdk.ExpandJsonFromString(metaDataString)
+			if config.Metadata != "" {
+				metaData, err := pluginsdk.ExpandJsonFromString(config.Metadata)
 				if err != nil {
 					return fmt.Errorf("unable to parse metadata: %s", err)
 				}
@@ -88,20 +93,20 @@ func (br assignmentBaseResource) createFunc(resourceName, scopeFieldName string)
 				}
 			}
 
-			if v, ok := metadata.ResourceData.GetOk("not_scopes"); ok {
-				assignment.Properties.NotScopes = expandAzureRmPolicyNotScopes(v.([]interface{}))
+			if len(config.NotScopes) > 0 {
+				assignment.Properties.NotScopes = &config.NotScopes
 			}
 
-			if msgs := metadata.ResourceData.Get("non_compliance_message").([]interface{}); len(msgs) > 0 {
-				assignment.Properties.NonComplianceMessages = br.expandNonComplianceMessages(msgs)
+			if len(config.NonComplianceMessage) > 0 {
+				assignment.Properties.NonComplianceMessages = br.expandNonComplianceMessages(config.NonComplianceMessage)
 			}
 
-			if overrides := metadata.ResourceData.Get("overrides").([]interface{}); len(overrides) > 0 {
-				assignment.Properties.Overrides = br.expandOverrides(overrides)
+			if len(config.Overrides) > 0 {
+				assignment.Properties.Overrides = br.expandOverrides(config.Overrides)
 			}
 
-			if rs := metadata.ResourceData.Get("resource_selectors").([]interface{}); len(rs) > 0 {
-				assignment.Properties.ResourceSelectors = br.expandResourceSelectors(rs)
+			if len(config.ResourceSelectors) > 0 {
+				assignment.Properties.ResourceSelectors = br.expandResourceSelectors(config.ResourceSelectors)
 			}
 
 			if _, err := client.Create(ctx, id, assignment); err != nil {

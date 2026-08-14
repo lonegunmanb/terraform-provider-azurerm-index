@@ -9,11 +9,9 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2023-08-01/scheduledactions"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2023-08-01/views"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
-	"github.com/hashicorp/terraform-provider-azurerm/utils"
 )
 func (r CostManagementScheduledActionResource) Update() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
@@ -24,6 +22,11 @@ func (r CostManagementScheduledActionResource) Update() sdk.ResourceFunc {
 			id, err := scheduledactions.ParseScopedScheduledActionID(metadata.ResourceData.Id())
 			if err != nil {
 				return err
+			}
+
+			var config CostManagementScheduledActionModel
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
 			}
 
 			// Update operation requires latest eTag to be set in the request.
@@ -41,43 +44,43 @@ func (r CostManagementScheduledActionResource) Update() sdk.ResourceFunc {
 				}
 
 				if metadata.ResourceData.HasChange("display_name") {
-					model.Properties.DisplayName = metadata.ResourceData.Get("display_name").(string)
+					model.Properties.DisplayName = config.DisplayName
 				}
 
 				if metadata.ResourceData.HasChange("view_id") {
-					id, err := views.ParseScopedViewID(metadata.ResourceData.Get("view_id").(string))
+					viewId, err := views.ParseScopedViewID(config.ViewId)
 					if err != nil {
 						return err
 					}
-					model.Properties.ViewId = id.ID()
+					model.Properties.ViewId = viewId.ID()
 				}
 
 				if metadata.ResourceData.HasChange("email_address_sender") {
-					model.Properties.NotificationEmail = pointer.To(metadata.ResourceData.Get("email_address_sender").(string))
+					model.Properties.NotificationEmail = pointer.To(config.EmailAddressSender)
 				}
 
 				if metadata.ResourceData.HasChange("email_subject") {
-					model.Properties.Notification.Subject = metadata.ResourceData.Get("email_subject").(string)
+					model.Properties.Notification.Subject = config.EmailSubject
 				}
 
 				if metadata.ResourceData.HasChange("email_addresses") {
-					model.Properties.Notification.To = *utils.ExpandStringSlice(metadata.ResourceData.Get("email_addresses").([]interface{}))
+					model.Properties.Notification.To = config.EmailAddresses
 				}
 
 				if metadata.ResourceData.HasChange("message") {
-					model.Properties.Notification.Message = pointer.To(metadata.ResourceData.Get("message").(string))
+					model.Properties.Notification.Message = pointer.To(config.Message)
 				}
 
 				if metadata.ResourceData.HasChange("frequency") {
-					model.Properties.Schedule.Frequency = scheduledactions.ScheduleFrequency(metadata.ResourceData.Get("frequency").(string))
+					model.Properties.Schedule.Frequency = scheduledactions.ScheduleFrequency(config.Frequency)
 				}
 
 				if metadata.ResourceData.HasChange("days_of_week") {
 					var daysOfWeek []scheduledactions.DaysOfWeek
-					if len(metadata.ResourceData.Get("days_of_week").([]interface{})) > 0 {
+					if len(config.DaysOfWeek) > 0 {
 						daysOfWeek = make([]scheduledactions.DaysOfWeek, 0)
-						for _, value := range metadata.ResourceData.Get("days_of_week").([]interface{}) {
-							daysOfWeek = append(daysOfWeek, scheduledactions.DaysOfWeek(value.(string)))
+						for _, value := range config.DaysOfWeek {
+							daysOfWeek = append(daysOfWeek, scheduledactions.DaysOfWeek(value))
 						}
 					}
 					model.Properties.Schedule.DaysOfWeek = &daysOfWeek
@@ -85,29 +88,29 @@ func (r CostManagementScheduledActionResource) Update() sdk.ResourceFunc {
 
 				if metadata.ResourceData.HasChange("weeks_of_month") {
 					var weeksOfMonth []scheduledactions.WeeksOfMonth
-					if len(metadata.ResourceData.Get("weeks_of_month").([]interface{})) > 0 {
+					if len(config.WeeksOfMonth) > 0 {
 						weeksOfMonth = make([]scheduledactions.WeeksOfMonth, 0)
-						for _, value := range metadata.ResourceData.Get("weeks_of_month").([]interface{}) {
-							weeksOfMonth = append(weeksOfMonth, scheduledactions.WeeksOfMonth(value.(string)))
+						for _, value := range config.WeeksOfMonth {
+							weeksOfMonth = append(weeksOfMonth, scheduledactions.WeeksOfMonth(value))
 						}
 					}
 					model.Properties.Schedule.WeeksOfMonth = &weeksOfMonth
 				}
 
 				if metadata.ResourceData.HasChange("start_date") {
-					model.Properties.Schedule.StartDate = metadata.ResourceData.Get("start_date").(string)
+					model.Properties.Schedule.StartDate = config.StartDate
 				}
 
 				if metadata.ResourceData.HasChange("end_date") {
-					model.Properties.Schedule.EndDate = metadata.ResourceData.Get("end_date").(string)
+					model.Properties.Schedule.EndDate = config.EndDate
 				}
 
 				if metadata.ResourceData.HasChange("hour_of_day") {
-					model.Properties.Schedule.HourOfDay = pointer.To(int64(metadata.ResourceData.Get("hour_of_day").(int)))
+					model.Properties.Schedule.HourOfDay = pointer.To(config.HourOfDay)
 				}
 
 				if metadata.ResourceData.HasChange("day_of_month") {
-					model.Properties.Schedule.DayOfMonth = pointer.To(int64(metadata.ResourceData.Get("day_of_month").(int)))
+					model.Properties.Schedule.DayOfMonth = pointer.To(config.DayOfMonth)
 				}
 
 				if _, err = client.CreateOrUpdateByScope(ctx, *id, *model, scheduledactions.CreateOrUpdateByScopeOperationOptions{}); err != nil {

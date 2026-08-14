@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/acceptance
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+
+	"github.com/hashicorp/go-version"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/hashicorp/terraform-plugin-testing/tfversion"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/testclient"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/types"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider/framework"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/vcr"
+)
+func (td TestData) ResourceRegressionAdditionalStepsTest(t *testing.T, testResource types.TestResource, steps []TestStep, previousVersion string) {
+	l := len(steps)
+	if l < 3 {
+		t.Fatalf("expected at least 3 steps, got %d. For tests with less than 3 steps, use `ResourceRegressionTest`", l)
+	}
+
+	os.Setenv("TF_ACC_REFRESH_AFTER_APPLY", "true")
+
+	for i := range steps[:l-1] {
+		steps[i].ExternalProviders = td.externalProviders()
+		steps[i].ExternalProviders["azurerm"] = resource.ExternalProvider{
+			VersionConstraint: providerRelease([]string{previousVersion}...),
+			Source:            "hashicorp/azurerm",
+		}
+	}
+
+	steps[l-1].ExternalProviders = td.externalProviders()
+	steps[l-1].ProtoV5ProviderFactories = framework.ProtoV5ProviderFactoriesInitWithTestName(context.Background(), t.Name(), "azurerm", "azurerm-alt")
+	steps[l-1].ConfigPlanChecks = resource.ConfigPlanChecks{
+		PreApply: []plancheck.PlanCheck{
+			helpers.IsNotResourceAction(td.ResourceName, plancheck.ResourceActionReplace),
+		},
+	}
+
+	testCase := resource.TestCase{
+		PreCheck: func() { PreCheck(t) },
+		CheckDestroy: func(s *terraform.State) error {
+			client, err := testclient.BuildWithTestName(t.Name())
+			if err != nil {
+				return fmt.Errorf("building client: %+v", err)
+			}
+			return helpers.CheckDestroyedFunc(client, testResource, td.ResourceType, td.ResourceName)(s)
+		},
+		Steps: steps,
+	}
+
+	resource.ParallelTest(t, testCase)
+}

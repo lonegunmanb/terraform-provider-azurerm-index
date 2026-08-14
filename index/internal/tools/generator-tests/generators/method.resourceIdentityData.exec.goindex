@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -39,6 +41,60 @@ func (d *resourceIdentityData) exec() error {
 
 	if err := templatehelpers.GoImports(outputPath); err != nil {
 		return fmt.Errorf("failed to run goimports: %w", err)
+	}
+
+	if d.RewriteTag {
+		goFile := os.Getenv("GOFILE")
+		if goFile != "" {
+			content, err := os.ReadFile(goFile)
+			if err != nil {
+				return fmt.Errorf("failed reading %s for self-healing: %w", goFile, err)
+			}
+
+			// Remove -properties "...", -id "...", and redundant flags
+			reProp := regexp.MustCompile(`[ \t]*-properties[ \t]+"[^"]+"`)
+			reId := regexp.MustCompile(`[ \t]*-id[ \t]+"[^"]+"`)
+			reResName := regexp.MustCompile(`[ \t]*-resource-name[ \t]+[^ \t\n]+`)
+			rePkgName := regexp.MustCompile(`[ \t]*-service-package-name[ \t]+[^ \t\n]+`)
+			reKnownSub := regexp.MustCompile(`[ \t]*-known-values[ \t]+"subscription_id:data\.Subscriptions\.Primary"`)
+
+			newContent := reProp.ReplaceAllString(string(content), "")
+			newContent = reId.ReplaceAllString(newContent, "")
+			newContent = reResName.ReplaceAllString(newContent, "")
+			newContent = rePkgName.ReplaceAllString(newContent, "")
+			newContent = reKnownSub.ReplaceAllString(newContent, "")
+
+			// Clean up double spaces if any on the go generate line
+			reSpaces := regexp.MustCompile(`(go run ../../tools/generator-tests resourceidentity)[ \t]+`)
+			newContent = reSpaces.ReplaceAllString(newContent, "$1 ")
+			newContent = strings.ReplaceAll(newContent, "  ", " ")
+
+			// Inject -parent-id if we inferred a virtual identity
+			if d.ParentID != "" {
+				// strip out the old compare-values first just to be sure
+				reComp := regexp.MustCompile(`[ \t]*-compare-values[ \t]+"[^"]+"`)
+				newContent = reComp.ReplaceAllString(newContent, "")
+
+				// Check if -parent-id is already there
+				if !strings.Contains(newContent, "-parent-id") {
+					newContent = strings.ReplaceAll(newContent, "generator-tests resourceidentity", fmt.Sprintf("generator-tests resourceidentity -parent-id \"%s\"", d.ParentID))
+				}
+			}
+
+			// Clean up any trailing space before a newline on the go generate line
+			reTrailing := regexp.MustCompile(`(go run ../../tools/generator-tests resourceidentity.*?)[ \t]+\n`)
+			newContent = reTrailing.ReplaceAllString(newContent, "$1\n")
+
+			if err := os.WriteFile(goFile, []byte(newContent), 0o644); err != nil {
+				return fmt.Errorf("failed writing %s for self-healing: %w", goFile, err)
+			}
+
+			// Run gofumpt
+			cmd := exec.Command("gofumpt", "-w", goFile)
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed running gofumpt on %s: %w", goFile, err)
+			}
+		}
 	}
 
 	return nil

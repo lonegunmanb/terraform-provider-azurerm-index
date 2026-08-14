@@ -2,7 +2,6 @@ package github.com/hashicorp/terraform-provider-azurerm/internal/services/storag
 import (
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
@@ -12,7 +11,6 @@ import (
 	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
@@ -32,72 +30,8 @@ func resourceStorageContainerCreate(d *pluginsdk.ResourceData, meta interface{})
 
 	containerName := d.Get("name").(string)
 	accessLevelRaw := d.Get("container_access_type").(string)
-	accessLevel := expandStorageContainerAccessLevel(accessLevelRaw)
 	metaDataRaw := d.Get("metadata").(map[string]interface{})
 	metaData := ExpandMetaData(metaDataRaw)
-
-	if !features.FivePointOh() {
-		storageClient := meta.(*clients.Client).Storage
-		if accountName := d.Get("storage_account_name").(string); accountName != "" {
-			account, err := storageClient.FindAccount(ctx, subscriptionId, accountName)
-			if err != nil {
-				return fmt.Errorf("retrieving Account %q for Container %q: %v", accountName, containerName, err)
-			}
-			if account == nil {
-				return fmt.Errorf("locating Storage Account %q", accountName)
-			}
-
-			containersDataPlaneClient, err := storageClient.ContainersDataPlaneClient(ctx, *account, storageClient.DataPlaneOperationSupportingAnyAuthMethod())
-			if err != nil {
-				return fmt.Errorf("building storage client: %v", err)
-			}
-
-			// Determine the blob endpoint, so we can build a data plane ID
-			endpoint, err := account.DataPlaneEndpoint(client.EndpointTypeBlob)
-			if err != nil {
-				return fmt.Errorf("determining Blob endpoint: %v", err)
-			}
-
-			// Parse the blob endpoint as a data plane account ID
-			accountId, err := accounts.ParseAccountID(*endpoint, storageClient.StorageDomainSuffix)
-			if err != nil {
-				return fmt.Errorf("parsing Account ID: %v", err)
-			}
-
-			id := containers.NewContainerID(*accountId, containerName)
-
-			exists, err := containersDataPlaneClient.Exists(ctx, containerName)
-			if err != nil {
-				return fmt.Errorf("checking for existing %s: %v", id, err)
-			}
-			if exists != nil && *exists {
-				if !meta.(*clients.Client).Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
-					return tf.ImportAsExistsError("azurerm_storage_container", id.ID())
-				}
-			}
-
-			input := containers.CreateInput{
-				AccessLevel: accessLevel,
-				MetaData:    metaData,
-			}
-
-			if encryptionScope := d.Get("default_encryption_scope"); encryptionScope.(string) != "" {
-				input.DefaultEncryptionScope = encryptionScope.(string)
-				input.EncryptionScopeOverrideDisabled = false
-
-				if encryptionScopeOverrideEnabled := d.Get("encryption_scope_override_enabled"); !encryptionScopeOverrideEnabled.(bool) {
-					input.EncryptionScopeOverrideDisabled = true
-				}
-			}
-
-			if err = containersDataPlaneClient.Create(ctx, containerName, input); err != nil {
-				return fmt.Errorf("creating %s: %v", id, err)
-			}
-			d.SetId(id.ID())
-
-			return resourceStorageContainerRead(d, meta)
-		}
-	}
 
 	accountId, err := commonids.ParseStorageAccountID(d.Get("storage_account_id").(string))
 	if err != nil {

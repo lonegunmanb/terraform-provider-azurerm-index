@@ -9,12 +9,11 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
-	pricings_v2023_01_01 "github.com/hashicorp/go-azure-sdk/resource-manager/security/2023-01-01/pricings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/security/2023-01-01/pricings"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter/migration"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/securitycenter/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -24,7 +23,7 @@ func resourceSecurityCenterSubscriptionPricingUpdate(d *pluginsdk.ResourceData, 
 	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	id, err := pricings_v2023_01_01.ParsePricingID(d.Id())
+	id, err := pricings.ParsePricingID(d.Id())
 	if err != nil {
 		return err
 	}
@@ -39,9 +38,9 @@ func resourceSecurityCenterSubscriptionPricingUpdate(d *pluginsdk.ResourceData, 
 		return fmt.Errorf("retrieving %s: %+v", *id, err)
 	}
 
-	update := pricings_v2023_01_01.Pricing{
-		Properties: &pricings_v2023_01_01.PricingProperties{
-			PricingTier: pricings_v2023_01_01.PricingTier(d.Get("tier").(string)),
+	update := pricings.Pricing{
+		Properties: &pricings.PricingProperties{
+			PricingTier: pricings.PricingTier(d.Get("tier").(string)),
 		},
 	}
 
@@ -56,24 +55,24 @@ func resourceSecurityCenterSubscriptionPricingUpdate(d *pluginsdk.ResourceData, 
 		}
 	}
 
-	if len(realCfgExtensions) > 0 && update.Properties.PricingTier == pricings_v2023_01_01.PricingTierFree {
+	if len(realCfgExtensions) > 0 && update.Properties.PricingTier == pricings.PricingTierFree {
 		return fmt.Errorf("extensions cannot be enabled when using free tier")
 	}
 
-	extensionsStatusFromBackend := make([]pricings_v2023_01_01.Extension, 0)
+	extensionsStatusFromBackend := make([]pricings.Extension, 0)
 	currentlyFreeTier := false
 	if apiResponse.Model != nil && apiResponse.Model.Properties != nil {
 		if apiResponse.Model.Properties.Extensions != nil {
 			extensionsStatusFromBackend = *apiResponse.Model.Properties.Extensions
 		}
 
-		currentlyFreeTier = apiResponse.Model.Properties.PricingTier == pricings_v2023_01_01.PricingTierFree
+		currentlyFreeTier = apiResponse.Model.Properties.PricingTier == pricings.PricingTierFree
 	}
 
 	// Update from `free` tier to `Standard`, we need to update it to `standard` tier first without extensions
 	// Then do an additional update for the `extensions`
 	requiredAdditionalUpdate := false
-	if d.HasChange("extension") && update.Properties.PricingTier == pricings_v2023_01_01.PricingTierStandard {
+	if d.HasChange("extension") && update.Properties.PricingTier == pricings.PricingTierStandard {
 		extensions := expandSecurityCenterSubscriptionPricingExtensions(realCfgExtensions, &extensionsStatusFromBackend)
 		update.Properties.Extensions = extensions
 		requiredAdditionalUpdate = currentlyFreeTier
