@@ -140,14 +140,14 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 
 	account := cosmosdb.DatabaseAccountCreateUpdateParameters{
 		Location: pointer.To(location.NormalizeNilable(existing.Model.Location)),
-		Kind:     pointer.To(cosmosdb.DatabaseAccountKind(d.Get("kind").(string))),
+		Kind:     pointer.ToEnum[cosmosdb.DatabaseAccountKind](d.Get("kind").(string)),
 		Properties: cosmosdb.DatabaseAccountCreateUpdateProperties{
 			DatabaseAccountOfferType:           cosmosdb.DatabaseAccountOfferType(d.Get("offer_type").(string)),
 			IPRules:                            common.CosmosDBIpRangeFilterToIpRules(*helpers.ExpandStringSlice(d.Get("ip_range_filter").(*pluginsdk.Set).List())),
 			IsVirtualNetworkFilterEnabled:      pointer.To(d.Get("is_virtual_network_filter_enabled").(bool)),
 			EnableFreeTier:                     existing.Model.Properties.EnableFreeTier,
 			EnableAutomaticFailover:            pointer.To(d.Get("automatic_failover_enabled").(bool)),
-			MinimalTlsVersion:                  pointer.To(cosmosdb.MinimalTlsVersion(d.Get("minimal_tls_version").(string))),
+			MinimalTlsVersion:                  pointer.ToEnum[cosmosdb.MinimalTlsVersion](d.Get("minimal_tls_version").(string)),
 			Capabilities:                       existing.Model.Properties.Capabilities,
 			ConsistencyPolicy:                  expandAzureRmCosmosDBAccountConsistencyPolicy(d),
 			KeyVaultKeyUri:                     existing.Model.Properties.KeyVaultKeyUri,
@@ -191,7 +191,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 	var createMode string
 	if v, ok := d.GetOk("create_mode"); ok {
 		createMode = v.(string)
-		account.Properties.CreateMode = pointer.To(cosmosdb.CreateMode(createMode))
+		account.Properties.CreateMode = pointer.ToEnum[cosmosdb.CreateMode](createMode)
 	}
 
 	if v, ok := d.GetOk("restore"); ok {
@@ -200,7 +200,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 
 	if !pluginsdk.IsExplicitlyNullInConfig(d, "mongo_server_version") {
 		account.Properties.ApiProperties = &cosmosdb.ApiProperties{
-			ServerVersion: pointer.To(cosmosdb.ServerVersion(d.Get("mongo_server_version").(string))),
+			ServerVersion: pointer.ToEnum[cosmosdb.ServerVersion](d.Get("mongo_server_version").(string)),
 		}
 	}
 
@@ -260,8 +260,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 		account.Properties.Locations = configLocations
 
 		// Update the database locations...
-		err = resourceCosmosDbAccountApiCreateOrUpdate(client, ctx, *id, account)
-		if err != nil {
+		if err = resourceCosmosDbAccountApiCreateOrUpdate(client, ctx, *id, account); err != nil {
 			return fmt.Errorf("updating %q `locations`: %+v", id, err)
 		}
 	}
@@ -283,8 +282,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 		}
 
 		// Update the database 'Identity' to 'None'...
-		err = resourceCosmosDbAccountApiUpdate(client, ctx, *id, identityVal)
-		if err != nil {
+		if err = resourceCosmosDbAccountApiUpdate(client, ctx, *id, identityVal); err != nil {
 			return fmt.Errorf("updating 'identity' %q: %+v", id, err)
 		}
 
@@ -301,8 +299,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 			}
 
 			// Update the database...
-			err = resourceCosmosDbAccountApiUpdate(client, ctx, *id, identityVal)
-			if err != nil {
+			if err = resourceCosmosDbAccountApiUpdate(client, ctx, *id, identityVal); err != nil {
 				return fmt.Errorf("updating `identity` for %s: %+v", id, err)
 			}
 		}
@@ -325,8 +322,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 		}
 
 		// Update the database...
-		err = resourceCosmosDbAccountApiUpdate(client, ctx, *id, defaultIdentity)
-		if err != nil {
+		if err = resourceCosmosDbAccountApiUpdate(client, ctx, *id, defaultIdentity); err != nil {
 			return fmt.Errorf("updating `default_identity_type` for %s: %+v", id, err)
 		}
 	}

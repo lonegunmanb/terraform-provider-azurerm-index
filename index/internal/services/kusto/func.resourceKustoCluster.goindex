@@ -1,6 +1,5 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/migration"
@@ -27,7 +25,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceKustoCluster() *pluginsdk.Resource {
-	resource := &pluginsdk.Resource{
+	return &pluginsdk.Resource{
 		Create: resourceKustoClusterCreate,
 		Read:   resourceKustoClusterRead,
 		Update: resourceKustoClusterUpdate,
@@ -220,108 +218,4 @@ func resourceKustoCluster() *pluginsdk.Resource {
 			"tags": commonschema.Tags(),
 		},
 	}
-
-	if !features.FivePointOh() {
-		resource.Schema["language_extension"] = &pluginsdk.Schema{
-			Type:          pluginsdk.TypeList,
-			Optional:      true,
-			Computed:      true,
-			ConflictsWith: []string{"language_extensions"},
-			Elem: &pluginsdk.Resource{
-				Schema: map[string]*pluginsdk.Schema{
-					"name": {
-						Type:         pluginsdk.TypeString,
-						Required:     true,
-						ValidateFunc: validation.StringInSlice(clusters.PossibleValuesForLanguageExtensionName(), false),
-					},
-					"image": {
-						Type:         pluginsdk.TypeString,
-						Required:     true,
-						ValidateFunc: validation.StringInSlice(clusters.PossibleValuesForLanguageExtensionImageName(), false),
-					},
-				},
-			},
-		}
-
-		resource.Schema["language_extensions"] = &pluginsdk.Schema{
-			Type:          pluginsdk.TypeList,
-			Optional:      true,
-			Computed:      true,
-			ConflictsWith: []string{"language_extension"},
-			Deprecated:    "`language_extensions` has been deprecated in favour of `language_extension` and will be removed in v5.0 of the AzureRM provider",
-			Elem: &pluginsdk.Resource{
-				Schema: map[string]*pluginsdk.Schema{
-					"name": {
-						Type:         pluginsdk.TypeString,
-						Required:     true,
-						ValidateFunc: validation.StringInSlice(clusters.PossibleValuesForLanguageExtensionName(), false),
-					},
-					"image": {
-						Type:         pluginsdk.TypeString,
-						Required:     true,
-						ValidateFunc: validation.StringInSlice(clusters.PossibleValuesForLanguageExtensionImageName(), false),
-					},
-				},
-			},
-		}
-
-		resource.Schema["virtual_network_configuration"] = &pluginsdk.Schema{
-			Type:       pluginsdk.TypeList,
-			Optional:   true,
-			MaxItems:   1,
-			Deprecated: "The `virtual_network_configuration` block has been deprecated as it is no longer supported by Azure and will be removed in v5.0 of the AzureRM Provider - for more information see https://techcommunity.microsoft.com/blog/azuredataexplorer/deprecation-of-virtual-network-injection-for-azure-data-explorer/4198192",
-			Elem: &pluginsdk.Resource{
-				Schema: map[string]*pluginsdk.Schema{
-					"subnet_id": {
-						Type:         pluginsdk.TypeString,
-						Required:     true,
-						ForceNew:     true,
-						ValidateFunc: commonids.ValidateSubnetID,
-					},
-					"engine_public_ip_id": {
-						Type:         pluginsdk.TypeString,
-						Required:     true,
-						ForceNew:     true,
-						ValidateFunc: commonids.ValidatePublicIPAddressID,
-					},
-					"data_management_public_ip_id": {
-						Type:         pluginsdk.TypeString,
-						Required:     true,
-						ForceNew:     true,
-						ValidateFunc: commonids.ValidatePublicIPAddressID,
-					},
-				},
-			},
-		}
-
-		resource.CustomizeDiff = func(_ context.Context, d *pluginsdk.ResourceDiff, _ interface{}) error {
-			rawLanguageExtensions, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("language_extensions"))
-			if diags.HasError() {
-				return nil
-			}
-
-			rawLanguageExtension, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("language_extension"))
-			if diags.HasError() {
-				return nil
-			}
-
-			// If neither the `language_extensions` nor the `language_extension` block is defined in config, set both to an empty slice.
-			// This ensures removal of these blocks from config still triggers an update while these 2 blocks are O+C for 4.x.
-			if !rawLanguageExtensions.IsNull() && rawLanguageExtensions.IsKnown() && !rawLanguageExtension.IsNull() && rawLanguageExtension.IsKnown() {
-				if len(rawLanguageExtensions.AsValueSlice()) == 0 && len(rawLanguageExtension.AsValueSlice()) == 0 {
-					if err := d.SetNew("language_extensions", make([]any, 0)); err != nil {
-						return err
-					}
-
-					if err := d.SetNew("language_extension", make([]any, 0)); err != nil {
-						return err
-					}
-				}
-			}
-
-			return nil
-		}
-	}
-
-	return resource
 }

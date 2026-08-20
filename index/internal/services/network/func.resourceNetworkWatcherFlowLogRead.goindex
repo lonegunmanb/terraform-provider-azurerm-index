@@ -18,9 +18,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -76,26 +74,14 @@ func resourceNetworkWatcherFlowLogRead(d *pluginsdk.ResourceData, meta interface
 			}
 
 			targetResourceId := props.TargetResourceId
-			targetIsNSG := false
 			if nsgId, err := networksecuritygroups.ParseNetworkSecurityGroupIDInsensitively(props.TargetResourceId); err == nil {
 				targetResourceId = nsgId.ID()
-				targetIsNSG = true
 			} else if vnetId, err := commonids.ParseVirtualNetworkIDInsensitively(props.TargetResourceId); err == nil {
 				targetResourceId = vnetId.ID()
 			} else if subnetId, err := commonids.ParseSubnetIDInsensitively(props.TargetResourceId); err == nil {
 				targetResourceId = subnetId.ID()
 			} else if nicId, err := commonids.ParseNetworkInterfaceIDInsensitively(props.TargetResourceId); err == nil {
 				targetResourceId = nicId.ID()
-			}
-
-			if !features.FivePointOh() {
-				if targetIsNSG {
-					d.Set("network_security_group_id", targetResourceId)
-				} else {
-					// If `network_security_group_id` was previously set, and target is no longer an NSG
-					// ensure we remove `network_security_group_id` from state
-					d.Set("network_security_group_id", nil)
-				}
 			}
 
 			d.Set("target_resource_id", targetResourceId)

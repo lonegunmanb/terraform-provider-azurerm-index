@@ -59,10 +59,7 @@ func resourceKubernetesClusterNodePoolUpdate(d *pluginsdk.ResourceData, meta int
 	props := existing.Model.Properties
 
 	// store the existing value should the user have opted to ignore it
-	enableAutoScaling := false
-	if props.EnableAutoScaling != nil {
-		enableAutoScaling = *props.EnableAutoScaling
-	}
+	enableAutoScaling := pointer.From(props.EnableAutoScaling)
 
 	log.Printf("[DEBUG] Determining delta for existing %s..", *id)
 
@@ -86,7 +83,7 @@ func resourceKubernetesClusterNodePoolUpdate(d *pluginsdk.ResourceData, meta int
 	}
 
 	if d.HasChange("kubelet_disk_type") {
-		props.KubeletDiskType = pointer.To(agentpools.KubeletDiskType(d.Get("kubelet_disk_type").(string)))
+		props.KubeletDiskType = pointer.ToEnum[agentpools.KubeletDiskType](d.Get("kubelet_disk_type").(string))
 	}
 
 	if d.HasChange("linux_os_config") {
@@ -137,10 +134,7 @@ func resourceKubernetesClusterNodePoolUpdate(d *pluginsdk.ResourceData, meta int
 		}
 		if existingNodePool := existingNodePoolResp.Model; existingNodePool != nil && existingNodePool.Properties != nil {
 			orchestratorVersion := d.Get("orchestrator_version").(string)
-			currentOrchestratorVersion := ""
-			if v := existingNodePool.Properties.CurrentOrchestratorVersion; v != nil {
-				currentOrchestratorVersion = *v
-			}
+			currentOrchestratorVersion := pointer.From(existingNodePool.Properties.CurrentOrchestratorVersion)
 			if err := validateNodePoolSupportsVersion(ctx, containersClient, currentOrchestratorVersion, *id, orchestratorVersion); err != nil {
 				return err
 			}
@@ -155,7 +149,7 @@ func resourceKubernetesClusterNodePoolUpdate(d *pluginsdk.ResourceData, meta int
 	}
 
 	if d.HasChange("os_disk_type") {
-		props.OsDiskType = pointer.To(agentpools.OSDiskType(d.Get("os_disk_type").(string)))
+		props.OsDiskType = pointer.ToEnum[agentpools.OSDiskType](d.Get("os_disk_type").(string))
 	}
 
 	if d.HasChange("os_disk_size_gb") {
@@ -163,7 +157,7 @@ func resourceKubernetesClusterNodePoolUpdate(d *pluginsdk.ResourceData, meta int
 	}
 
 	if d.HasChange("os_sku") {
-		props.OsSKU = pointer.To(agentpools.OSSKU(d.Get("os_sku").(string)))
+		props.OsSKU = pointer.ToEnum[agentpools.OSSKU](d.Get("os_sku").(string))
 	}
 
 	if d.HasChange("pod_subnet_id") {
@@ -341,8 +335,7 @@ func resourceKubernetesClusterNodePoolUpdate(d *pluginsdk.ResourceData, meta int
 
 		log.Printf("[DEBUG] Cycled Node Pool..")
 	} else {
-		err = client.CreateOrUpdateThenPoll(ctx, *id, *existing.Model, agentpools.DefaultCreateOrUpdateOperationOptions())
-		if err != nil {
+		if err = client.CreateOrUpdateThenPoll(ctx, *id, *existing.Model, agentpools.DefaultCreateOrUpdateOperationOptions()); err != nil {
 			return fmt.Errorf("updating Node Pool %s: %+v", *id, err)
 		}
 	}

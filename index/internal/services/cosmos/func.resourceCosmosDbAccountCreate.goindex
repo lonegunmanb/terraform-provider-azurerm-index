@@ -86,7 +86,7 @@ func resourceCosmosDbAccountCreate(d *pluginsdk.ResourceData, meta interface{}) 
 			ConsistencyPolicy:                  expandAzureRmCosmosDBAccountConsistencyPolicy(d),
 			Locations:                          geoLocations,
 			Capabilities:                       expandAzureRmCosmosDBAccountCapabilities(d),
-			MinimalTlsVersion:                  pointer.To(cosmosdb.MinimalTlsVersion(d.Get("minimal_tls_version").(string))),
+			MinimalTlsVersion:                  pointer.ToEnum[cosmosdb.MinimalTlsVersion](d.Get("minimal_tls_version").(string)),
 			VirtualNetworkRules:                expandAzureRmCosmosDBAccountVirtualNetworkRules(d),
 			EnableMultipleWriteLocations:       pointer.To(d.Get("multiple_write_locations_enabled").(bool)),
 			EnablePartitionMerge:               pointer.To(d.Get("partition_merge_enabled").(bool)),
@@ -117,7 +117,7 @@ func resourceCosmosDbAccountCreate(d *pluginsdk.ResourceData, meta interface{}) 
 	var createMode string
 	if v, ok := d.GetOk("create_mode"); ok {
 		createMode = v.(string)
-		account.Properties.CreateMode = pointer.To(cosmosdb.CreateMode(createMode))
+		account.Properties.CreateMode = pointer.ToEnum[cosmosdb.CreateMode](createMode)
 	}
 
 	if v, ok := d.GetOk("restore"); ok {
@@ -126,7 +126,7 @@ func resourceCosmosDbAccountCreate(d *pluginsdk.ResourceData, meta interface{}) 
 
 	if v, ok := d.GetOk("mongo_server_version"); ok {
 		account.Properties.ApiProperties = &cosmosdb.ApiProperties{
-			ServerVersion: pointer.To(cosmosdb.ServerVersion(v.(string))),
+			ServerVersion: pointer.ToEnum[cosmosdb.ServerVersion](v.(string)),
 		}
 	}
 
@@ -164,8 +164,7 @@ func resourceCosmosDbAccountCreate(d *pluginsdk.ResourceData, meta interface{}) 
 		}
 	}
 
-	err = resourceCosmosDbAccountApiCreateOrUpdate(client, ctx, id, account)
-	if err != nil {
+	if err = resourceCosmosDbAccountApiCreateOrUpdate(client, ctx, id, account); err != nil {
 		return fmt.Errorf("creating %s: %+v", id, err)
 	}
 
@@ -174,8 +173,7 @@ func resourceCosmosDbAccountCreate(d *pluginsdk.ResourceData, meta interface{}) 
 	// NOTE: this is to work around the issue here: https://github.com/Azure/azure-rest-api-specs/issues/27596
 	// Once the above issue is resolved we shouldn't need this check and update anymore
 	if d.Get("create_mode").(string) == string(cosmosdb.CreateModeRestore) {
-		err = resourceCosmosDbAccountApiCreateOrUpdate(client, ctx, id, account)
-		if err != nil {
+		if err = resourceCosmosDbAccountApiCreateOrUpdate(client, ctx, id, account); err != nil {
 			return fmt.Errorf("updating %s: %+v", id, err)
 		}
 	}

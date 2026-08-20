@@ -22,10 +22,10 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
-	resourcesParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
 	storageValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -39,17 +39,6 @@ func resourceDatabricksWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}
 	id, err := workspaces.ParseWorkspaceID(d.Id())
 	if err != nil {
 		return err
-	}
-
-	var encryptDiskRotationEnabled bool
-	var servicesKeyVaultId string
-	if v, ok := d.GetOk("managed_services_cmk_key_vault_id"); ok {
-		servicesKeyVaultId = v.(string)
-	}
-
-	var diskKeyVaultId string
-	if v, ok := d.GetOk("managed_disk_cmk_key_vault_id"); ok {
-		diskKeyVaultId = v.(string)
 	}
 
 	resp, err := client.Get(ctx, *id)
@@ -73,12 +62,18 @@ func resourceDatabricksWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}
 			d.Set("sku", sku.Name)
 		}
 
-		managedResourceGroupID, err := resourcesParse.ResourceGroupIDInsensitively(pointer.From(model.Properties.ManagedResourceGroupId))
+		managedResourceGroupID, err := commonids.ParseResourceGroupIDInsensitively(pointer.From(model.Properties.ManagedResourceGroupId))
 		if err != nil {
 			return err
 		}
-		d.Set("managed_resource_group_id", model.Properties.ManagedResourceGroupId)
-		d.Set("managed_resource_group_name", managedResourceGroupID.ResourceGroup)
+
+		if !features.SixPointOh() {
+			d.Set("managed_resource_group_id", model.Properties.ManagedResourceGroupId)
+		} else {
+			d.Set("managed_resource_group_id", managedResourceGroupID.ID())
+		}
+
+		d.Set("managed_resource_group_name", managedResourceGroupID.ResourceGroupName)
 
 		if defaultStorageFirewall := model.Properties.DefaultStorageFirewall; defaultStorageFirewall != nil {
 			d.Set("default_storage_firewall_enabled", *defaultStorageFirewall != workspaces.DefaultStorageFirewallDisabled)
@@ -87,8 +82,7 @@ func resourceDatabricksWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}
 			}
 		}
 
-		publicNetworkAccess := model.Properties.PublicNetworkAccess
-		if publicNetworkAccess != nil {
+		if publicNetworkAccess := model.Properties.PublicNetworkAccess; publicNetworkAccess != nil {
 			d.Set("public_network_access_enabled", *publicNetworkAccess != workspaces.PublicNetworkAccessDisabled)
 			if *publicNetworkAccess == workspaces.PublicNetworkAccessDisabled {
 				if model.Properties.RequiredNsgRules != nil {
@@ -111,8 +105,7 @@ func resourceDatabricksWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}
 
 			// The subnet associations only exist in the statefile, so we need to do a Get before we Set
 			// with what has come back from the Azure response...
-			customParamsRaw := d.Get("custom_parameters").([]interface{})
-			_, pubSubAssoc, priSubAssoc := expandWorkspaceCustomParameters(customParamsRaw, cmkEnabled, infraEnabled, "", "")
+			_, pubSubAssoc, priSubAssoc := expandWorkspaceCustomParameters(d.Get("custom_parameters").([]interface{}), cmkEnabled, infraEnabled, "", "")
 
 			custom, backendPoolReadId := flattenWorkspaceCustomParameters(parameters, pubSubAssoc, priSubAssoc)
 			if err := d.Set("custom_parameters", custom); err != nil {
@@ -130,17 +123,8 @@ func resourceDatabricksWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}
 			return fmt.Errorf("setting `managed_disk_identity`: %+v", err)
 		}
 
-		var workspaceUrl string
-		if model.Properties.WorkspaceURL != nil {
-			workspaceUrl = *model.Properties.WorkspaceURL
-		}
-		d.Set("workspace_url", workspaceUrl)
-
-		var workspaceId string
-		if model.Properties.WorkspaceId != nil {
-			workspaceId = *model.Properties.WorkspaceId
-		}
-		d.Set("workspace_id", workspaceId)
+		d.Set("workspace_url", pointer.From(model.Properties.WorkspaceURL))
+		d.Set("workspace_id", pointer.From(model.Properties.WorkspaceId))
 
 		// customer managed key for managed services
 		var servicesKeyId string
@@ -157,6 +141,7 @@ func resourceDatabricksWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}
 
 		// customer managed key for managed disk
 		var diskKeyId string
+		var encryptDiskRotationEnabled bool
 		if encryption := model.Properties.Encryption; encryption != nil {
 			if encryptionProps := encryption.Entities.ManagedDisk; encryptionProps != nil {
 				if encryptionProps.KeyVaultProperties.KeyVaultUri != "" {
@@ -171,20 +156,18 @@ func resourceDatabricksWorkspaceRead(d *pluginsdk.ResourceData, meta interface{}
 		}
 
 		d.Set("enhanced_security_compliance", flattenWorkspaceEnhancedSecurity(model.Properties.EnhancedSecurityCompliance))
-
-		var encryptDiskEncryptionSetId string
-		if model.Properties.DiskEncryptionSetId != nil {
-			encryptDiskEncryptionSetId = *model.Properties.DiskEncryptionSetId
-		}
-		d.Set("disk_encryption_set_id", encryptDiskEncryptionSetId)
+		d.Set("disk_encryption_set_id", pointer.From(model.Properties.DiskEncryptionSetId))
 
 		// Always set these even if they are empty to keep the state file
 		// consistent with the configuration file...
 		d.Set("managed_services_cmk_key_vault_key_id", servicesKeyId)
-		d.Set("managed_services_cmk_key_vault_id", servicesKeyVaultId)
 		d.Set("managed_disk_cmk_key_vault_key_id", diskKeyId)
-		d.Set("managed_disk_cmk_key_vault_id", diskKeyVaultId)
 		d.Set("managed_disk_cmk_rotation_to_latest_version_enabled", encryptDiskRotationEnabled)
+
+		if !features.SixPointOh() {
+			d.Set("managed_services_cmk_key_vault_id", d.Get("managed_services_cmk_key_vault_id").(string))
+			d.Set("managed_disk_cmk_key_vault_id", d.Get("managed_disk_cmk_key_vault_id").(string))
+		}
 
 		if err := tags.FlattenAndSet(d, model.Tags); err != nil {
 			return err

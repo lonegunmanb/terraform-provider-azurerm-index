@@ -21,7 +21,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/migration"
@@ -36,7 +35,6 @@ import (
 )
 func resourceKeyVaultUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 	client := meta.(*clients.Client).KeyVault.VaultsClient
-	managementClient := meta.(*clients.Client).KeyVault.ManagementClient
 	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -68,8 +66,7 @@ func resourceKeyVaultUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 
 	if d.HasChange("access_policy") {
 		policiesRaw := d.Get("access_policy").([]interface{})
-		accessPolicies := expandAccessPolicies(policiesRaw)
-		update.Properties.AccessPolicies = accessPolicies
+		update.Properties.AccessPolicies = expandAccessPolicies(policiesRaw)
 	}
 
 	if d.HasChange("enabled_for_deployment") {
@@ -86,12 +83,6 @@ func resourceKeyVaultUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 
 	if d.HasChange("rbac_authorization_enabled") {
 		update.Properties.EnableRbacAuthorization = pointer.To(d.Get("rbac_authorization_enabled").(bool))
-	}
-
-	if !features.FivePointOh() {
-		if d.HasChange("enable_rbac_authorization") {
-			update.Properties.EnableRbacAuthorization = pointer.To(d.Get("enable_rbac_authorization").(bool))
-		}
 	}
 
 	if d.HasChange("network_acls") {
@@ -121,10 +112,7 @@ func resourceKeyVaultUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 		newValue := d.Get("purge_protection_enabled").(bool)
 
 		// existing.Properties guaranteed non-nil above
-		oldValue := false
-		if existing.Model.Properties.EnablePurgeProtection != nil {
-			oldValue = *existing.Model.Properties.EnablePurgeProtection
-		}
+		oldValue := pointer.From(existing.Model.Properties.EnablePurgeProtection)
 
 		// whilst this should have got caught in the customizeDiff this won't work if that fields interpolated
 		// hence the double-checking here
@@ -171,10 +159,7 @@ func resourceKeyVaultUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 		}
 
 		// existing.Properties guaranteed non-nil above
-		var oldValue int64 = 0
-		if existing.Model.Properties.SoftDeleteRetentionInDays != nil {
-			oldValue = *existing.Model.Properties.SoftDeleteRetentionInDays
-		}
+		oldValue := pointer.From(existing.Model.Properties.SoftDeleteRetentionInDays)
 
 		// whilst this should have got caught in the customizeDiff this won't work if that fields interpolated
 		// hence the double-checking here
@@ -203,48 +188,7 @@ func resourceKeyVaultUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
 		return fmt.Errorf("updating %s: %+v", *id, err)
 	}
 
-	if !features.FivePointOh() {
-		if d.HasChange("contact") {
-			contacts := dataplane.Contacts{
-				ContactList: pointer.To(make([]dataplane.Contact, 0)),
-			}
-
-			if len(d.Get("contact").(*pluginsdk.Set).List()) > 0 || d.Get("contact").(*pluginsdk.Set).List()[0] != nil {
-				for _, item := range d.Get("contact").(*pluginsdk.Set).List() {
-					v := item.(map[string]interface{})
-					contacts.ContactList = pointer.To(append(*contacts.ContactList, dataplane.Contact{
-						Name:         pointer.To(v["name"].(string)),
-						EmailAddress: pointer.To(v["email"].(string)),
-						Phone:        pointer.To(v["phone"].(string)),
-					}))
-				}
-			}
-
-			vaultUri := ""
-			if existing.Model != nil && existing.Model.Properties.VaultUri != nil {
-				vaultUri = pointer.From(existing.Model.Properties.VaultUri)
-			}
-
-			if vaultUri == "" {
-				return fmt.Errorf("failed to get vault base url for %s: %s", *id, err)
-			}
-
-			var err error
-			if len(*contacts.ContactList) == 0 {
-				_, err = managementClient.DeleteCertificateContacts(ctx, vaultUri)
-			} else {
-				_, err = managementClient.SetCertificateContacts(ctx, vaultUri, contacts)
-			}
-
-			if err != nil {
-				var extendedErrorMsg string
-				if !isPublic {
-					extendedErrorMsg = "\n\nWARNING: public network access for this key vault has been disabled, access to the key vault is only allowed through private endpoints"
-				}
-				return fmt.Errorf("updating Contacts for %s: %+v %s", *id, err, extendedErrorMsg)
-			}
-		}
-	}
+	d.Partial(false)
 
 	return resourceKeyVaultRead(d, meta)
 }

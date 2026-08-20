@@ -14,13 +14,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceDatabricksWorkspaceRootDbfsCustomerManagedKey() *pluginsdk.Resource {
-	return &pluginsdk.Resource{
+	r := &pluginsdk.Resource{
 		Create: databricksWorkspaceRootDbfsCustomerManagedKeyCreate,
 		Read:   databricksWorkspaceRootDbfsCustomerManagedKeyRead,
 		Update: databricksWorkspaceRootDbfsCustomerManagedKeyUpdate,
@@ -62,12 +63,21 @@ func resourceDatabricksWorkspaceRootDbfsCustomerManagedKey() *pluginsdk.Resource
 				Required:     true,
 				ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeKey),
 			},
-
-			"key_vault_id": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
-				ValidateFunc: commonids.ValidateKeyVaultID,
-			},
 		},
 	}
+
+	if !features.SixPointOh() {
+		r.Schema["key_vault_id"] = &pluginsdk.Schema{
+			Type:         pluginsdk.TypeString,
+			Optional:     true,
+			ValidateFunc: commonids.ValidateKeyVaultID,
+			DiffSuppressFunc: func(_, o, n string, _ *pluginsdk.ResourceData) bool {
+				// Suppress removal diff for 5.x since that does not require an update
+				return o != "" && n == ""
+			},
+			Deprecated: "`key_vault_id` has been deprecated and will be removed in v6.0 of the AzureRM provider. This property is no longer required for cross-subscription scenarios.",
+		}
+	}
+
+	return r
 }

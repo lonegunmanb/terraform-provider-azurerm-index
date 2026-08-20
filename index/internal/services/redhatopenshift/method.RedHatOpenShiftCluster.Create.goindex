@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -8,10 +9,11 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2025-07-25/openshiftclusters"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/validate"
@@ -50,21 +52,34 @@ func (r RedHatOpenShiftCluster) Create() sdk.ResourceFunc {
 				Name:     pointer.To(id.OpenShiftClusterName),
 				Location: location.Normalize(config.Location),
 				Properties: &openshiftclusters.OpenShiftClusterProperties{
-					ClusterProfile:          expandOpenshiftClusterProfile(config.ClusterProfile, id.SubscriptionId),
-					ServicePrincipalProfile: expandOpenshiftServicePrincipalProfile(config.ServicePrincipal),
-					NetworkProfile:          expandOpenshiftNetworkProfile(config.NetworkProfile),
-					MasterProfile:           expandOpenshiftMainProfile(config.MainProfile),
-					WorkerProfiles:          expandOpenshiftWorkerProfiles(config.WorkerProfile),
-					ApiserverProfile:        expandOpenshiftApiServerProfile(config.ApiServerProfile),
-					IngressProfiles:         expandOpenshiftIngressProfiles(config.IngressProfile),
+					ClusterProfile:                  expandOpenshiftClusterProfile(config.ClusterProfile, id.SubscriptionId),
+					ServicePrincipalProfile:         expandOpenshiftServicePrincipalProfile(config.ServicePrincipal),
+					NetworkProfile:                  expandOpenshiftNetworkProfile(config.NetworkProfile),
+					MasterProfile:                   expandOpenshiftMainProfile(config.MainProfile),
+					WorkerProfiles:                  expandOpenshiftWorkerProfiles(config.WorkerProfile),
+					ApiserverProfile:                expandOpenshiftApiServerProfile(config.ApiServerProfile),
+					IngressProfiles:                 expandOpenshiftIngressProfiles(config.IngressProfile),
+					PlatformWorkloadIdentityProfile: expandOpenshiftPlatformWorkloadIdentityProfile(config.PlatformWorkloadIdentityProfile),
 				},
 				Tags: pointer.To(config.Tags),
 			}
 
-			if err := client.CreateOrUpdateCallbackThenPoll(ctx, id, parameters, metadata.SetIDCallback(&id)); err != nil {
+			if len(config.Identity) > 0 {
+				expandedIdentity, err := identity.ExpandUserAssignedMapFromModel(config.Identity)
+				if err != nil {
+					return fmt.Errorf("expanding `identity`: %+v", err)
+				}
+				parameters.Identity = expandedIdentity
+			}
+
+			if err := client.CreateOrUpdateCallbackThenPoll(ctx, id, parameters, metadata.SetIDAndIdentityCallback(&id)); err != nil {
 				return fmt.Errorf("creating %s: %+v", id, err)
 			}
+
 			metadata.SetID(id)
+			if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, &id); err != nil {
+				return err
+			}
 
 			return nil
 		},

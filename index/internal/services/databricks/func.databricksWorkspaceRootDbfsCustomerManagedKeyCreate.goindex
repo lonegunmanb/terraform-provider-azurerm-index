@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -21,7 +22,7 @@ import (
 )
 func databricksWorkspaceRootDbfsCustomerManagedKeyCreate(d *pluginsdk.ResourceData, meta interface{}) error {
 	workspaceClient := meta.(*clients.Client).DataBricks.WorkspacesClient
-	keyVaultsClient := meta.(*clients.Client).KeyVault
+
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
@@ -68,27 +69,6 @@ func databricksWorkspaceRootDbfsCustomerManagedKeyCreate(d *pluginsdk.ResourceDa
 		return err
 	}
 
-	dbfsSubscriptionId := commonids.NewSubscriptionID(id.SubscriptionId)
-	keyVaultId := d.Get("key_vault_id").(string)
-	if keyVaultId != "" {
-		parsedKeyVaultID, err := commonids.ParseKeyVaultID(keyVaultId)
-		if err != nil {
-			return err
-		}
-		dbfsSubscriptionId = commonids.NewSubscriptionID(parsedKeyVaultID.SubscriptionId)
-	}
-
-	// make sure the key vault exists
-	// TODO: consider removing this check and deprecating the `key_vault_id` property.
-	// 1. The check can be time consuming when there are many KVs present in a subscription.
-	// 2. The API request will fail if the KV doesn't exist, both that error and this check happen at apply time after a successful plan regardless.
-	// 3. It doesn't work with Managed HSM vaults (hence the conditional)
-	if !key.IsManagedHSM() {
-		if keyVaultIdRaw, err := keyVaultsClient.KeyVaultIDFromBaseUrl(ctx, dbfsSubscriptionId, key.KeyVaultBaseURL); err != nil || keyVaultIdRaw == nil {
-			return fmt.Errorf("retrieving the Resource ID for the Key Vault at URL %q: %+v", key.KeyVaultBaseURL, err)
-		}
-	}
-
 	params.Encryption = &workspaces.WorkspaceEncryptionParameter{
 		Value: &workspaces.Encryption{
 			KeySource:   pointer.To(workspaces.KeySourceMicrosoftPointKeyvault),
@@ -106,10 +86,6 @@ func databricksWorkspaceRootDbfsCustomerManagedKeyCreate(d *pluginsdk.ResourceDa
 	if err := pluginsdk.SetResourceIdentityData(d, id); err != nil {
 		return err
 	}
-
-	// Always set this even if it's empty to keep the state file
-	// consistent with the configuration file...
-	d.Set("key_vault_id", keyVaultId)
 
 	return databricksWorkspaceRootDbfsCustomerManagedKeyRead(d, meta)
 }

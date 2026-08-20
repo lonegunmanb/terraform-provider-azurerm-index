@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2025-07-25/openshiftclusters"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func flattenOpenShiftPlatformWorkloadIdentityProfile(profile *openshiftclusters.PlatformWorkloadIdentityProfile) ([]PlatformWorkloadIdentityProfile, error) {
+	if profile == nil {
+		return []PlatformWorkloadIdentityProfile{}, nil
+	}
+
+	identities := make([]PlatformWorkloadIdentity, 0)
+	if profile.PlatformWorkloadIdentities != nil {
+		for name, item := range *profile.PlatformWorkloadIdentities {
+			resourceId := pointer.From(item.ResourceId)
+			parsed, err := commonids.ParseUserAssignedIdentityIDInsensitively(resourceId)
+			if err != nil {
+				return nil, err
+			}
+			identities = append(identities, PlatformWorkloadIdentity{
+				Name:       name,
+				IdentityId: parsed.ID(),
+				ClientId:   pointer.From(item.ClientId),
+				ObjectId:   pointer.From(item.ObjectId),
+			})
+		}
+	}
+
+	return []PlatformWorkloadIdentityProfile{
+		{
+			UpgradeableTo:            pointer.From(profile.UpgradeableTo),
+			PlatformWorkloadIdentity: identities,
+		},
+	}, nil
+}

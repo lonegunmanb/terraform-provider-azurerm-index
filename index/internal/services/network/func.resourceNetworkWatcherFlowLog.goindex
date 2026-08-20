@@ -18,9 +18,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -28,7 +26,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceNetworkWatcherFlowLog() *pluginsdk.Resource {
-	resource := &pluginsdk.Resource{
+	return &pluginsdk.Resource{
 		Create: resourceNetworkWatcherFlowLogCreate,
 		Read:   resourceNetworkWatcherFlowLogRead,
 		Update: resourceNetworkWatcherFlowLogUpdate,
@@ -175,11 +173,6 @@ func resourceNetworkWatcherFlowLog() *pluginsdk.Resource {
 		CustomizeDiff: func(_ context.Context, d *pluginsdk.ResourceDiff, _ any) error {
 			if d.Id() == "" {
 				targetResourceId := d.Get("target_resource_id").(string)
-				if !features.FivePointOh() {
-					if v, ok := d.GetOk("network_security_group_id"); ok && v.(string) != "" {
-						targetResourceId = v.(string)
-					}
-				}
 
 				if _, err := networksecuritygroups.ParseNetworkSecurityGroupID(targetResourceId); err == nil {
 					return errors.New("creation of new NSG flow logs is no longer supported by Azure as of June 30, 2025. NSG flow logs will be retired on September 30, 2027. For more information, see https://learn.microsoft.com/azure/network-watcher/nsg-flow-logs-migrate")
@@ -189,22 +182,4 @@ func resourceNetworkWatcherFlowLog() *pluginsdk.Resource {
 			return nil
 		},
 	}
-
-	if !features.FivePointOh() {
-		resource.Schema["network_security_group_id"] = &pluginsdk.Schema{
-			Type:         pluginsdk.TypeString,
-			Optional:     true,
-			Computed:     true,
-			ValidateFunc: networksecuritygroups.ValidateNetworkSecurityGroupID,
-			Deprecated:   "The property `network_security_group_id` has been superseded by `target_resource_id` and will be removed in version 5.0 of the AzureRM Provider.",
-			ExactlyOneOf: []string{"network_security_group_id", "target_resource_id"},
-		}
-		resource.Schema["target_resource_id"].Required = false
-		resource.Schema["target_resource_id"].Optional = true
-		resource.Schema["target_resource_id"].Computed = true
-		resource.Schema["target_resource_id"].ForceNew = false
-		resource.Schema["target_resource_id"].ExactlyOneOf = []string{"network_security_group_id", "target_resource_id"}
-	}
-
-	return resource
 }

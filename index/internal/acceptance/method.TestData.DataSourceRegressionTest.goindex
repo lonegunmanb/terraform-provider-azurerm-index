@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/acceptance
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+
+	"github.com/hashicorp/go-version"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/hashicorp/terraform-plugin-testing/tfversion"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/testclient"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/types"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider/framework"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/vcr"
+)
+func (td TestData) DataSourceRegressionTest(t *testing.T, steps []TestStep, previousVersion string) {
+	if len(steps) != 2 {
+		if len(steps) == 1 {
+			// duplicate step[0] for second stage - this is all that _should_ be required for breaking change testing
+			steps = append(steps, steps[0])
+			// the duplicated verification step must not re-run step[0]'s PreConfig - that is setup
+			// (e.g. unregistering a leftover provider/feature registration) which would tear down
+			// the resource the first step just created out from under the verification step
+			steps[1].PreConfig = nil
+		} else {
+			t.Fatal("expected exactly 2 steps for Regression test. Setup and Check")
+		}
+	}
+
+	os.Setenv("TF_ACC_REFRESH_AFTER_APPLY", "true")
+
+	steps[0].ExternalProviders = td.externalProviders()
+	steps[0].ExternalProviders["azurerm"] = resource.ExternalProvider{
+		VersionConstraint: providerRelease([]string{previousVersion}...),
+		Source:            "hashicorp/azurerm",
+	}
+
+	steps[1].ExternalProviders = td.externalProviders()
+	steps[1].ProtoV5ProviderFactories = framework.ProtoV5ProviderFactoriesInitWithTestName(context.Background(), t.Name(), "azurerm", "azurerm-alt")
+	steps[1].ConfigPlanChecks = resource.ConfigPlanChecks{
+		PreApply: []plancheck.PlanCheck{
+			helpers.IsNotResourceAction(td.ResourceName, plancheck.ResourceActionReplace),
+		},
+	}
+
+	testCase := resource.TestCase{
+		PreCheck: func() { PreCheck(t) },
+		Steps:    steps,
+	}
+
+	resource.ParallelTest(t, testCase)
+}

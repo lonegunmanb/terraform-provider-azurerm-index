@@ -87,8 +87,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 			Secret:   pointer.To(clientSecret),
 		}
 
-		err = clusterClient.ResetServicePrincipalProfileThenPoll(ctx, *id, params)
-		if err != nil {
+		if err = clusterClient.ResetServicePrincipalProfileThenPoll(ctx, *id, params); err != nil {
 			return fmt.Errorf("updating Service Principal for %s: %+v", *id, err)
 		}
 
@@ -128,8 +127,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 		props.AadProfile = azureADProfile
 		if props.AadProfile == nil || (props.AadProfile.Managed == nil || !*props.AadProfile.Managed) {
 			props.AadProfile = &managedclusters.ManagedClusterAADProfile{}
-			err = clusterClient.ResetAADProfileThenPoll(ctx, *id, *props.AadProfile)
-			if err != nil {
+			if err = clusterClient.ResetAADProfileThenPoll(ctx, *id, *props.AadProfile); err != nil {
 				return fmt.Errorf("updating Managed Kubernetes Cluster AAD Profile for %s: %+v", *id, err)
 			}
 		}
@@ -163,31 +161,27 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 	if d.HasChanges("run_command_enabled", "private_cluster_public_fqdn_enabled", "api_server_access_profile") {
 		updateCluster = true
 
-		apiServerProfile := expandKubernetesClusterAPIAccessProfile(d)
-		existing.Model.Properties.ApiServerAccessProfile = apiServerProfile
+		existing.Model.Properties.ApiServerAccessProfile = expandKubernetesClusterAPIAccessProfile(d)
 	}
 
 	if d.HasChange("auto_scaler_profile") {
 		updateCluster = true
 		autoScalerProfileRaw := d.Get("auto_scaler_profile").([]interface{})
 
-		autoScalerProfile := expandKubernetesClusterAutoScalerProfile(autoScalerProfileRaw)
-		existing.Model.Properties.AutoScalerProfile = autoScalerProfile
+		existing.Model.Properties.AutoScalerProfile = expandKubernetesClusterAutoScalerProfile(autoScalerProfileRaw)
 	}
 
 	if d.HasChange("monitor_metrics") {
 		updateCluster = true
 		azureMonitorKubernetesMetricsRaw := d.Get("monitor_metrics").([]interface{})
 
-		azureMonitorProfile := expandKubernetesClusterAzureMonitorProfile(azureMonitorKubernetesMetricsRaw)
-		existing.Model.Properties.AzureMonitorProfile = azureMonitorProfile
+		existing.Model.Properties.AzureMonitorProfile = expandKubernetesClusterAzureMonitorProfile(azureMonitorKubernetesMetricsRaw)
 	}
 
 	if d.HasChange("linux_profile") {
 		updateCluster = true
 		linuxProfileRaw := d.Get("linux_profile").([]interface{})
-		linuxProfile := expandKubernetesClusterLinuxProfile(linuxProfileRaw)
-		existing.Model.Properties.LinuxProfile = linuxProfile
+		existing.Model.Properties.LinuxProfile = expandKubernetesClusterLinuxProfile(linuxProfileRaw)
 	}
 
 	if d.HasChange("local_account_disabled") {
@@ -218,12 +212,11 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 			if key := "network_profile.0.network_policy"; d.HasChange(key) {
 				networkPolicy := d.Get(key).(string)
-				existing.Model.Properties.NetworkProfile.NetworkPolicy = pointer.To(managedclusters.NetworkPolicy(networkPolicy))
+				existing.Model.Properties.NetworkProfile.NetworkPolicy = pointer.ToEnum[managedclusters.NetworkPolicy](networkPolicy)
 			}
 
 			if key := "network_profile.0.load_balancer_profile.0.effective_outbound_ips"; d.HasChange(key) {
-				effectiveOutboundIPs := idsToResourceReferences(d.Get(key))
-				loadBalancerProfile.EffectiveOutboundIPs = effectiveOutboundIPs
+				loadBalancerProfile.EffectiveOutboundIPs = idsToResourceReferences(d.Get(key))
 			}
 
 			if key := "network_profile.0.load_balancer_profile.0.idle_timeout_in_minutes"; d.HasChange(key) {
@@ -305,7 +298,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 			if key := "network_profile.0.load_balancer_profile.0.backend_pool_type"; d.HasChange(key) {
 				backendPoolType := d.Get(key).(string)
-				loadBalancerProfile.BackendPoolType = pointer.To(managedclusters.BackendPoolType(backendPoolType))
+				loadBalancerProfile.BackendPoolType = pointer.ToEnum[managedclusters.BackendPoolType](backendPoolType)
 			}
 
 			existing.Model.Properties.NetworkProfile.LoadBalancerProfile = &loadBalancerProfile
@@ -331,17 +324,17 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 		}
 
 		if d.HasChange("network_profile.0.network_data_plane") {
-			existing.Model.Properties.NetworkProfile.NetworkDataplane = pointer.To(managedclusters.NetworkDataplane(d.Get("network_profile.0.network_data_plane").(string)))
+			existing.Model.Properties.NetworkProfile.NetworkDataplane = pointer.ToEnum[managedclusters.NetworkDataplane](d.Get("network_profile.0.network_data_plane").(string))
 		}
 
 		if key := "network_profile.0.network_plugin"; d.HasChange(key) {
 			networkPlugin := d.Get(key).(string)
-			existing.Model.Properties.NetworkProfile.NetworkPlugin = pointer.To(managedclusters.NetworkPlugin(networkPlugin))
+			existing.Model.Properties.NetworkProfile.NetworkPlugin = pointer.ToEnum[managedclusters.NetworkPlugin](networkPlugin)
 		}
 
 		if key := "network_profile.0.network_plugin_mode"; d.HasChange(key) {
 			networkPluginMode := d.Get(key).(string)
-			existing.Model.Properties.NetworkProfile.NetworkPluginMode = pointer.To(managedclusters.NetworkPluginMode(networkPluginMode))
+			existing.Model.Properties.NetworkProfile.NetworkPluginMode = pointer.ToEnum[managedclusters.NetworkPluginMode](networkPluginMode)
 		}
 
 		if key := "network_profile.0.pod_cidr"; d.HasChange(key) {
@@ -385,8 +378,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 	if d.HasChange("windows_profile") {
 		updateCluster = true
 		windowsProfileRaw := d.Get("windows_profile").([]interface{})
-		windowsProfile := expandKubernetesClusterWindowsProfile(windowsProfileRaw)
-		existing.Model.Properties.WindowsProfile = windowsProfile
+		existing.Model.Properties.WindowsProfile = expandKubernetesClusterWindowsProfile(windowsProfileRaw)
 	}
 
 	if d.HasChange("identity") {
@@ -427,7 +419,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 		if channel == "" {
 			channel = string(managedclusters.UpgradeChannelNone)
 		}
-		existing.Model.Properties.AutoUpgradeProfile.UpgradeChannel = pointer.To(managedclusters.UpgradeChannel(channel))
+		existing.Model.Properties.AutoUpgradeProfile.UpgradeChannel = pointer.ToEnum[managedclusters.UpgradeChannel](channel)
 	}
 
 	if d.HasChange(nodeOsUpgradeChannel) {
@@ -438,21 +430,19 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 		if existing.Model.Properties.AutoUpgradeProfile == nil {
 			existing.Model.Properties.AutoUpgradeProfile = &managedclusters.ManagedClusterAutoUpgradeProfile{}
 		}
-		existing.Model.Properties.AutoUpgradeProfile.NodeOSUpgradeChannel = pointer.To(managedclusters.NodeOSUpgradeChannel(d.Get(nodeOsUpgradeChannel).(string)))
+		existing.Model.Properties.AutoUpgradeProfile.NodeOSUpgradeChannel = pointer.ToEnum[managedclusters.NodeOSUpgradeChannel](d.Get(nodeOsUpgradeChannel).(string))
 	}
 
 	if d.HasChange("http_proxy_config") {
 		updateCluster = true
 		httpProxyConfigRaw := d.Get("http_proxy_config").([]interface{})
-		httpProxyConfig := expandKubernetesClusterHttpProxyConfig(httpProxyConfigRaw)
-		existing.Model.Properties.HTTPProxyConfig = httpProxyConfig
+		existing.Model.Properties.HTTPProxyConfig = expandKubernetesClusterHttpProxyConfig(httpProxyConfigRaw)
 	}
 
 	if d.HasChange("oidc_issuer_enabled") {
 		updateCluster = true
 		oidcIssuerEnabled := d.Get("oidc_issuer_enabled").(bool)
-		oidcIssuerProfile := expandKubernetesClusterOidcIssuerProfile(oidcIssuerEnabled)
-		existing.Model.Properties.OidcIssuerProfile = oidcIssuerProfile
+		existing.Model.Properties.OidcIssuerProfile = expandKubernetesClusterOidcIssuerProfile(oidcIssuerEnabled)
 	}
 
 	if d.HasChanges("key_management_service") {
@@ -487,8 +477,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 	if d.HasChanges("storage_profile") {
 		updateCluster = true
 		storageProfileRaw := d.Get("storage_profile").([]interface{})
-		clusterStorageProfile := expandStorageProfile(storageProfileRaw)
-		existing.Model.Properties.StorageProfile = clusterStorageProfile
+		existing.Model.Properties.StorageProfile = expandStorageProfile(storageProfileRaw)
 	}
 
 	if d.HasChange("workload_autoscaler_profile") {
@@ -516,8 +505,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 	if d.HasChange("node_provisioning_profile") {
 		updateCluster = true
 		nodeProvisioningProfileRaw := d.Get("node_provisioning_profile").([]interface{})
-		nodeProvisioningProfile := expandKubernetesClusterNodeProvisioningProfile(nodeProvisioningProfileRaw)
-		existing.Model.Properties.NodeProvisioningProfile = nodeProvisioningProfile
+		existing.Model.Properties.NodeProvisioningProfile = expandKubernetesClusterNodeProvisioningProfile(nodeProvisioningProfileRaw)
 	}
 
 	if d.HasChanges("workload_identity_enabled") {
@@ -565,8 +553,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 		}
 
 		updateCluster = true
-		upgradeOverrideSetting := expandKubernetesClusterUpgradeOverrideSetting(upgradeOverrideSettingRaw)
-		existing.Model.Properties.UpgradeSettings = upgradeOverrideSetting
+		existing.Model.Properties.UpgradeSettings = expandKubernetesClusterUpgradeOverrideSetting(upgradeOverrideSettingRaw)
 	}
 
 	if d.HasChange("web_app_routing") {
@@ -576,7 +563,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 
 	if d.HasChange("support_plan") {
 		updateCluster = true
-		existing.Model.Properties.SupportPlan = pointer.To(managedclusters.KubernetesSupportPlan(d.Get("support_plan").(string)))
+		existing.Model.Properties.SupportPlan = pointer.ToEnum[managedclusters.KubernetesSupportPlan](d.Get("support_plan").(string))
 	}
 
 	if updateCluster {
@@ -589,8 +576,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 			existing.Model.Properties.SecurityProfile.Defender = nil
 		}
 
-		err = clusterClient.CreateOrUpdateThenPoll(ctx, *id, *existing.Model, managedclusters.DefaultCreateOrUpdateOperationOptions())
-		if err != nil {
+		if err = clusterClient.CreateOrUpdateThenPoll(ctx, *id, *existing.Model, managedclusters.DefaultCreateOrUpdateOperationOptions()); err != nil {
 			return fmt.Errorf("updating %s: %+v", *id, err)
 		}
 	}
@@ -609,8 +595,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 		log.Printf("[DEBUG] Upgrading the version of Kubernetes to %q..", kubernetesVersion)
 		existing.Model.Properties.KubernetesVersion = pointer.To(kubernetesVersion)
 
-		err = clusterClient.CreateOrUpdateThenPoll(ctx, *id, *existing.Model, managedclusters.DefaultCreateOrUpdateOperationOptions())
-		if err != nil {
+		if err = clusterClient.CreateOrUpdateThenPoll(ctx, *id, *existing.Model, managedclusters.DefaultCreateOrUpdateOperationOptions()); err != nil {
 			return fmt.Errorf("updating Kubernetes Version for %s: %+v", *id, err)
 		}
 
@@ -632,10 +617,7 @@ func resourceKubernetesClusterUpdate(d *pluginsdk.ResourceData, meta interface{}
 			if err != nil {
 				return fmt.Errorf("retrieving Default Node Pool %s: %+v", defaultNodePoolId, err)
 			}
-			currentNodePoolVersion := ""
-			if v := existingNodePool.Model.Properties.OrchestratorVersion; v != nil {
-				currentNodePoolVersion = *v
-			}
+			currentNodePoolVersion := pointer.From(existingNodePool.Model.Properties.OrchestratorVersion)
 
 			if err := validateNodePoolSupportsVersion(ctx, containersClient, currentNodePoolVersion, defaultNodePoolId, *nodePoolVersion); err != nil {
 				return err

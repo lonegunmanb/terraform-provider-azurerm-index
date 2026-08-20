@@ -1,6 +1,5 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/migration"
@@ -124,32 +122,6 @@ func resourceKustoClusterUpdate(d *pluginsdk.ResourceData, meta interface{}) err
 		props.LanguageExtensions = expandKustoClusterLanguageExtensionList(d.Get("language_extension").([]any))
 	}
 
-	if !features.FivePointOh() {
-		if d.HasChange("language_extensions") {
-			props.LanguageExtensions = expandKustoClusterLanguageExtensionList(d.Get("language_extensions").([]any))
-		} else if len(d.Get("language_extensions").([]any)) > 0 || len(d.Get("language_extension").([]any)) > 0 {
-			hasError := false
-			rawLanguageExtensions, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("language_extensions"))
-			if diags.HasError() {
-				hasError = true
-			}
-
-			rawLanguageExtension, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("language_extension"))
-			if diags.HasError() {
-				hasError = true
-			}
-
-			// If RawConfig has a slice of len 0 for both blocks we want to ensure the API payload contains an empty slice to remove any language extensions.
-			// This is a workaround to the O+C behaviour where removing all blocks from config doesn't trigger a change.
-			// While the `CustomizeDiff` does update `*ResourceDiff` with the updated (empty) value, it doesn't seem to propagate through to the `*ResourceData` in `Update()`
-			if !hasError && !rawLanguageExtensions.IsNull() && rawLanguageExtensions.IsKnown() && !rawLanguageExtension.IsNull() && rawLanguageExtension.IsKnown() {
-				if len(rawLanguageExtensions.AsValueSlice()) == 0 && len(rawLanguageExtension.AsValueSlice()) == 0 {
-					props.LanguageExtensions = expandKustoClusterLanguageExtensionList(make([]any, 0))
-				}
-			}
-		}
-	}
-
 	if d.HasChange("outbound_network_access_restricted") {
 		restrictOutboundNetworkAccess := clusters.ClusterNetworkAccessFlagDisabled
 		if d.Get("outbound_network_access_restricted").(bool) {
@@ -181,20 +153,6 @@ func resourceKustoClusterUpdate(d *pluginsdk.ResourceData, meta interface{}) err
 
 	if d.HasChange("trusted_external_tenants") {
 		props.TrustedExternalTenants = expandTrustedExternalTenants(d.Get("trusted_external_tenants").([]interface{}))
-	}
-
-	if !features.FivePointOh() {
-		if d.HasChange("virtual_network_configuration") {
-			if v, ok := d.GetOk("virtual_network_configuration"); ok {
-				if vnetConfig := expandKustoClusterVNET(v.([]interface{})); vnetConfig != nil {
-					props.VirtualNetworkConfiguration = vnetConfig
-				}
-			} else {
-				// 'State' is hardcoded to 'Disabled' for the 'None' pattern.
-				// If the vNet block is present it is enabled, if the vNet block is removed it is disabled.
-				props.VirtualNetworkConfiguration.State = pointer.To(clusters.VnetStateDisabled)
-			}
-		}
 	}
 
 	if d.HasChange("zones") {

@@ -21,7 +21,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -29,7 +28,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceMysqlFlexibleServer() *pluginsdk.Resource {
-	resource := &pluginsdk.Resource{
+	return &pluginsdk.Resource{
 		Create: resourceMysqlFlexibleServerCreate,
 		Read:   resourceMysqlFlexibleServerRead,
 		Update: resourceMysqlFlexibleServerUpdate,
@@ -332,90 +331,4 @@ func resourceMysqlFlexibleServer() *pluginsdk.Resource {
 			}),
 		),
 	}
-
-	if !features.FivePointOh() {
-		resource.Schema["public_network_access_enabled"] = &pluginsdk.Schema{
-			Type:     pluginsdk.TypeBool,
-			Computed: true,
-		}
-
-		resource.Schema["customer_managed_key"].Elem.(*pluginsdk.Resource).Schema = map[string]*pluginsdk.Schema{
-			"key_vault_key_id": {
-				Type:          pluginsdk.TypeString,
-				Optional:      true,
-				ValidateFunc:  keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeAny),
-				ConflictsWith: []string{"customer_managed_key.0.managed_hsm_key_id"},
-				RequiredWith: []string{
-					"identity",
-					"customer_managed_key.0.primary_user_assigned_identity_id",
-				},
-				DiffSuppressFunc: func(_, oldValue, newValue string, d *schema.ResourceData) bool {
-					if newValue == "" {
-						// If using `managed_hsm_key_id`, `key_vault_key_id` will also be set
-						// ignore diff if the 2 are equal.
-						raw, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("customer_managed_key.0.managed_hsm_key_id"))
-						if diags != nil {
-							return false
-						}
-
-						if raw.IsKnown() && !raw.IsNull() {
-							return raw.AsString() == oldValue
-						}
-					}
-
-					return false
-				},
-				DiffSuppressOnRefresh: true,
-			},
-			"primary_user_assigned_identity_id": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
-				ValidateFunc: commonids.ValidateUserAssignedIdentityID,
-			},
-			"geo_backup_key_vault_key_id": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
-				ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeAny),
-				RequiredWith: []string{
-					"identity",
-					"customer_managed_key.0.geo_backup_user_assigned_identity_id",
-				},
-			},
-			"geo_backup_user_assigned_identity_id": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
-				ValidateFunc: commonids.ValidateUserAssignedIdentityID,
-			},
-			"managed_hsm_key_id": {
-				Type:          pluginsdk.TypeString,
-				Optional:      true,
-				ValidateFunc:  keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeAny),
-				ConflictsWith: []string{"customer_managed_key.0.key_vault_key_id"},
-				RequiredWith: []string{
-					"identity",
-					"customer_managed_key.0.primary_user_assigned_identity_id",
-				},
-				DiffSuppressFunc: func(_, oldValue, newValue string, d *schema.ResourceData) bool {
-					if newValue == "" {
-						// If using `key_vault_key_id` with MHSM key, `managed_hsm_key_id` will also be set
-						// ignore diff if the 2 are equal.
-						raw, diags := d.GetRawConfigAt(sdk.ConstructCtyPath("customer_managed_key.0.key_vault_key_id"))
-						if diags != nil {
-							return false
-						}
-
-						if raw.IsKnown() && !raw.IsNull() {
-							return raw.AsString() == oldValue
-						}
-					}
-
-					return false
-				},
-				DiffSuppressOnRefresh: true,
-				Deprecated:            "The `customer_managed_key.managed_hsm_key_id` property has been deprecated in favour of `customer_managed_key.key_vault_key_id` and will be removed in v5.0 of the AzureRM provider",
-			},
-		}
-	}
-
-	return resource
 }

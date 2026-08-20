@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2025-07-25/openshiftclusters"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r RedHatOpenShiftCluster) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			outboundType := metadata.ResourceDiff.Get("network_profile.0.outbound_type").(string)
+			loadBalancerProfile := metadata.ResourceDiff.Get("network_profile.0.load_balancer_profile")
+			if outboundType != string(openshiftclusters.OutboundTypeLoadbalancer) && len(loadBalancerProfile.([]interface{})) > 0 {
+				return errors.New("`network_profile.0.load_balancer_profile` requires `network_profile.0.outbound_type` to be `Loadbalancer`")
+			}
+
+			if metadata.ResourceDiff.Id() == "" {
+				return nil
+			}
+
+			oldUpgradeableTo, newUpgradeableTo := metadata.ResourceDiff.GetChange("platform_workload_identity_profile.0.upgradeable_to")
+			if oldUpgradeableTo.(string) != "" && newUpgradeableTo.(string) == "" {
+				return errors.New("`platform_workload_identity_profile.0.upgradeable_to` cannot be removed once set")
+			}
+
+			// The service principal can be swapped, but it cannot be added or removed in place.
+			oldServicePrincipal, newServicePrincipal := metadata.ResourceDiff.GetChange("service_principal")
+			if len(oldServicePrincipal.([]interface{})) != len(newServicePrincipal.([]interface{})) {
+				return metadata.ResourceDiff.ForceNew("service_principal")
+			}
+
+			// The identity can be swapped, but it cannot be added or removed in place.
+			oldIdentity, newIdentity := metadata.ResourceDiff.GetChange("identity")
+			if len(oldIdentity.([]interface{})) != len(newIdentity.([]interface{})) {
+				return metadata.ResourceDiff.ForceNew("identity")
+			}
+
+			return nil
+		},
+	}
+}

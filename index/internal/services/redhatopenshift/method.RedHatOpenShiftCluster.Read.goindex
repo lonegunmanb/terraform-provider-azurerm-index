@@ -1,6 +1,7 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -8,10 +9,11 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2025-07-25/openshiftclusters"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	commonValidate "github.com/hashicorp/terraform-provider-azurerm/helpers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/validate"
@@ -44,41 +46,7 @@ func (r RedHatOpenShiftCluster) Read() sdk.ResourceFunc {
 				return fmt.Errorf("decoding %+v", err)
 			}
 
-			state := RedHatOpenShiftClusterModel{
-				Name:          id.OpenShiftClusterName,
-				ResourceGroup: id.ResourceGroupName,
-			}
-
-			if model := resp.Model; model != nil {
-				state.Location = location.Normalize(model.Location)
-				state.Tags = pointer.From(model.Tags)
-
-				if props := model.Properties; props != nil {
-					clusterProfile, err := flattenOpenShiftClusterProfile(props.ClusterProfile, config)
-					if err != nil {
-						return fmt.Errorf("flatten cluster profile: %+v", err)
-					}
-					state.ClusterProfile = *clusterProfile
-
-					state.ServicePrincipal = flattenOpenShiftServicePrincipalProfile(props.ServicePrincipalProfile, config)
-					state.NetworkProfile = flattenOpenShiftNetworkProfile(props.NetworkProfile)
-					state.MainProfile = flattenOpenShiftMainProfile(props.MasterProfile)
-					state.ApiServerProfile = flattenOpenShiftAPIServerProfile(props.ApiserverProfile)
-					state.IngressProfile = flattenOpenShiftIngressProfiles(props.IngressProfiles)
-
-					workerProfiles, err := flattenOpenShiftWorkerProfiles(props.WorkerProfiles)
-					if err != nil {
-						return fmt.Errorf("flattening worker profiles: %+v", err)
-					}
-					state.WorkerProfile = workerProfiles
-
-					if props.ConsoleProfile != nil {
-						state.ConsoleUrl = pointer.From(props.ConsoleProfile.Url)
-					}
-				}
-			}
-
-			return metadata.Encode(&state)
+			return r.flatten(metadata, *id, resp.Model, config)
 		},
 	}
 }
