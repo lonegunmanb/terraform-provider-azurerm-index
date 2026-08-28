@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadtestservice
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/loadtestservice/2025-09-01/playwrightworkspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (PlaywrightWorkspaceDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.LoadTestService.PlaywrightWorkspacesClient
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var state PlaywrightWorkspaceDataSourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := playwrightworkspaces.NewPlaywrightWorkspaceID(subscriptionId, state.ResourceGroupName, state.Name)
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			metadata.SetID(id)
+
+			if model := resp.Model; model != nil {
+				state.Location = location.Normalize(model.Location)
+
+				if properties := model.Properties; properties != nil {
+					state.DataplaneUri = pointer.From(properties.DataplaneUri)
+					state.Uuid = pointer.From(properties.WorkspaceId)
+				}
+
+				state.Tags = pointer.From(model.Tags)
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

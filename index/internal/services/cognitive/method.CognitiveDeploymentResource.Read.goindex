@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2026-03-01/cognitiveservicesaccounts"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2026-03-01/deployments"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -33,27 +34,11 @@ func (r CognitiveDeploymentResource) Read() sdk.ResourceFunc {
 				return fmt.Errorf("retrieving %s: %+v", *id, err)
 			}
 
-			model := resp.Model
-			if model == nil {
+			if resp.Model == nil {
 				return fmt.Errorf("retrieving %s: model was nil", id)
 			}
 
-			state := cognitiveDeploymentModel{
-				Name:               id.DeploymentName,
-				CognitiveAccountId: cognitiveservicesaccounts.NewAccountID(id.SubscriptionId, id.ResourceGroupName, id.AccountName).ID(),
-			}
-
-			if properties := model.Properties; properties != nil {
-				state.Model = flattenDeploymentModelModel(properties.Model)
-
-				state.DynamicThrottlingEnabled = pointer.From(properties.DynamicThrottlingEnabled)
-				state.RaiPolicyName = pointer.From(properties.RaiPolicyName)
-				state.VersionUpgradeOption = string(pointer.From(properties.VersionUpgradeOption))
-			}
-			if sku := flattenDeploymentSkuModel(model.Sku); sku != nil {
-				state.Sku = sku
-			}
-			return metadata.Encode(&state)
+			return r.flatten(metadata, id, resp.Model)
 		},
 	}
 }

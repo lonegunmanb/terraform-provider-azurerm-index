@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/custompollers
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+)
+func (p *eventualConsistencyPoller) Poll(ctx context.Context) (*pollers.PollResult, error) {
+	resp, err := p.fn(ctx)
+	if err != nil {
+		// In certain cases, we actually want to poll for a specific error status code, such as checking for consecutive 404s on deletion
+		if p.options.TargetStatusCode != nil {
+			if response.WasStatusCode(resp, *p.options.TargetStatusCode) {
+				return p.decrement(), nil
+			}
+		}
+
+		if response.WasStatusCodes(resp, p.options.RetryErrorStatusCodes...) {
+			return p.reset(), nil
+		}
+
+		return &pollers.PollResult{
+			Status:       pollers.PollingStatusFailed,
+			PollInterval: p.options.Interval,
+		}, pollers.PollingFailedError{Message: err.Error()}
+	}
+
+	// If a target status code is set, we'll check this matches and consider any non-matching code as a failure and reset.
+	// otherwise, any non-error code will be considered a success.
+	if p.options.TargetStatusCode != nil {
+		if response.WasStatusCode(resp, *p.options.TargetStatusCode) {
+			return p.decrement(), nil
+		}
+		return p.reset(), nil
+	}
+
+	return p.decrement(), nil
+}
