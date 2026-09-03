@@ -6,11 +6,12 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -25,8 +26,15 @@ func resourceBotChannelMsTeams() *pluginsdk.Resource {
 		Update: resourceBotChannelMsTeamsUpdate,
 
 		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
-			_, err := parse.BotChannelID(id)
+			_, err := commonids.ParseBotServiceChannelID(id)
 			return err
+		}),
+
+		SchemaVersion: 1,
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			// v0 -> v1 normalises the casing of IDs imported while this resource parsed them with the
+			// case-insensitive legacy parser, so they can be parsed with the case-sensitive SDK parser
+			0: migration.BotChannelMsTeamsV0ToV1{},
 		}),
 
 		Timeouts: &pluginsdk.ResourceTimeout{
@@ -48,11 +56,11 @@ func resourceBotChannelMsTeams() *pluginsdk.Resource {
 				ValidateFunc: validation.StringIsNotEmpty,
 			},
 
-			// issue: https://github.com/Azure/azure-rest-api-specs/issues/9809
-			// this field could not update to empty, so add `Computed: true` to avoid diff
 			"calling_web_hook": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				// Note: O+C because this field could not update to empty, so add `Computed: true` to avoid diff
+				// issue: https://github.com/Azure/azure-rest-api-specs/issues/9809
 				Computed:     true,
 				ValidateFunc: validate.BotMSTeamsCallingWebHook(),
 			},

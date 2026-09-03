@@ -7,10 +7,10 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	appplatform_rm "github.com/hashicorp/go-azure-sdk/resource-manager/appplatform/2024-01-01-preview/appplatform"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/migration"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/springcloud/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -22,12 +22,14 @@ func resourceSpringCloudJavaDeploymentUpdate(d *pluginsdk.ResourceData, meta int
 	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	id, err := parse.SpringCloudDeploymentID(d.Id())
+	// the ID is parsed insensitively to preserve the behaviour of the legacy parser this replaced -
+	// we are ok with this remaining insensitive as Azure Spring Apps is deprecated and will be removed
+	id, err := appplatform_rm.ParseDeploymentIDInsensitively(d.Id())
 	if err != nil {
 		return err
 	}
 
-	existing, err := client.Get(ctx, id.ResourceGroup, id.SpringName, id.AppName, id.DeploymentName)
+	existing, err := client.Get(ctx, id.ResourceGroupName, id.SpringName, id.AppName, id.DeploymentName)
 	if err != nil {
 		return fmt.Errorf("reading existing %s: %+v", id, err)
 	}
@@ -77,7 +79,7 @@ func resourceSpringCloudJavaDeploymentUpdate(d *pluginsdk.ResourceData, meta int
 		}
 	}
 
-	future, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.SpringName, id.AppName, id.DeploymentName, existing)
+	future, err := client.CreateOrUpdate(ctx, id.ResourceGroupName, id.SpringName, id.AppName, id.DeploymentName, existing)
 	if err != nil {
 		return fmt.Errorf("updating %s: %+v", id, err)
 	}

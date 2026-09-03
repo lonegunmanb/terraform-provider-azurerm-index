@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -25,14 +25,14 @@ func resourceBotWebAppUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	id, err := parse.BotServiceID(d.Id())
+	id, err := commonids.ParseBotServiceID(d.Id())
 	if err != nil {
 		return err
 	}
 
 	displayName := d.Get("display_name").(string)
 	if displayName == "" {
-		displayName = id.Name
+		displayName = id.BotServiceName
 	}
 
 	bot := botservice.Bot{
@@ -63,8 +63,8 @@ func resourceBotWebAppUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 		bot.Properties.MsaAppMSIResourceID = pointer.To(v.(string))
 	}
 
-	if _, err := client.Update(ctx, id.ResourceGroup, id.Name, bot); err != nil {
-		return fmt.Errorf("updating Web App Bot %q (Resource Group %q): %+v", id.Name, id.ResourceGroup, err)
+	if _, err := client.Update(ctx, id.ResourceGroupName, id.BotServiceName, bot); err != nil {
+		return fmt.Errorf("updating Web App Bot %q (Resource Group %q): %+v", id.BotServiceName, id.ResourceGroupName, err)
 	}
 
 	return resourceBotWebAppRead(d, meta)

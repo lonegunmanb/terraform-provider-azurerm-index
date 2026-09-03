@@ -12,8 +12,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/parse"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -31,10 +30,10 @@ func (r AzureBotServiceResource) Create() sdk.ResourceFunc {
 				return fmt.Errorf("decoding: %+v", err)
 			}
 
-			id := parse.NewBotServiceID(subscriptionId, config.ResourceGroupName, config.Name)
+			id := commonids.NewBotServiceID(subscriptionId, config.ResourceGroupName, config.Name)
 
 			if !metadata.Client.Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
-				existing, err := client.Get(ctx, id.ResourceGroup, id.Name)
+				existing, err := client.Get(ctx, id.ResourceGroupName, id.BotServiceName)
 				if err != nil {
 					if !response.WasNotFound(existing.Response.Response) {
 						return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
@@ -47,7 +46,7 @@ func (r AzureBotServiceResource) Create() sdk.ResourceFunc {
 
 			displayName := config.DisplayName
 			if displayName == "" {
-				displayName = id.Name
+				displayName = id.BotServiceName
 			}
 
 			publicNetworkEnabled := botservice.PublicNetworkAccessEnabled
@@ -96,7 +95,7 @@ func (r AzureBotServiceResource) Create() sdk.ResourceFunc {
 				props.Properties.MsaAppMSIResourceID = pointer.To(config.MicrosoftAppMsiId)
 			}
 
-			if _, err := client.Create(ctx, id.ResourceGroup, id.Name, props); err != nil {
+			if _, err := client.Create(ctx, id.ResourceGroupName, id.BotServiceName, props); err != nil {
 				return fmt.Errorf("creating %s: %+v", id, err)
 			}
 

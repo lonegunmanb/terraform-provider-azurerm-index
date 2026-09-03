@@ -1,0 +1,27 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/migration
+import (
+	"context"
+	"log"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/profiles"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (CdnProfileV1ToV2) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		// IDs imported while this resource parsed them with the legacy resourceids.ParseAzureResourceID
+		// can contain non-canonically cased static segments (e.g. `resourcegroups`, `microsoft.cdn`),
+		// which the case-sensitive SDK parser rejects - normalise them to the canonical casing
+		oldId := rawState["id"].(string)
+		id, err := profiles.ParseProfileIDInsensitively(oldId)
+		if err != nil {
+			return rawState, err
+		}
+		newId := id.ID()
+
+		log.Printf("[DEBUG] Updating ID from %q to %q", oldId, newId)
+
+		rawState["id"] = newId
+
+		return rawState, nil
+	}
+}

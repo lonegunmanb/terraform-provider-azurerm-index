@@ -4,15 +4,17 @@ import (
 	"log"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/preview/synapse/mgmt/v2.0/synapse" // nolint: staticcheck
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/synapse/2021-06-01/bigdatapools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/synapse/2021-06-01/workspaces"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -32,10 +34,15 @@ func resourceSynapseSparkPool() *pluginsdk.Resource {
 		},
 
 		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
-			_, err := parse.SparkPoolID(id)
+			_, err := bigdatapools.ParseBigDataPoolID(id)
 			return err
 		}),
 
+		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
+			0: migration.SynapseSparkPoolV0ToV1{},
+		}),
+
+		SchemaVersion: 1,
 		Schema: map[string]*pluginsdk.Schema{
 			"name": {
 				Type:         pluginsdk.TypeString,
@@ -48,32 +55,19 @@ func resourceSynapseSparkPool() *pluginsdk.Resource {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: validate.WorkspaceID,
+				ValidateFunc: validation.AsGeneratedID(workspaces.ParseWorkspaceIDInsensitively),
 			},
 
 			"node_size_family": {
-				Type:     pluginsdk.TypeString,
-				Required: true,
-				ValidateFunc: validation.StringInSlice([]string{
-					string(synapse.NodeSizeFamilyHardwareAcceleratedFPGA),
-					string(synapse.NodeSizeFamilyHardwareAcceleratedGPU),
-					string(synapse.NodeSizeFamilyMemoryOptimized),
-					string(synapse.NodeSizeFamilyNone),
-				}, false),
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringInSlice(bigdatapools.PossibleValuesForNodeSizeFamily(), false),
 			},
 
 			"node_size": {
-				Type:     pluginsdk.TypeString,
-				Required: true,
-				ValidateFunc: validation.StringInSlice([]string{
-					string(synapse.NodeSizeSmall),
-					string(synapse.NodeSizeMedium),
-					string(synapse.NodeSizeLarge),
-					string(synapse.NodeSizeNone),
-					string(synapse.NodeSizeXLarge),
-					string(synapse.NodeSizeXXLarge),
-					string(synapse.NodeSizeXXXLarge),
-				}, false),
+				Type:         pluginsdk.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringInSlice(bigdatapools.PossibleValuesForNodeSize(), false),
 			},
 
 			"cache_size": {

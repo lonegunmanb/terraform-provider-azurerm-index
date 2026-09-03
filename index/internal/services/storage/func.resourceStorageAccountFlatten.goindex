@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/blobservices"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/fileservices"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storageaccountmigrations"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storageaccounts"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	providerhelpers "github.com/hashicorp/terraform-provider-azurerm/helpers"
@@ -116,11 +117,7 @@ func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceDat
 		}
 		d.Set("secondary_location", pointer.From(props.SecondaryLocation))
 		d.Set("sftp_enabled", pointer.From(props.IsSftpEnabled))
-
-		// NOTE: The Storage API returns `null` rather than the default value in the API response for existing
-		// resources when a new field gets added - meaning we need to default the values below.
 		d.Set("allow_nested_items_to_be_public", pointer.From(props.AllowBlobPublicAccess))
-
 		d.Set("default_to_oauth_authentication", pointer.From(props.DefaultToOAuthAuthentication))
 
 		dnsEndpointType := storageaccounts.DnsEndpointTypeStandard
@@ -261,6 +258,24 @@ func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceDat
 	if err := d.Set("share_properties", shareProperties); err != nil {
 		return fmt.Errorf("setting `share_properties` for %s: %+v", id, err)
 	}
+
+	resp, err := storageClient.StorageAccountMigrations.StorageAccountsGetCustomerInitiatedMigration(ctx, id)
+	if err != nil {
+		return fmt.Errorf("retrieving migration status for %s: %+v", id, err)
+	}
+
+	migrationInProgress, migratingTo := false, ""
+	if resp.Model != nil {
+		props := resp.Model.Properties
+		migrationInProgress = pointer.From(props.MigrationStatus) == storageaccountmigrations.MigrationStatusInProgress || pointer.From(props.MigrationStatus) == storageaccountmigrations.MigrationStatusSubmittedForConversion
+		if migrationInProgress {
+			if splitSKU := strings.Split(string(props.TargetSkuName), "_"); len(splitSKU) == 2 {
+				migratingTo = splitSKU[1]
+			}
+		}
+	}
+	d.Set("account_replication_type_migration_in_progress", migrationInProgress)
+	d.Set("account_replication_type_migrating_to", migratingTo)
 
 	return nil
 }

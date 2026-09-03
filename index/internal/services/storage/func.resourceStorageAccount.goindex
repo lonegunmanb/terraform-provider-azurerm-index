@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/blobservices"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/fileservices"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storageaccountmigrations"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storageaccounts"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	providerhelpers "github.com/hashicorp/terraform-provider-azurerm/helpers"
@@ -109,6 +110,13 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			"account_replication_type": {
 				Type:     pluginsdk.TypeString,
 				Required: true,
+				DiffSuppressFunc: func(_, _, n string, d *schema.ResourceData) bool {
+					// Migration of a storage account to/from zonal can take days
+					// so the provider doesn't poll and wait for it to complete.
+					// While in queue for migration/actively migrating, the Storage Account will return the old `account_replication_type`
+					// which we'll suppress here if the configured type matches the target migration type.
+					return d.Get("account_replication_type_migration_in_progress").(bool) && n == d.Get("account_replication_type_migrating_to").(string)
+				},
 				ValidateFunc: validation.StringInSlice([]string{
 					"LRS",
 					"ZRS",
@@ -119,10 +127,10 @@ func resourceStorageAccount() *pluginsdk.Resource {
 				}, false),
 			},
 
-			// Only valid for FileStorage, BlobStorage & StorageV2 accounts, defaults to "Hot" in create function
 			"access_tier": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				// Note: O+C Only valid for FileStorage, BlobStorage & StorageV2 accounts, defaults to "Hot" in create function
 				Computed:     true,
 				ValidateFunc: validation.StringInSlice(storageaccounts.PossibleValuesForAccessTier(), false), // TODO: docs for `Premium`
 			},
@@ -146,7 +154,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 						"active_directory": {
 							Type:     pluginsdk.TypeList,
 							Optional: true,
-							Computed: true,
+							Computed: true, // azignore:AZS007 - pre-existing violation
 							MaxItems: 1,
 							Elem: &pluginsdk.Resource{
 								Schema: map[string]*pluginsdk.Schema{
@@ -320,14 +328,11 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			},
 
 			"dns_endpoint_type": {
-				Type:     pluginsdk.TypeString,
-				Optional: true,
-				ForceNew: true,
-				Default:  string(storageaccounts.DnsEndpointTypeStandard),
-				ValidateFunc: validation.StringInSlice([]string{
-					string(storageaccounts.DnsEndpointTypeStandard),
-					string(storageaccounts.DnsEndpointTypeAzureDnsZone),
-				}, false),
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ForceNew:     true,
+				Default:      string(storageaccounts.DnsEndpointTypeStandard),
+				ValidateFunc: validation.StringInSlice(storageaccounts.PossibleValuesForDnsEndpointType(), false),
 			},
 
 			"default_to_oauth_authentication": {
@@ -339,14 +344,14 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			"network_rules": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
-				Computed: true,
+				Computed: true, // azignore:AZS007 - pre-existing violation
 				MaxItems: 1,
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
 						"bypass": {
 							Type:     pluginsdk.TypeSet,
 							Optional: true,
-							Computed: true,
+							Computed: true, // azignore:AZS007 - pre-existing violation
 							Elem: &pluginsdk.Schema{
 								Type:         pluginsdk.TypeString,
 								ValidateFunc: validation.StringInSlice(storageaccounts.PossibleValuesForBypass(), false),
@@ -357,7 +362,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 						"ip_rules": {
 							Type:     pluginsdk.TypeSet,
 							Optional: true,
-							Computed: true,
+							Computed: true, // azignore:AZS007 - pre-existing violation
 							Elem: &pluginsdk.Schema{
 								Type:         pluginsdk.TypeString,
 								ValidateFunc: validate.StorageAccountIpRule,
@@ -368,7 +373,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 						"virtual_network_subnet_ids": {
 							Type:     pluginsdk.TypeSet,
 							Optional: true,
-							Computed: true,
+							Computed: true, // azignore:AZS007 - pre-existing violation
 							Elem: &pluginsdk.Schema{
 								Type: pluginsdk.TypeString,
 							},
@@ -395,7 +400,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 									"endpoint_tenant_id": {
 										Type:         pluginsdk.TypeString,
 										Optional:     true,
-										Computed:     true,
+										Computed:     true, // azignore:AZS007 - pre-existing violation
 										ValidateFunc: validation.IsUUID,
 									},
 								},
@@ -410,7 +415,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			"blob_properties": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
-				Computed: true,
+				Computed: true, // azignore:AZS007 - pre-existing violation
 				MaxItems: 1,
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
@@ -447,7 +452,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 						"default_service_version": {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
-							Computed:     true,
+							Computed:     true, // azignore:AZS007 - pre-existing violation
 							ValidateFunc: validate.BlobPropertiesDefaultServiceVersion,
 						},
 
@@ -505,7 +510,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			"routing": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
-				Computed: true,
+				Computed: true, // azignore:AZS007 - pre-existing violation
 				MaxItems: 1,
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
@@ -534,7 +539,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			"share_properties": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
-				Computed: true,
+				Computed: true, // azignore:AZS007 - pre-existing violation
 				MaxItems: 1,
 				Elem: &pluginsdk.Resource{
 					Schema: map[string]*pluginsdk.Schema{
@@ -684,13 +689,23 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			"large_file_share_enabled": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
-				Computed: true,
+				Computed: true, // azignore:AZS007 - pre-existing violation
 			},
 
 			"local_user_enabled": {
 				Type:     pluginsdk.TypeBool,
 				Optional: true,
 				Default:  true,
+			},
+
+			"account_replication_type_migration_in_progress": {
+				Type:     pluginsdk.TypeBool,
+				Computed: true,
+			},
+
+			"account_replication_type_migrating_to": {
+				Type:     pluginsdk.TypeString,
+				Computed: true,
 			},
 
 			"primary_location": {
@@ -1131,17 +1146,30 @@ func resourceStorageAccount() *pluginsdk.Resource {
 				}
 				return nil
 			}),
-			pluginsdk.ForceNewIfChange("account_replication_type", func(ctx context.Context, old, new, meta interface{}) bool {
-				newAccRep := strings.ToUpper(new.(string))
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+				if d.Get("account_replication_type_migration_in_progress").(bool) {
+					o, n := d.GetChange("account_replication_type")
+					migratingTo := d.Get("account_replication_type_migrating_to").(string)
 
-				switch strings.ToUpper(old.(string)) {
+					oldType, newType := o.(string), n.(string)
+					if newType != migratingTo {
+						return fmt.Errorf("a migration from `%s` to `%s` is in progress, please wait until this operation has completed before changing `account_replication_type` (configured type: `%s`)", oldType, migratingTo, newType)
+					}
+				}
+
+				return nil
+			}),
+			pluginsdk.ForceNewIfChange("account_replication_type", func(ctx context.Context, old, new, meta interface{}) bool {
+				n := strings.ToUpper(new.(string))
+
+				switch o := strings.ToUpper(old.(string)); o {
 				case "LRS", "GRS", "RAGRS":
-					if newAccRep == "GZRS" || newAccRep == "RAGZRS" || newAccRep == "ZRS" {
-						return true
+					if n == "GZRS" || n == "RAGZRS" || n == "ZRS" {
+						return storageReplicationZonalMigrationPairs[o] != n
 					}
 				case "ZRS", "GZRS", "RAGZRS":
-					if newAccRep == "LRS" || newAccRep == "GRS" || newAccRep == "RAGRS" {
-						return true
+					if n == "LRS" || n == "GRS" || n == "RAGRS" {
+						return storageReplicationZonalMigrationPairs[o] != n
 					}
 				}
 				return false

@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/bot/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -26,13 +26,13 @@ func resourceBotWebAppCreate(d *pluginsdk.ResourceData, meta interface{}) error 
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	resourceId := parse.NewBotServiceID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	resourceId := commonids.NewBotServiceID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
 
 	if !meta.(*clients.Client).Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
-		existing, err := client.Get(ctx, resourceId.ResourceGroup, resourceId.Name)
+		existing, err := client.Get(ctx, resourceId.ResourceGroupName, resourceId.BotServiceName)
 		if err != nil {
 			if !response.WasNotFound(existing.Response.Response) {
-				return fmt.Errorf("checking for presence of creating Web App Bot %q (Resource Group %q): %+v", resourceId.Name, resourceId.ResourceGroup, err)
+				return fmt.Errorf("checking for presence of creating Web App Bot %q (Resource Group %q): %+v", resourceId.BotServiceName, resourceId.ResourceGroupName, err)
 			}
 		}
 		if !response.WasNotFound(existing.Response.Response) {
@@ -42,7 +42,7 @@ func resourceBotWebAppCreate(d *pluginsdk.ResourceData, meta interface{}) error 
 
 	displayName := d.Get("display_name").(string)
 	if displayName == "" {
-		displayName = resourceId.Name
+		displayName = resourceId.BotServiceName
 	}
 
 	bot := botservice.Bot{
@@ -73,8 +73,8 @@ func resourceBotWebAppCreate(d *pluginsdk.ResourceData, meta interface{}) error 
 		bot.Properties.MsaAppMSIResourceID = pointer.To(v.(string))
 	}
 
-	if _, err := client.Create(ctx, resourceId.ResourceGroup, resourceId.Name, bot); err != nil {
-		return fmt.Errorf("creating Web App Bot %q (Resource Group %q): %+v", resourceId.Name, resourceId.ResourceGroup, err)
+	if _, err := client.Create(ctx, resourceId.ResourceGroupName, resourceId.BotServiceName, bot); err != nil {
+		return fmt.Errorf("creating Web App Bot %q (Resource Group %q): %+v", resourceId.BotServiceName, resourceId.ResourceGroupName, err)
 	}
 
 	d.SetId(resourceId.ID())

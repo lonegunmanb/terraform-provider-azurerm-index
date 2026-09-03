@@ -8,6 +8,7 @@ import (
 	"github.com/Azure/go-autorest/autorest/date"
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/structure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers"
@@ -16,8 +17,6 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/validate"
-	resourceParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/parse"
-	resourceValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/resource/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -27,12 +26,14 @@ func resourceArmResourceGroupPolicyExemptionCreateUpdate(d *pluginsdk.ResourceDa
 	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	resourceGroupId, err := resourceParse.ResourceGroupID(d.Get("resource_group_id").(string))
+	// todo 6.0 - move to the case-sensitive parser when validation.AsGeneratedID is removed: this parses a config
+	// value which the paired AsGeneratedID validator accepts with legacy casing, and configs cannot be migrated.
+	resourceGroupId, err := commonids.ParseResourceGroupIDInsensitively(d.Get("resource_group_id").(string))
 	if err != nil {
 		return err
 	}
 
-	id := parse.NewResourceGroupPolicyExemptionID(resourceGroupId.SubscriptionId, resourceGroupId.ResourceGroup, d.Get("name").(string))
+	id := parse.NewResourceGroupPolicyExemptionID(resourceGroupId.SubscriptionId, resourceGroupId.ResourceGroupName, d.Get("name").(string))
 
 	if d.IsNewResource() {
 		if !meta.(*clients.Client).Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {

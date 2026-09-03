@@ -10,10 +10,10 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/endpoints"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/migration"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -26,9 +26,12 @@ func resourceCdnEndpoint() *pluginsdk.Resource {
 		Update: resourceCdnEndpointUpdate,
 		Delete: resourceCdnEndpointDelete,
 
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		StateUpgraders: pluginsdk.StateUpgrades(map[int]pluginsdk.StateUpgrade{
 			0: migration.CdnEndpointV0ToV1{},
+			// v1 -> v2 normalises the casing of IDs imported while this resource parsed them with the
+			// case-insensitive legacy parser, so they can be parsed with the case-sensitive SDK parser
+			1: migration.CdnEndpointV1ToV2{},
 		}),
 
 		Timeouts: &pluginsdk.ResourceTimeout{
@@ -39,7 +42,7 @@ func resourceCdnEndpoint() *pluginsdk.Resource {
 		},
 
 		Importer: pluginsdk.ImporterValidatingResourceId(func(id string) error {
-			_, err := parse.EndpointID(id)
+			_, err := endpoints.ParseEndpointID(id)
 			return err
 		}),
 
@@ -118,15 +121,10 @@ func resourceCdnEndpoint() *pluginsdk.Resource {
 			},
 
 			"querystring_caching_behaviour": {
-				Type:     pluginsdk.TypeString,
-				Optional: true,
-				Default:  string(cdn.QueryStringCachingBehaviorIgnoreQueryString),
-				ValidateFunc: validation.StringInSlice([]string{
-					string(cdn.QueryStringCachingBehaviorBypassCaching),
-					string(cdn.QueryStringCachingBehaviorIgnoreQueryString),
-					string(cdn.QueryStringCachingBehaviorNotSet),
-					string(cdn.QueryStringCachingBehaviorUseQueryString),
-				}, false),
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Default:      string(cdn.QueryStringCachingBehaviorIgnoreQueryString),
+				ValidateFunc: validation.StringInEnumSlice(cdn.PossibleQueryStringCachingBehaviorValues(), false),
 			},
 
 			"content_types_to_compress": {
@@ -177,15 +175,9 @@ func resourceCdnEndpoint() *pluginsdk.Resource {
 			},
 
 			"optimization_type": {
-				Type:     pluginsdk.TypeString,
-				Optional: true,
-				ValidateFunc: validation.StringInSlice([]string{
-					string(cdn.OptimizationTypeDynamicSiteAcceleration),
-					string(cdn.OptimizationTypeGeneralMediaStreaming),
-					string(cdn.OptimizationTypeGeneralWebDelivery),
-					string(cdn.OptimizationTypeLargeFileDownload),
-					string(cdn.OptimizationTypeVideoOnDemandMediaStreaming),
-				}, false),
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				ValidateFunc: validation.StringInEnumSlice(cdn.PossibleOptimizationTypeValues(), false),
 			},
 
 			"fqdn": {

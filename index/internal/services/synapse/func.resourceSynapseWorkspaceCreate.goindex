@@ -17,10 +17,11 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/purview/2021-07-01/account"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/synapse/2021-06-01/workspaces"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tags"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -34,10 +35,10 @@ func resourceSynapseWorkspaceCreate(d *pluginsdk.ResourceData, meta interface{})
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
 
-	id := parse.NewWorkspaceID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
+	id := workspaces.NewWorkspaceID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
 
 	if !meta.(*clients.Client).Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
-		existing, err := client.Get(ctx, id.ResourceGroup, id.Name)
+		existing, err := client.Get(ctx, id.ResourceGroupName, id.WorkspaceName)
 		if err != nil {
 			if !response.WasNotFound(existing.Response.Response) {
 				return fmt.Errorf("checking for presence of existing %s: %+v", id, err)
@@ -107,7 +108,7 @@ func resourceSynapseWorkspaceCreate(d *pluginsdk.ResourceData, meta interface{})
 		workspaceInfo.ManagedVirtualNetworkSettings.AllowedAadTenantIdsForLinking = helpers.ExpandStringSlice(allowedLinkingTenantIds.([]interface{}))
 	}
 
-	future, err := client.CreateOrUpdate(ctx, id.ResourceGroup, id.Name, workspaceInfo)
+	future, err := client.CreateOrUpdate(ctx, id.ResourceGroupName, id.WorkspaceName, workspaceInfo)
 	if err != nil {
 		return fmt.Errorf("creating %s: %+v", id, err)
 	}
@@ -123,7 +124,7 @@ func resourceSynapseWorkspaceCreate(d *pluginsdk.ResourceData, meta interface{})
 	}
 
 	sqlControlSettings := expandIdentityControlSQLSettings(d.Get("sql_identity_control_enabled").(bool))
-	future2, err := identitySQLControlClient.CreateOrUpdate(ctx, id.ResourceGroup, id.Name, *sqlControlSettings)
+	future2, err := identitySQLControlClient.CreateOrUpdate(ctx, id.ResourceGroupName, id.WorkspaceName, *sqlControlSettings)
 	if err != nil {
 		return fmt.Errorf("configuring Sql Identity Control for %s: %+v", id, err)
 	}
