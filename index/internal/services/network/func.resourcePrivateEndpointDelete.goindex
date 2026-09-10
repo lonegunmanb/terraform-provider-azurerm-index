@@ -65,6 +65,27 @@ func resourcePrivateEndpointDelete(d *pluginsdk.ResourceData, meta interface{}) 
 			if subnet := props.Subnet; subnet != nil && subnet.Id != nil {
 				subnetId = *subnet.Id
 			}
+
+			// Certain child resources like those for cognitive account lock the parent resource to make sure we don't try and update the parent when it's not ready.
+			// Due to that, we'll lock on that resource id to try and prevent those type of errors.
+			privateLinkServiceConnectionIds := make([]string, 0)
+			if privateLinkServiceConnections := props.PrivateLinkServiceConnections; privateLinkServiceConnections != nil {
+				for _, connection := range *privateLinkServiceConnections {
+					if connectionProps := connection.Properties; connectionProps != nil {
+						privateLinkServiceConnectionIds = append(privateLinkServiceConnectionIds, pointer.From(connectionProps.PrivateLinkServiceId))
+					}
+				}
+			}
+			if manualPrivateLinkServiceConnections := props.ManualPrivateLinkServiceConnections; manualPrivateLinkServiceConnections != nil {
+				for _, connection := range *manualPrivateLinkServiceConnections {
+					if connectionProps := connection.Properties; connectionProps != nil {
+						privateLinkServiceConnectionIds = append(privateLinkServiceConnectionIds, pointer.From(connectionProps.PrivateLinkServiceId))
+					}
+				}
+			}
+
+			locks.MultipleByID(pointer.To(privateLinkServiceConnectionIds))
+			defer locks.UnlockMultipleByID(pointer.To(privateLinkServiceConnectionIds))
 		}
 	}
 	if subnetId == "" {

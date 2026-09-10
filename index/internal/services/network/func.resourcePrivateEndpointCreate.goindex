@@ -61,12 +61,20 @@ func resourcePrivateEndpointCreate(d *pluginsdk.ResourceData, meta interface{}) 
 
 	privateDnsZoneGroup := d.Get("private_dns_zone_group").([]interface{})
 
+	// Certain child resources like those for cognitive account lock the parent resource to make sure we don't try and update the parent when it's not ready.
+	// Due to that, we'll lock on that resource id to try and prevent those type of errors.
+	privateLinkServiceConnections, privateLinkServiceConnectionIds := expandPrivateLinkEndpointServiceConnection(d.Get("private_service_connection").([]interface{}), false)
+	manualPrivateLinkServiceConnections, manualPrivateLinkServiceConnectionIds := expandPrivateLinkEndpointServiceConnection(d.Get("private_service_connection").([]interface{}), true)
+	privateLinkServiceConnectionIds = append(privateLinkServiceConnectionIds, manualPrivateLinkServiceConnectionIds...)
+	locks.MultipleByID(pointer.To(privateLinkServiceConnectionIds))
+	defer locks.UnlockMultipleByID(pointer.To(privateLinkServiceConnectionIds))
+
 	parameters := privateendpoints.PrivateEndpoint{
 		Location:         pointer.To(location.Normalize(d.Get("location").(string))),
 		ExtendedLocation: expandEdgeZoneModel(d.Get("edge_zone").(string)),
 		Properties: &privateendpoints.PrivateEndpointProperties{
-			PrivateLinkServiceConnections:       expandPrivateLinkEndpointServiceConnection(d.Get("private_service_connection").([]interface{}), false),
-			ManualPrivateLinkServiceConnections: expandPrivateLinkEndpointServiceConnection(d.Get("private_service_connection").([]interface{}), true),
+			PrivateLinkServiceConnections:       privateLinkServiceConnections,
+			ManualPrivateLinkServiceConnections: manualPrivateLinkServiceConnections,
 			Subnet: &privateendpoints.Subnet{
 				Id: pointer.To(d.Get("subnet_id").(string)),
 			},
@@ -97,14 +105,12 @@ func resourcePrivateEndpointCreate(d *pluginsdk.ResourceData, meta interface{}) 
 		result, err := client.CreateOrUpdate(ctx, id, parameters)
 		if err != nil {
 			return &pluginsdk.RetryError{
-				Err:       fmt.Errorf("creating %s: %+v", id, err),
-				Retryable: false,
+				Err: fmt.Errorf("creating %s: %+v", id, err),
 			}
 		}
 
 		if err := result.Poller.PollUntilDone(ctx); err != nil {
-			var lroFailError pollers.PollingFailedError
-			if errors.As(err, &lroFailError) {
+			if lroFailError, ok := errors.AsType[pollers.PollingFailedError](err); ok {
 				type lroErrorType struct {
 					Error struct {
 						Code    string `json:"code"`
@@ -115,8 +121,7 @@ func resourcePrivateEndpointCreate(d *pluginsdk.ResourceData, meta interface{}) 
 				var lroError lroErrorType
 				if err := lroFailError.HttpResponse.Unmarshal(&lroError); err != nil {
 					return &pluginsdk.RetryError{
-						Err:       fmt.Errorf("unmarshaling lro error response: %v", err),
-						Retryable: false,
+						Err: fmt.Errorf("unmarshaling lro error response: %v", err),
 					}
 				}
 
@@ -129,8 +134,7 @@ func resourcePrivateEndpointCreate(d *pluginsdk.ResourceData, meta interface{}) 
 				}
 			}
 			return &pluginsdk.RetryError{
-				Err:       fmt.Errorf("waiting for the creation of %s: %+v", id, err),
-				Retryable: false,
+				Err: fmt.Errorf("waiting for the creation of %s: %+v", id, err),
 			}
 		}
 

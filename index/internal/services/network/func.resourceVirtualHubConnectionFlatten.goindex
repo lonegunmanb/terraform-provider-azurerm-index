@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/virtualwans"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceVirtualHubConnectionFlatten(d *pluginsdk.ResourceData, id *virtualwans.HubVirtualNetworkConnectionId, model *virtualwans.HubVirtualNetworkConnection) error {
+	d.Set("name", id.HubVirtualNetworkConnectionName)
+	d.Set("virtual_hub_id", virtualwans.NewVirtualHubID(id.SubscriptionId, id.ResourceGroupName, id.VirtualHubName).ID())
+
+	if model != nil {
+		if props := model.Properties; props != nil {
+			d.Set("internet_security_enabled", props.EnableInternetSecurity)
+			remoteVirtualNetworkId := ""
+			if props.RemoteVirtualNetwork != nil && props.RemoteVirtualNetwork.Id != nil {
+				parsedRemoteVirtualNetworkId, err := commonids.ParseVirtualNetworkIDInsensitively(*props.RemoteVirtualNetwork.Id)
+				if err != nil {
+					return err
+				}
+				remoteVirtualNetworkId = parsedRemoteVirtualNetworkId.ID()
+			}
+			d.Set("remote_virtual_network_id", remoteVirtualNetworkId)
+
+			if err := d.Set("routing", flattenVirtualHubConnectionRouting(props.RoutingConfiguration)); err != nil {
+				return fmt.Errorf("setting `routing`: %+v", err)
+			}
+		}
+	}
+
+	return pluginsdk.SetResourceIdentityData(d, id)
+}

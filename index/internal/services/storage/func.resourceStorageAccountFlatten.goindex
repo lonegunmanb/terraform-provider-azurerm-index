@@ -25,6 +25,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/features"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	keyVaultsClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
@@ -62,12 +63,7 @@ func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceDat
 	listKeysOpts := storageaccounts.DefaultListKeysOperationOptions()
 	listKeysOpts.Expand = pointer.To(storageaccounts.ExpandKerb)
 
-	supportLevel := storageAccountServiceSupportLevel{
-		supportBlob:          false,
-		supportQueue:         false,
-		supportShare:         false,
-		supportStaticWebsite: false,
-	}
+	supportLevel := storageAccountServiceSupportLevel{}
 
 	var accountKind storageaccounts.Kind
 	var primaryEndpoints *storageaccounts.Endpoints
@@ -144,11 +140,14 @@ func resourceStorageAccountFlatten(ctx context.Context, d *pluginsdk.ResourceDat
 		}
 		d.Set("min_tls_version", minTlsVersion)
 
-		publicNetworkAccessEnabled := true
-		if props.PublicNetworkAccess != nil && *props.PublicNetworkAccess == storageaccounts.PublicNetworkAccessDisabled {
-			publicNetworkAccessEnabled = false
+		if !features.SixPointOh() {
+			publicNetworkAccessEnabled := true
+			if props.PublicNetworkAccess != nil && *props.PublicNetworkAccess != storageaccounts.PublicNetworkAccessEnabled {
+				publicNetworkAccessEnabled = false
+			}
+			d.Set("public_network_access_enabled", publicNetworkAccessEnabled)
 		}
-		d.Set("public_network_access_enabled", publicNetworkAccessEnabled)
+		d.Set("public_network_access", pointer.FromEnum(props.PublicNetworkAccess))
 
 		allowSharedKeyAccess := true
 		if props.AllowSharedKeyAccess != nil {
