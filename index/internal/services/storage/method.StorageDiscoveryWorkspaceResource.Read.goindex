@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagediscovery/2025-09-01/storagediscoveryworkspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r StorageDiscoveryWorkspaceResource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Storage.StorageDiscoveryWorkspacesClient
+
+			id, err := storagediscoveryworkspaces.ParseProviderStorageDiscoveryWorkspaceID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", *id, err)
+			}
+
+			if resp.Model == nil {
+				return fmt.Errorf("retrieving %s: model was nil", id)
+			}
+
+			state := StorageDiscoveryWorkspaceModel{
+				Name:              id.StorageDiscoveryWorkspaceName,
+				ResourceGroupName: id.ResourceGroupName,
+				Location:          location.Normalize(resp.Model.Location),
+				Tags:              pointer.From(resp.Model.Tags),
+			}
+
+			if props := resp.Model.Properties; props != nil {
+				state.Description = pointer.From(props.Description)
+				state.WorkspaceRoots = props.WorkspaceRoots
+				state.Sku = pointer.FromEnum(props.Sku)
+				state.Scope = flattenStorageDiscoveryScopes(props.Scopes)
+			}
+
+			if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+				return err
+			}
+			return metadata.Encode(&state)
+		},
+	}
+}

@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagediscovery/2025-09-01/storagediscoveryworkspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func storageDiscoveryScopeReplacementPath(oldRaw, newRaw interface{}) string {
+	oldScopes := oldRaw.([]interface{})
+	newScopes := newRaw.([]interface{})
+
+	oldScopesByName := make(map[string]map[string]interface{}, len(oldScopes))
+	for _, item := range oldScopes {
+		if item == nil {
+			continue
+		}
+
+		scope := item.(map[string]interface{})
+		oldScopesByName[scope["display_name"].(string)] = scope
+	}
+
+	for index, item := range newScopes {
+		if item == nil {
+			continue
+		}
+
+		newScope := item.(map[string]interface{})
+		oldScope, exists := oldScopesByName[newScope["display_name"].(string)]
+		if !exists {
+			continue
+		}
+
+		replacementField := ""
+		switch {
+		case !oldScope["resource_types"].(*pluginsdk.Set).Equal(newScope["resource_types"]):
+			replacementField = "resource_types"
+		case !oldScope["tag_keys_only"].(*pluginsdk.Set).Equal(newScope["tag_keys_only"]):
+			replacementField = "tag_keys_only"
+		case !reflect.DeepEqual(oldScope["tags"], newScope["tags"]):
+			replacementField = "tags"
+		}
+
+		if replacementField != "" {
+			// ForceNew requires a positional change. When a scope moves, its filters
+			// can match those previously at its new index, but its display name changes.
+			if index >= len(oldScopes) || oldScopes[index] == nil || oldScopes[index].(map[string]interface{})["display_name"] != newScope["display_name"] {
+				replacementField = "display_name"
+			}
+			return fmt.Sprintf("scope.%d.%s", index, replacementField)
+		}
+	}
+
+	return ""
+}

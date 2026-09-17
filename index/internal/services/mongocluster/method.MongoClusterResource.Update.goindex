@@ -64,6 +64,18 @@ func (r MongoClusterResource) Update() sdk.ResourceFunc {
 				payload.Properties.DataApi = nil
 			}
 
+			cosmosDBNetworkBypassEnabledChanged := metadata.ResourceData.HasChange("cosmos_db_network_bypass_enabled")
+			if cosmosDBNetworkBypassEnabledChanged {
+				// Azure blocks public network access changes while bypass is enabled, so disable bypass before the main update if it's intended to be updated to `false`.
+				if !state.CosmosDBNetworkBypassEnabled {
+					if err := updateMongoClusterCosmosDBNetworkBypassEnabled(ctx, client, *id, false); err != nil {
+						return fmt.Errorf("disabling `cosmos_db_network_bypass_enabled` for %s: %+v", *id, err)
+					}
+				}
+
+				payload.Properties.NetworkBypassMode = pointer.To(mongoclusters.NetworkBypassModeNone)
+			}
+
 			// upgrades involving Free or M25(Burstable) compute tier require first upgrading the compute tier, after which other configurations can be updated.
 			if metadata.ResourceData.HasChange("compute_tier") {
 				payload.Properties.Compute = &mongoclusters.ComputeProperties{
@@ -135,6 +147,13 @@ func (r MongoClusterResource) Update() sdk.ResourceFunc {
 
 			if err := client.CreateOrUpdateThenPoll(ctx, *id, *payload); err != nil {
 				return fmt.Errorf("updating %s: %+v", *id, err)
+			}
+
+			// Azure requires disabled public access and Entra-only authentication before bypass can be enabled, so we must ensure these conditions are met before attempting to enable it.
+			if cosmosDBNetworkBypassEnabledChanged && state.CosmosDBNetworkBypassEnabled {
+				if err := updateMongoClusterCosmosDBNetworkBypassEnabled(ctx, client, *id, true); err != nil {
+					return fmt.Errorf("enabling `cosmos_db_network_bypass_enabled` for %s: %+v", *id, err)
+				}
 			}
 
 			return nil

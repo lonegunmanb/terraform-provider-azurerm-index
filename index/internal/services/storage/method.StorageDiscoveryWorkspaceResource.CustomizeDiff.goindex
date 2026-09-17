@@ -1,0 +1,74 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storagediscovery/2025-09-01/storagediscoveryworkspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r StorageDiscoveryWorkspaceResource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			diff := metadata.ResourceDiff
+
+			if err := validateStorageDiscoveryScopes(diff.Get("scope")); err != nil {
+				return err
+			}
+
+			if diff.HasChange("scope") {
+				oldScopes, newScopes := diff.GetChange("scope")
+				if replacementPath := storageDiscoveryScopeReplacementPath(oldScopes, newScopes); replacementPath != "" {
+					if err := diff.ForceNew(replacementPath); err != nil {
+						return err
+					}
+				}
+			}
+
+			workspaceRootsRaw := diff.Get("workspace_roots")
+			if workspaceRootsRaw == nil {
+				return nil
+			}
+
+			workspaceRootsSet := workspaceRootsRaw.(*pluginsdk.Set)
+			workspaceRoots := make([]string, 0)
+			for _, item := range workspaceRootsSet.List() {
+				workspaceRoots = append(workspaceRoots, item.(string))
+			}
+
+			subscriptionIDs := make(map[string]bool)
+			resourceGroupIDs := make([]commonids.ResourceGroupId, 0)
+
+			for _, rootID := range workspaceRoots {
+				if subscriptionID, err := commonids.ParseSubscriptionID(rootID); err == nil {
+					subscriptionIDs[strings.ToLower(subscriptionID.SubscriptionId)] = true
+					continue
+				}
+
+				if resourceGroupID, err := commonids.ParseResourceGroupID(rootID); err == nil {
+					resourceGroupIDs = append(resourceGroupIDs, *resourceGroupID)
+				}
+			}
+
+			for _, rgID := range resourceGroupIDs {
+				if subscriptionIDs[strings.ToLower(rgID.SubscriptionId)] {
+					return fmt.Errorf("cannot specify both subscription ID `/subscriptions/%s` and its child resource group ID `%s` in `workspace_roots`", rgID.SubscriptionId, rgID.ID())
+				}
+			}
+
+			return nil
+		},
+	}
+}

@@ -1,0 +1,27 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/synapse/migration
+import (
+	"context"
+	"log"
+
+	"github.com/hashicorp/go-azure-sdk/resource-manager/synapse/2021-06-01/integrationruntimes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (SynapseIntegrationRuntimeAzureV1ToV2) UpgradeFunc() pluginsdk.StateUpgraderFunc {
+	return func(ctx context.Context, rawState map[string]interface{}, meta interface{}) (map[string]interface{}, error) {
+		// the V0 -> V1 upgrader normalised the states that existed at the time, but IDs imported since
+		// were still parsed with the legacy resourceids.ParseAzureResourceID and can contain
+		// non-canonically cased static segments (e.g. `resourcegroups`, `microsoft.synapse`), which the
+		// case-sensitive SDK parser rejects - normalise them to the canonical casing
+		oldId := rawState["id"].(string)
+		id, err := integrationruntimes.ParseIntegrationRuntimeIDInsensitively(oldId)
+		if err != nil {
+			return rawState, err
+		}
+
+		newId := id.ID()
+		log.Printf("[DEBUG] Updating ID from `%s` to `%s`", oldId, newId)
+		rawState["id"] = newId
+
+		return rawState, nil
+	}
+}

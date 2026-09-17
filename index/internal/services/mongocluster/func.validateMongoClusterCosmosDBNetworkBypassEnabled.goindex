@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mongocluster
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mongocluster/2026-06-01/mongoclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func validateMongoClusterCosmosDBNetworkBypassEnabled(metadata sdk.ResourceMetaData, state MongoClusterResourceModel) error {
+	rawConfig := metadata.ResourceDiff.GetRawConfig()
+	if !rawConfig.IsKnown() || rawConfig.IsNull() {
+		return nil
+	}
+
+	rawConfigMap := rawConfig.AsValueMap()
+	cosmosDBNetworkBypassEnabled := rawConfigMap["cosmos_db_network_bypass_enabled"]
+	if !cosmosDBNetworkBypassEnabled.IsKnown() || cosmosDBNetworkBypassEnabled.IsNull() || !state.CosmosDBNetworkBypassEnabled {
+		return nil
+	}
+
+	if !rawConfigMap["public_network_access"].IsKnown() || !rawConfigMap["authentication_methods"].IsKnown() {
+		return nil
+	}
+
+	if state.PublicNetworkAccess != string(mongoclusters.PublicNetworkAccessDisabled) {
+		return errors.New("`public_network_access` must be `Disabled` when `cosmos_db_network_bypass_enabled` is `true`")
+	}
+
+	if len(state.AuthenticationMethods) != 1 || state.AuthenticationMethods[0] != string(mongoclusters.AuthenticationModeMicrosoftEntraID) {
+		return errors.New("`authentication_methods` must contain only `MicrosoftEntraID` when `cosmos_db_network_bypass_enabled` is `true`")
+	}
+
+	return nil
+}

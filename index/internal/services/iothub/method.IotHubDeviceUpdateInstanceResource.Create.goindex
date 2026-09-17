@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/deviceupdate/2022-10-01/deviceupdates"
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -52,11 +53,16 @@ func (r IotHubDeviceUpdateInstanceResource) Create() sdk.ResourceFunc {
 				return fmt.Errorf("retrieving %s: model was nil", *deviceUpdateAccountId)
 			}
 
+			expandedStorageProps, err := expandDiagnosticStorageAccount(metadata, model.DiagnosticStorageAccount)
+			if err != nil {
+				return fmt.Errorf("expanding `diagnostic_storage_account`: %w", err)
+			}
+
 			properties := &deviceupdates.Instance{
 				Location: location.Normalize(deviceUpdateAccount.Model.Location),
 				Properties: deviceupdates.InstanceProperties{
 					AccountName:                 &deviceUpdateAccountId.AccountName,
-					DiagnosticStorageProperties: expandDiagnosticStorageAccount(model.DiagnosticStorageAccount),
+					DiagnosticStorageProperties: expandedStorageProps,
 					EnableDiagnostics:           &model.DiagnosticEnabled,
 					IotHubs: &[]deviceupdates.IotHubSettings{
 						{
