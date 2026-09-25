@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/privatednsresolver
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dnsresolver/2022-07-01/dnsforwardingrulesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dnsresolver/2022-07-01/forwardingrules"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r PrivateDNSResolverForwardingRuleResource) flatten(metadata sdk.ResourceMetaData, id *forwardingrules.ForwardingRuleId, model *forwardingrules.ForwardingRule) error {
+	state := PrivateDNSResolverForwardingRuleModel{
+		Name:                   id.ForwardingRuleName,
+		DnsForwardingRulesetId: dnsforwardingrulesets.NewDnsForwardingRulesetID(id.SubscriptionId, id.ResourceGroupName, id.DnsForwardingRulesetName).ID(),
+	}
+
+	if model != nil {
+		properties := &model.Properties
+		state.DomainName = properties.DomainName
+
+		state.Enabled = false
+		if properties.ForwardingRuleState != nil && *properties.ForwardingRuleState == forwardingrules.ForwardingRuleStateEnabled {
+			state.Enabled = true
+		}
+
+		if properties.Metadata != nil {
+			state.Metadata = *properties.Metadata
+		}
+
+		state.TargetDnsServers = flattenTargetDnsServerModel(&properties.TargetDnsServers)
+	}
+
+	if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+		return err
+	}
+
+	return metadata.Encode(&state)
+}

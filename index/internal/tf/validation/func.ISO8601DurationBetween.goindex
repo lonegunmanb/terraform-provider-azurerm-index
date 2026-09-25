@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	iso8601 "github.com/btubbs/datetime"
+	"github.com/rickb777/date/period"
+)
+func ISO8601DurationBetween(min string, max string) func(i interface{}, k string) (warnings []string, errors []error) {
+	minDuration := period.MustParse(min).DurationApprox()
+	maxDuration := period.MustParse(max).DurationApprox()
+	if minDuration >= maxDuration {
+		panic(fmt.Sprintf("min duration (%v) >= max duration (%v)", minDuration, maxDuration))
+	}
+	return func(i interface{}, k string) (warnings []string, errors []error) {
+		v, ok := i.(string)
+		if !ok {
+			return nil, []error{fmt.Errorf("expected type of %s to be string", k)}
+		}
+
+		p, err := period.Parse(v)
+		if err != nil {
+			return nil, []error{err}
+		}
+
+		duration := p.DurationApprox()
+		if duration < minDuration || duration > maxDuration {
+			return nil, []error{fmt.Errorf("expected %s to be in the range (%v - %v), got %v", k, minDuration, maxDuration, duration)}
+		}
+
+		return nil, nil
+	}
+}

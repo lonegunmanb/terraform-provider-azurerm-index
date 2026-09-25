@@ -3,12 +3,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-01-01/networkinterfaces"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/networkinterfaces"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -41,6 +42,7 @@ func dataSourceNetworkInterfaceRead(d *pluginsdk.ResourceData, meta interface{})
 	if loc := model.Location; loc != nil {
 		d.Set("location", location.Normalize(*loc))
 	}
+	d.Set("edge_zone", flattenEdgeZoneModel(model.ExtendedLocation))
 
 	if props := model.Properties; props != nil {
 		d.Set("mac_address", props.MacAddress)
@@ -79,8 +81,13 @@ func dataSourceNetworkInterfaceRead(d *pluginsdk.ResourceData, meta interface{})
 		}
 		d.Set("virtual_machine_id", virtualMachineId)
 
+		d.Set("auxiliary_mode", pointer.FromEnum(props.AuxiliaryMode))
+
+		d.Set("auxiliary_sku", pointer.FromEnum(props.AuxiliarySku))
+
 		var appliedDNSServers []string
 		var dnsServers []string
+		internalDomainNameSuffix := ""
 		if dnsSettings := props.DnsSettings; dnsSettings != nil {
 			if s := dnsSettings.AppliedDnsServers; s != nil {
 				appliedDNSServers = *s
@@ -89,6 +96,8 @@ func dataSourceNetworkInterfaceRead(d *pluginsdk.ResourceData, meta interface{})
 			if s := dnsSettings.DnsServers; s != nil {
 				dnsServers = *s
 			}
+
+			internalDomainNameSuffix = pointer.From(dnsSettings.InternalDomainNameSuffix)
 
 			d.Set("internal_dns_name_label", dnsSettings.InternalDnsNameLabel)
 		}
@@ -101,6 +110,7 @@ func dataSourceNetworkInterfaceRead(d *pluginsdk.ResourceData, meta interface{})
 
 		d.Set("applied_dns_servers", appliedDNSServers)
 		d.Set("dns_servers", dnsServers)
+		d.Set("internal_domain_name_suffix", internalDomainNameSuffix)
 		d.Set("ip_forwarding_enabled", props.EnableIPForwarding)
 		d.Set("accelerated_networking_enabled", props.EnableAcceleratedNetworking)
 	}
