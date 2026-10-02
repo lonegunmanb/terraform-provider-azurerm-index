@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumegroups"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumes"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 )
 func deleteVolume(ctx context.Context, metadata sdk.ResourceMetaData, volumeId string) error {
@@ -40,7 +40,7 @@ func deleteVolume(ctx context.Context, metadata sdk.ResourceMetaData, volumeId s
 		if err != nil {
 			return err
 		}
-		if dataProtectionReplication.Replication.EndpointType != nil && !strings.EqualFold(string(pointer.From(dataProtectionReplication.Replication.EndpointType)), string(volumes.EndpointTypeDst)) {
+		if dataProtectionReplication.Replication.EndpointType != nil && !strings.EqualFold(pointer.FromEnum(dataProtectionReplication.Replication.EndpointType), string(volumes.EndpointTypeDst)) {
 			// This is the case where primary volume started the deletion, in this case, to be consistent we will remove replication from secondary
 			replicaVolumeId, err = volumes.ParseVolumeID(pointer.From(dataProtectionReplication.Replication.RemoteVolumeResourceId))
 			if err != nil {
@@ -52,7 +52,7 @@ func deleteVolume(ctx context.Context, metadata sdk.ResourceMetaData, volumeId s
 		if res, err := client.ReplicationStatus(ctx, pointer.From(replicaVolumeId)); err == nil {
 			// Wait for replication state = "mirrored"
 			if model := res.Model; model != nil {
-				if model.MirrorState != nil && strings.ToLower(string(pointer.From(model.MirrorState))) == "uninitialized" {
+				if model.MirrorState != nil && strings.ToLower(pointer.FromEnum(model.MirrorState)) == "uninitialized" {
 					if err := waitForReplMirrorState(ctx, client, pointer.From(replicaVolumeId), "mirrored"); err != nil {
 						return fmt.Errorf("waiting for replica %s to become 'mirrored': %+v", pointer.From(replicaVolumeId), err)
 					}

@@ -18,7 +18,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -48,7 +48,7 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: netAppValidate.VolumeName,
+				ValidateFunc: validate.VolumeName,
 			},
 
 			"location": commonschema.Location(),
@@ -59,20 +59,20 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: netAppValidate.AccountName,
+				ValidateFunc: validate.AccountName,
 			},
 
 			"pool_name": {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
-				ValidateFunc: netAppValidate.PoolName,
+				ValidateFunc: validate.PoolName,
 			},
 
 			"volume_path": {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: netAppValidate.VolumePath,
+				ValidateFunc: validate.VolumePath,
 			},
 
 			"service_level": {
@@ -461,12 +461,12 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 				},
 			},
 		},
-		CustomizeDiff: func(ctx context.Context, d *pluginsdk.ResourceDiff, i interface{}) error {
+		CustomizeDiff: func(ctx context.Context, d *pluginsdk.ResourceDiff, i any) error {
 			// Validate large volume and storage_quota_in_gb based on Azure NetApp Files requirements
 			isLargeVolume := d.Get("large_volume_enabled").(bool)
 			isBreakthroughMode := d.Get("breakthrough_mode_enabled").(bool)
 			storageQuotaInGB := d.Get("storage_quota_in_gb").(int)
-			coolAccessConfig := d.Get("cool_access").([]interface{})
+			coolAccessConfig := d.Get("cool_access").([]any)
 
 			// Breakthrough Mode places the volume on dedicated capacity and is only supported on large volumes
 			if isBreakthroughMode && !isLargeVolume {
@@ -554,13 +554,13 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 				}
 
 				kerberosEnabled := d.Get("kerberos_enabled").(bool)
-				dataReplication := d.Get("data_protection_replication").([]interface{})
+				dataReplication := d.Get("data_protection_replication").([]any)
 
 				// Get the new export policy rules configuration to validate against new protocols
 				// Always use the new configuration when protocols are changing to ensure validation against intended state
-				exportPolicyRules := d.Get("export_policy_rule").([]interface{})
+				exportPolicyRules := d.Get("export_policy_rule").([]any)
 
-				validationErrors := netAppValidate.ValidateNetAppVolumeProtocolConversion(oldProtocolsStr, newProtocolsStr, kerberosEnabled, dataReplication, exportPolicyRules)
+				validationErrors := validate.ValidateNetAppVolumeProtocolConversion(oldProtocolsStr, newProtocolsStr, kerberosEnabled, dataReplication, exportPolicyRules)
 				for _, err := range validationErrors {
 					return err
 				}
@@ -568,10 +568,10 @@ func resourceNetAppVolume() *pluginsdk.Resource {
 
 			// Validate cross-zone-region replication requirements
 			// According to Azure documentation, for cross-zone replication, both source and destination volumes must have zones
-			dataReplicationRaw := d.Get("data_protection_replication").([]interface{})
+			dataReplicationRaw := d.Get("data_protection_replication").([]any)
 			if len(dataReplicationRaw) > 0 && dataReplicationRaw[0] != nil {
 				// This is a destination volume with data_protection_replication configured
-				dataReplication := dataReplicationRaw[0].(map[string]interface{})
+				dataReplication := dataReplicationRaw[0].(map[string]any)
 				remoteVolumeLocation := dataReplication["remote_volume_location"].(string)
 				currentLocation := d.Get("location").(string)
 

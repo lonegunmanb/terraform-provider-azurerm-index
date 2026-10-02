@@ -27,13 +27,13 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceWindowsVirtualMachineCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceWindowsVirtualMachineCreate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).Compute.VirtualMachinesClient
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
@@ -57,10 +57,10 @@ func resourceWindowsVirtualMachineCreate(d *pluginsdk.ResourceData, meta interfa
 		}
 	}
 
-	additionalCapabilitiesRaw := d.Get("additional_capabilities").([]interface{})
+	additionalCapabilitiesRaw := d.Get("additional_capabilities").([]any)
 	additionalCapabilities := expandVirtualMachineAdditionalCapabilities(additionalCapabilitiesRaw)
 
-	additionalUnattendContentRaw := d.Get("additional_unattend_content").([]interface{})
+	additionalUnattendContentRaw := d.Get("additional_unattend_content").([]any)
 	additionalUnattendContent := expandAdditionalUnattendContent(additionalUnattendContentRaw)
 
 	allowExtensionOperations := true
@@ -68,15 +68,15 @@ func resourceWindowsVirtualMachineCreate(d *pluginsdk.ResourceData, meta interfa
 		allowExtensionOperations = d.Get("allow_extension_operations").(bool)
 	}
 
-	bootDiagnosticsRaw := d.Get("boot_diagnostics").([]interface{})
+	bootDiagnosticsRaw := d.Get("boot_diagnostics").([]any)
 	bootDiagnostics := expandBootDiagnostics(bootDiagnosticsRaw)
 
-	identityExpanded, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+	identityExpanded, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]any))
 	if err != nil {
 		return fmt.Errorf("expanding `identity`: %+v", err)
 	}
 
-	planRaw := d.Get("plan").([]interface{})
+	planRaw := d.Get("plan").([]any)
 	plan := expandPlan(planRaw)
 
 	priority := virtualmachines.VirtualMachinePriorityTypes(d.Get("priority").(string))
@@ -85,16 +85,16 @@ func resourceWindowsVirtualMachineCreate(d *pluginsdk.ResourceData, meta interfa
 	assessmentMode := d.Get("patch_assessment_mode").(string)
 	hotPatch := d.Get("hotpatching_enabled").(bool)
 	size := d.Get("size").(string)
-	t := d.Get("tags").(map[string]interface{})
+	t := d.Get("tags").(map[string]any)
 
-	networkInterfaceIdsRaw := d.Get("network_interface_ids").([]interface{})
+	networkInterfaceIdsRaw := d.Get("network_interface_ids").([]any)
 	networkInterfaceIds := expandVirtualMachineNetworkInterfaceIDs(networkInterfaceIdsRaw)
 
 	managedDiskIdRaw := d.Get("os_managed_disk_id").(string)
 	// Note: The API fails if OsProfile is anything but nil with CreateOption = "Attach"
 	osDiskIsImported := managedDiskIdRaw != ""
 
-	secretsRaw := d.Get("secret").([]interface{})
+	secretsRaw := d.Get("secret").([]any)
 	secrets := expandWindowsSecrets(secretsRaw)
 
 	params := virtualmachines.VirtualMachine{
@@ -105,7 +105,7 @@ func resourceWindowsVirtualMachineCreate(d *pluginsdk.ResourceData, meta interfa
 		Plan:             plan,
 		Properties: &virtualmachines.VirtualMachineProperties{
 			ApplicationProfile: &virtualmachines.ApplicationProfile{
-				GalleryApplications: expandVirtualMachineGalleryApplication(d.Get("gallery_application").([]interface{})),
+				GalleryApplications: expandVirtualMachineGalleryApplication(d.Get("gallery_application").([]any)),
 			},
 			HardwareProfile: &virtualmachines.HardwareProfile{
 				VMSize: pointer.ToEnum[virtualmachines.VirtualMachineSizeTypes](size),
@@ -127,19 +127,19 @@ func resourceWindowsVirtualMachineCreate(d *pluginsdk.ResourceData, meta interfa
 		},
 		Tags: tags.Expand(t),
 	}
-	osDiskRaw := d.Get("os_disk").([]interface{})
+	osDiskRaw := d.Get("os_disk").([]any)
 	osDisk, err := expandVirtualMachineOSDisk(osDiskRaw, virtualmachines.OperatingSystemTypesWindows)
 	if err != nil {
 		return fmt.Errorf("expanding `os_disk`: %+v", err)
 	}
 	securityEncryptionType := ""
 	if !osDiskIsImported {
-		securityEncryptionType = osDiskRaw[0].(map[string]interface{})["security_encryption_type"].(string)
+		securityEncryptionType = osDiskRaw[0].(map[string]any)["security_encryption_type"].(string)
 		var computerName string
 		if v, ok := d.GetOk("computer_name"); ok && len(v.(string)) > 0 {
 			computerName = v.(string)
 		} else {
-			_, errs := computeValidate.WindowsComputerNameFull(d.Get("name"), "computer_name")
+			_, errs := validate.WindowsComputerNameFull(d.Get("name"), "computer_name")
 			if len(errs) > 0 {
 				return fmt.Errorf("unable to assume default computer name %s. Please adjust the `name`, or specify an explicit `computer_name`", errs[0])
 			}
@@ -177,7 +177,7 @@ func resourceWindowsVirtualMachineCreate(d *pluginsdk.ResourceData, meta interfa
 		if len(additionalUnattendContentRaw) > 0 {
 			params.Properties.OsProfile.WindowsConfiguration.AdditionalUnattendContent = additionalUnattendContent
 		}
-		sourceImageReferenceRaw := d.Get("source_image_reference").([]interface{})
+		sourceImageReferenceRaw := d.Get("source_image_reference").([]any)
 		sourceImageId := d.Get("source_image_id").(string)
 		if len(sourceImageReferenceRaw) != 0 || sourceImageId != "" {
 			params.Properties.StorageProfile.ImageReference = expandSourceImageReference(sourceImageReferenceRaw, sourceImageId)
@@ -395,11 +395,11 @@ func resourceWindowsVirtualMachineCreate(d *pluginsdk.ResourceData, meta interfa
 	var terminateNotificationProfile *virtualmachines.TerminateNotificationProfile
 
 	if v, ok := d.GetOk("os_image_notification"); ok {
-		osImageNotificationProfile = expandOsImageNotificationProfile(v.([]interface{}))
+		osImageNotificationProfile = expandOsImageNotificationProfile(v.([]any))
 	}
 
 	if v, ok := d.GetOk("termination_notification"); ok {
-		terminateNotificationProfile = expandTerminateNotificationProfile(v.([]interface{}))
+		terminateNotificationProfile = expandTerminateNotificationProfile(v.([]any))
 	}
 
 	if terminateNotificationProfile != nil || osImageNotificationProfile != nil {

@@ -25,14 +25,14 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).Compute.VirtualMachineScaleSetsClient
 	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
@@ -103,8 +103,8 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 		}
 
 		if d.HasChange("automatic_os_upgrade_policy") {
-			automaticRaw := d.Get("automatic_os_upgrade_policy").([]interface{})
-			rollingRaw := d.Get("rolling_upgrade_policy").([]interface{})
+			automaticRaw := d.Get("automatic_os_upgrade_policy").([]any)
+			rollingRaw := d.Get("rolling_upgrade_policy").([]any)
 			useRollingUpgradePolicy := len(rollingRaw) > 0
 			upgradePolicy.AutomaticOSUpgradePolicy = ExpandVirtualMachineScaleSetAutomaticUpgradePolicy(automaticRaw, useRollingUpgradePolicy)
 
@@ -115,7 +115,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 		}
 
 		if d.HasChange("rolling_upgrade_policy") {
-			rollingRaw := d.Get("rolling_upgrade_policy").([]interface{})
+			rollingRaw := d.Get("rolling_upgrade_policy").([]any)
 			zones := zones.ExpandUntyped(d.Get("zones").(*schema.Set).List())
 			rollingUpgradePolicy, err := ExpandVirtualMachineScaleSetRollingUpgradePolicy(rollingRaw, len(zones) > 0, d.Get("overprovision").(bool))
 			if err != nil {
@@ -183,7 +183,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 		}
 
 		if d.HasChange("secret") {
-			secretsRaw := d.Get("secret").([]interface{})
+			secretsRaw := d.Get("secret").([]any)
 			osProfile.Secrets = expandWindowsSecretsVMSS(secretsRaw)
 		}
 
@@ -199,7 +199,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 
 		if d.HasChange("data_disk") {
 			ultraSSDEnabled := d.Get("additional_capabilities.0.ultra_ssd_enabled").(bool)
-			dataDisks, err := ExpandVirtualMachineScaleSetDataDisk(d.Get("data_disk").([]interface{}), ultraSSDEnabled)
+			dataDisks, err := ExpandVirtualMachineScaleSetDataDisk(d.Get("data_disk").([]any), ultraSSDEnabled)
 			if err != nil {
 				return fmt.Errorf("expanding `data_disk`: %+v", err)
 			}
@@ -207,12 +207,12 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 		}
 
 		if d.HasChange("os_disk") {
-			osDiskRaw := d.Get("os_disk").([]interface{})
+			osDiskRaw := d.Get("os_disk").([]any)
 			updateProps.VirtualMachineProfile.StorageProfile.OsDisk = ExpandVirtualMachineScaleSetOSDiskUpdate(osDiskRaw)
 		}
 
 		if d.HasChanges("source_image_id", "source_image_reference") {
-			sourceImageReferenceRaw := d.Get("source_image_reference").([]interface{})
+			sourceImageReferenceRaw := d.Get("source_image_reference").([]any)
 			sourceImageId := d.Get("source_image_id").(string)
 
 			// Must include all storage profile properties when updating disk image.  See: https://github.com/hashicorp/terraform-provider-azurerm/issues/8273
@@ -230,7 +230,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 	}
 
 	if d.HasChanges("network_interface", "health_probe_id") {
-		networkInterfacesRaw := d.Get("network_interface").([]interface{})
+		networkInterfacesRaw := d.Get("network_interface").([]any)
 		networkInterfaces, err := ExpandVirtualMachineScaleSetNetworkInterfaceUpdate(networkInterfacesRaw)
 		if err != nil {
 			return fmt.Errorf("expanding `network_interface`: %+v", err)
@@ -251,7 +251,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 	if d.HasChange("boot_diagnostics") {
 		updateInstances = true
 
-		bootDiagnosticsRaw := d.Get("boot_diagnostics").([]interface{})
+		bootDiagnosticsRaw := d.Get("boot_diagnostics").([]any)
 		updateProps.VirtualMachineProfile.DiagnosticsProfile = expandBootDiagnosticsVMSS(bootDiagnosticsRaw)
 	}
 
@@ -266,7 +266,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 	}
 
 	if d.HasChange("scale_in") {
-		if updateScaleInPolicy := ExpandVirtualMachineScaleSetScaleInPolicy(d.Get("scale_in").([]interface{})); updateScaleInPolicy != nil {
+		if updateScaleInPolicy := ExpandVirtualMachineScaleSetScaleInPolicy(d.Get("scale_in").([]any)); updateScaleInPolicy != nil {
 			updateProps.ScaleInPolicy = updateScaleInPolicy
 		}
 	}
@@ -278,7 +278,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 	}
 
 	if d.HasChange("termination_notification") {
-		notificationRaw := d.Get("termination_notification").([]interface{})
+		notificationRaw := d.Get("termination_notification").([]any)
 		updateProps.VirtualMachineProfile.ScheduledEventsProfile = ExpandVirtualMachineScaleSetScheduledEventsProfile(notificationRaw)
 	}
 
@@ -301,7 +301,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 	}
 
 	if d.HasChange("automatic_instance_repair") {
-		automaticRepairsPolicyRaw := d.Get("automatic_instance_repair").([]interface{})
+		automaticRepairsPolicyRaw := d.Get("automatic_instance_repair").([]any)
 		automaticRepairsPolicy := ExpandVirtualMachineScaleSetAutomaticRepairsPolicy(automaticRepairsPolicyRaw)
 
 		if automaticRepairsPolicy != nil {
@@ -327,7 +327,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 	}
 
 	if d.HasChange("identity") {
-		identityExpanded, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+		identityExpanded, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]any))
 		if err != nil {
 			return fmt.Errorf("expanding `identity`: %+v", err)
 		}
@@ -336,7 +336,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 	}
 
 	if d.HasChange("plan") {
-		planRaw := d.Get("plan").([]interface{})
+		planRaw := d.Get("plan").([]any)
 		update.Plan = expandPlanVMSS(planRaw)
 	}
 
@@ -375,7 +375,7 @@ func resourceWindowsVirtualMachineScaleSetUpdate(d *pluginsdk.ResourceData, meta
 	}
 
 	if d.HasChange("tags") {
-		update.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+		update.Tags = tags.Expand(d.Get("tags").(map[string]any))
 	}
 
 	update.Properties = &updateProps

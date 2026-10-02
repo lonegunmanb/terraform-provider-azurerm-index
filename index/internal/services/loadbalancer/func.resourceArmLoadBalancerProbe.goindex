@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -7,6 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/loadbalancers"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -22,15 +24,11 @@ func resourceArmLoadBalancerProbe() *pluginsdk.Resource {
 		Update: resourceArmLoadBalancerProbeCreateUpdate,
 		Delete: resourceArmLoadBalancerProbeDelete,
 
-		Importer: loadBalancerSubResourceImporter(func(input string) (*loadbalancers.LoadBalancerId, error) {
-			id, err := loadbalancers.ParseProbeID(input)
-			if err != nil {
-				return nil, err
-			}
+		Identity: &schema.ResourceIdentity{
+			SchemaFunc: pluginsdk.GenerateIdentitySchema(&loadbalancers.ProbeId{}),
+		},
 
-			lbId := loadbalancers.NewLoadBalancerID(id.SubscriptionId, id.ResourceGroupName, id.LoadBalancerName)
-			return &lbId, nil
-		}),
+		Importer: pluginsdk.ImporterValidatingIdentityThen(&loadbalancers.ProbeId{}, loadBalancerProbeResourceImporter),
 
 		Timeouts: &pluginsdk.ResourceTimeout{
 			Create: pluginsdk.DefaultTimeout(30 * time.Minute),

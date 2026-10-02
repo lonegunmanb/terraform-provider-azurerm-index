@@ -26,13 +26,13 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).Compute.VirtualMachineScaleSetsClient
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
@@ -54,7 +54,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 		}
 	}
 
-	t := d.Get("tags").(map[string]interface{})
+	t := d.Get("tags").(map[string]any)
 
 	props := virtualmachinescalesets.VirtualMachineScaleSet{
 		Location: location.Normalize(d.Get("location").(string)),
@@ -82,7 +82,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 	}
 
 	upgradeMode := virtualmachinescalesets.UpgradeMode(d.Get("upgrade_mode").(string))
-	rollingUpgradePolicy, err := ExpandVirtualMachineScaleSetRollingUpgradePolicy(d.Get("rolling_upgrade_policy").([]interface{}), len(zones) > 0, false)
+	rollingUpgradePolicy, err := ExpandVirtualMachineScaleSetRollingUpgradePolicy(d.Get("rolling_upgrade_policy").([]any), len(zones) > 0, false)
 	if err != nil {
 		return fmt.Errorf("expanding `rolling_upgrade_policy`: %w", err)
 	}
@@ -121,7 +121,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 	}
 
 	if v, ok := d.GetOk("sku_profile"); ok {
-		props.Properties.SkuProfile = expandOrchestratedVirtualMachineScaleSetSkuProfile(v.([]interface{}))
+		props.Properties.SkuProfile = expandOrchestratedVirtualMachineScaleSetSkuProfile(v.([]any))
 	}
 
 	if v, ok := d.GetOk("capacity_reservation_group_id"); ok {
@@ -164,7 +164,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 		virtualMachineProfile.ExtensionProfile.ExtensionsTimeBudget = pointer.To(v.(string))
 	}
 
-	sourceImageReferenceRaw := d.Get("source_image_reference").([]interface{})
+	sourceImageReferenceRaw := d.Get("source_image_reference").([]any)
 	sourceImageId := d.Get("source_image_id").(string)
 	if len(sourceImageReferenceRaw) != 0 || sourceImageId != "" {
 		virtualMachineProfile.StorageProfile.ImageReference = expandSourceImageReferenceVMSS(sourceImageReferenceRaw, sourceImageId)
@@ -175,16 +175,16 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 	}
 
 	var osType virtualmachinescalesets.OperatingSystemTypes
-	var winConfigRaw []interface{}
-	var linConfigRaw []interface{}
+	var winConfigRaw []any
+	var linConfigRaw []any
 	var vmssOsProfile *virtualmachinescalesets.VirtualMachineScaleSetOSProfile
 	extensionOperationsEnabled := d.Get("extension_operations_enabled").(bool)
-	osProfileRaw := d.Get("os_profile").([]interface{})
+	osProfileRaw := d.Get("os_profile").([]any)
 
 	if len(osProfileRaw) > 0 && osProfileRaw[0] != nil {
-		osProfile := osProfileRaw[0].(map[string]interface{})
-		winConfigRaw = osProfile["windows_configuration"].([]interface{})
-		linConfigRaw = osProfile["linux_configuration"].([]interface{})
+		osProfile := osProfileRaw[0].(map[string]any)
+		winConfigRaw = osProfile["windows_configuration"].([]any)
+		linConfigRaw = osProfile["linux_configuration"].([]any)
 		customData := ""
 
 		// Pass custom data if it is defined in the config file
@@ -194,7 +194,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 
 		if len(winConfigRaw) > 0 && winConfigRaw[0] != nil {
 			osType = virtualmachinescalesets.OperatingSystemTypesWindows
-			winConfig := winConfigRaw[0].(map[string]interface{})
+			winConfig := winConfigRaw[0].(map[string]any)
 			provisionVMAgent := winConfig["provision_vm_agent"].(bool)
 			patchAssessmentMode := winConfig["patch_assessment_mode"].(string)
 			vmssOsProfile = expandOrchestratedVirtualMachineScaleSetOsProfileWithWindowsConfiguration(winConfig, customData)
@@ -202,7 +202,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 			// if the Computer Prefix Name was not defined use the computer name
 			if vmssOsProfile.ComputerNamePrefix == nil || len(*vmssOsProfile.ComputerNamePrefix) == 0 {
 				// validate that the computer name is a valid Computer Prefix Name
-				_, errs := computeValidate.WindowsComputerNamePrefix(id.VirtualMachineScaleSetName, "computer_name_prefix")
+				_, errs := validate.WindowsComputerNamePrefix(id.VirtualMachineScaleSetName, "computer_name_prefix")
 				if len(errs) > 0 {
 					return fmt.Errorf("unable to assume default computer name prefix %s. Please adjust the `name`, or specify an explicit `computer_name_prefix`", errs[0])
 				}
@@ -259,7 +259,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 
 		if len(linConfigRaw) > 0 && linConfigRaw[0] != nil {
 			osType = virtualmachinescalesets.OperatingSystemTypesLinux
-			linConfig := linConfigRaw[0].(map[string]interface{})
+			linConfig := linConfigRaw[0].(map[string]any)
 			provisionVMAgent := linConfig["provision_vm_agent"].(bool)
 			patchAssessmentMode := linConfig["patch_assessment_mode"].(string)
 			vmssOsProfile = expandOrchestratedVirtualMachineScaleSetOsProfileWithLinuxConfiguration(linConfig, customData)
@@ -267,7 +267,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 			// if the Computer Prefix Name was not defined use the computer name
 			if vmssOsProfile.ComputerNamePrefix == nil || len(*vmssOsProfile.ComputerNamePrefix) == 0 {
 				// validate that the computer name is a valid Computer Prefix Name
-				_, errs := computeValidate.LinuxComputerNamePrefix(id.VirtualMachineScaleSetName, "computer_name_prefix")
+				_, errs := validate.LinuxComputerNamePrefix(id.VirtualMachineScaleSetName, "computer_name_prefix")
 				if len(errs) > 0 {
 					if errs[0] != nil {
 						return fmt.Errorf("unable to assume default computer name prefix `%s`. Please adjust the `name`, or specify an explicit `computer_name_prefix`", errs[0])
@@ -309,7 +309,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 	}
 
 	if v, ok := d.GetOk("boot_diagnostics"); ok {
-		virtualMachineProfile.DiagnosticsProfile = expandBootDiagnosticsVMSS(v.([]interface{}))
+		virtualMachineProfile.DiagnosticsProfile = expandBootDiagnosticsVMSS(v.([]any))
 	}
 
 	if v, ok := d.GetOk("priority"); ok {
@@ -317,15 +317,15 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 	}
 
 	if v, ok := d.GetOk("os_disk"); ok {
-		virtualMachineProfile.StorageProfile.OsDisk = ExpandOrchestratedVirtualMachineScaleSetOSDisk(v.([]interface{}), osType)
+		virtualMachineProfile.StorageProfile.OsDisk = ExpandOrchestratedVirtualMachineScaleSetOSDisk(v.([]any), osType)
 	}
 
-	additionalCapabilitiesRaw := d.Get("additional_capabilities").([]interface{})
+	additionalCapabilitiesRaw := d.Get("additional_capabilities").([]any)
 	props.Properties.AdditionalCapabilities = ExpandOrchestratedVirtualMachineScaleSetAdditionalCapabilities(additionalCapabilitiesRaw)
 
 	if v, ok := d.GetOk("data_disk"); ok {
 		ultraSSDEnabled := d.Get("additional_capabilities.0.ultra_ssd_enabled").(bool)
-		dataDisks, err := ExpandOrchestratedVirtualMachineScaleSetDataDisk(v.([]interface{}), ultraSSDEnabled)
+		dataDisks, err := ExpandOrchestratedVirtualMachineScaleSetDataDisk(v.([]any), ultraSSDEnabled)
 		if err != nil {
 			return fmt.Errorf("expanding `data_disk`: %w", err)
 		}
@@ -333,7 +333,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 	}
 
 	if v, ok := d.GetOk("network_interface"); ok {
-		networkInterfaces, err := ExpandOrchestratedVirtualMachineScaleSetNetworkInterface(v.([]interface{}))
+		networkInterfaces, err := ExpandOrchestratedVirtualMachineScaleSetNetworkInterface(v.([]any))
 		if err != nil {
 			return fmt.Errorf("expanding `network_interface`: %w", err)
 		}
@@ -372,17 +372,17 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 	}
 
 	if v, ok := d.GetOk("termination_notification"); ok {
-		virtualMachineProfile.ScheduledEventsProfile = ExpandOrchestratedVirtualMachineScaleSetScheduledEventsProfile(v.([]interface{}))
+		virtualMachineProfile.ScheduledEventsProfile = ExpandOrchestratedVirtualMachineScaleSetScheduledEventsProfile(v.([]any))
 	}
 
 	// Only include the virtual machine profile if this is not a legacy configuration
 	if !isLegacy {
 		if v, ok := d.GetOk("plan"); ok {
-			props.Plan = expandPlanVMSS(v.([]interface{}))
+			props.Plan = expandPlanVMSS(v.([]any))
 		}
 
 		if v, ok := d.GetOk("identity"); ok {
-			identityExpanded, err := identity.ExpandSystemAndUserAssignedMap(v.([]interface{}))
+			identityExpanded, err := identity.ExpandSystemAndUserAssignedMap(v.([]any))
 			if err != nil {
 				return fmt.Errorf("expanding `identity`: %w", err)
 			}
@@ -394,7 +394,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 				return fmt.Errorf("`automatic_instance_repair` can only be enabled when an application health extension is configured")
 			}
 
-			props.Properties.AutomaticRepairsPolicy = ExpandVirtualMachineScaleSetAutomaticRepairsPolicy(v.([]interface{}))
+			props.Properties.AutomaticRepairsPolicy = ExpandVirtualMachineScaleSetAutomaticRepairsPolicy(v.([]any))
 		}
 
 		if v, ok := d.GetOk("zone_balance"); ok && v.(bool) {
@@ -409,7 +409,7 @@ func resourceOrchestratedVirtualMachineScaleSetCreate(d *pluginsdk.ResourceData,
 			if *virtualMachineProfile.Priority != virtualmachinescalesets.VirtualMachinePriorityTypesSpot {
 				return fmt.Errorf("`priority_mix` can only be specified when `priority` is set to `%s`", string(virtualmachinescalesets.VirtualMachinePriorityTypesSpot))
 			}
-			props.Properties.PriorityMixPolicy = ExpandOrchestratedVirtualMachineScaleSetPriorityMixPolicy(v.([]interface{}))
+			props.Properties.PriorityMixPolicy = ExpandOrchestratedVirtualMachineScaleSetPriorityMixPolicy(v.([]any))
 		}
 
 		props.Properties.VirtualMachineProfile = &virtualMachineProfile

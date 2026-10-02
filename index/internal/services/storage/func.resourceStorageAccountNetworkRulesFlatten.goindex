@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/storageaccounts"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceStorageAccountNetworkRulesFlatten(d *pluginsdk.ResourceData, id *commonids.StorageAccountId, model *storageaccounts.StorageAccount) error {
+	d.Set("storage_account_id", d.Id())
+
+	if model != nil {
+		if props := model.Properties; props != nil {
+			if rules := props.NetworkAcls; rules != nil {
+				if err := d.Set("ip_rules", pluginsdk.NewSet(pluginsdk.HashString, flattenAccountNetworkRuleIPRules(rules.IPRules))); err != nil {
+					return fmt.Errorf("setting `ip_rules`: %+v", err)
+				}
+				if err := d.Set("virtual_network_subnet_ids", pluginsdk.NewSet(pluginsdk.HashString, flattenAccountNetworkRuleVirtualNetworkRules(rules.VirtualNetworkRules))); err != nil {
+					return fmt.Errorf("setting `virtual_network_subnet_ids`: %+v", err)
+				}
+				if err := d.Set("bypass", pluginsdk.NewSet(pluginsdk.HashString, flattenAccountNetworkRuleBypass(rules.Bypass))); err != nil {
+					return fmt.Errorf("setting `bypass`: %+v", err)
+				}
+				d.Set("default_action", string(rules.DefaultAction))
+				if err := d.Set("private_link_access", flattenAccountNetworkRulePrivateLinkAccess(rules.ResourceAccessRules)); err != nil {
+					return fmt.Errorf("setting `private_link_access`: %+v", err)
+				}
+			}
+		}
+	}
+
+	return pluginsdk.SetResourceIdentityData(d, id, pluginsdk.ResourceTypeForIdentityVirtual)
+}

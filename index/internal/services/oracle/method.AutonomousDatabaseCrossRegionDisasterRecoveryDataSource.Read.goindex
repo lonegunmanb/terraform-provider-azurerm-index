@@ -1,0 +1,141 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/oracledatabase/2025-09-01/autonomousdatabases"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/oracle/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (d AutonomousDatabaseCrossRegionDisasterRecoveryDataSource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.Oracle.OracleClient.AutonomousDatabases
+			subscriptionId := metadata.Client.Account.SubscriptionId
+
+			var state AutonomousDatabaseCrossRegionDisasterRecoveryDataModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			id := autonomousdatabases.NewAutonomousDatabaseID(subscriptionId, state.ResourceGroupName, state.Name)
+
+			resp, err := client.Get(ctx, id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return fmt.Errorf("%s was not found", id)
+				}
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			if model := resp.Model; model != nil {
+				state.Location = location.Normalize(model.Location)
+				state.Tags = pointer.From(model.Tags)
+
+				adbsProps, ok := model.Properties.(autonomousdatabases.AutonomousDatabaseCrossRegionDisasterRecoveryProperties)
+				if !ok {
+					return fmt.Errorf("%s was not of type `CrossRegionDisasterRecovery`", id)
+				}
+
+				if adbsProps.RemoteDisasterRecoveryType != autonomousdatabases.DisasterRecoveryTypeAdg {
+					return fmt.Errorf("%s expected disaster recovery type `%s`, got `%s`", id, autonomousdatabases.DisasterRecoveryTypeAdg, adbsProps.RemoteDisasterRecoveryType)
+				}
+
+				state.ReplicateAutomaticBackupsEnabled = pointer.From(adbsProps.IsReplicateAutomaticBackups)
+				state.RemoteDisasterRecoveryType = string(adbsProps.RemoteDisasterRecoveryType)
+				state.DataBaseType = string(adbsProps.DataBaseType)
+				state.SourceType = string(adbsProps.Source)
+
+				if adbsProps.SourceId != "" {
+					sourceDatabaseID, err := autonomousdatabases.ParseAutonomousDatabaseIDInsensitively(adbsProps.SourceId)
+					if err != nil {
+						return err
+					}
+					state.SourceAutonomousDatabaseId = sourceDatabaseID.ID()
+				}
+
+				state.SourceLocation = location.NormalizeNilable(adbsProps.SourceLocation)
+				state.SourceOcid = pointer.From(adbsProps.SourceOcid)
+				state.ActualUsedDataStorageSizeInTb = pointer.From(adbsProps.ActualUsedDataStorageSizeInTbs)
+				state.AllocatedStorageSizeInTb = pointer.From(adbsProps.AllocatedStorageSizeInTbs)
+				state.AutoScalingEnabled = pointer.From(adbsProps.IsAutoScalingEnabled)
+				state.AutoScalingForStorageEnabled = pointer.From(adbsProps.IsAutoScalingForStorageEnabled)
+				state.AvailableUpgradeVersions = pointer.From(adbsProps.AvailableUpgradeVersions)
+				state.BackupRetentionPeriodInDays = pointer.From(adbsProps.BackupRetentionPeriodInDays)
+				state.CharacterSet = pointer.From(adbsProps.CharacterSet)
+				state.ComputeCount = pointer.From(adbsProps.ComputeCount)
+				state.CpuCoreCount = pointer.From(adbsProps.CpuCoreCount)
+				state.CustomerContacts = flattenAdbsCustomerContacts(adbsProps.CustomerContacts)
+				state.DataStorageSizeInGb = pointer.From(adbsProps.DataStorageSizeInGbs)
+				state.DataStorageSizeInTb = pointer.From(adbsProps.DataStorageSizeInTbs)
+				state.DatabaseWorkload = pointer.FromEnum(adbsProps.DbWorkload)
+				state.DbVersion = pointer.From(adbsProps.DbVersion)
+				state.DisplayName = pointer.From(adbsProps.DisplayName)
+				state.FailedDataRecoveryInSeconds = pointer.From(adbsProps.FailedDataRecoveryInSeconds)
+				state.LifecycleDetails = pointer.From(adbsProps.LifecycleDetails)
+				state.LocalAdgAutoFailoverMaximumDataLossLimitInSeconds = pointer.From(adbsProps.LocalAdgAutoFailoverMaxDataLossLimit)
+				state.LocalDataGuardEnabled = pointer.From(adbsProps.IsLocalDataGuardEnabled)
+				state.LicenseModel = pointer.FromEnum(adbsProps.LicenseModel)
+				state.MemoryAreaInGb = pointer.From(adbsProps.InMemoryAreaInGbs)
+				state.MemoryPerOracleComputeUnitInGb = pointer.From(adbsProps.MemoryPerOracleComputeUnitInGbs)
+				state.MtlsConnectionRequired = pointer.From(adbsProps.IsMtlsConnectionRequired)
+				state.NcharacterSet = pointer.From(adbsProps.NcharacterSet)
+				state.NextLongTermBackupTimeStampInUtc = pointer.From(adbsProps.NextLongTermBackupTimeStamp)
+				state.Ocid = pointer.From(adbsProps.Ocid)
+				state.OciUrl = pointer.From(adbsProps.OciURL)
+				state.PeerDbIds = pointer.From(adbsProps.PeerDbIds)
+				state.Preview = pointer.From(adbsProps.IsPreview)
+				state.PreviewVersionWithServiceTermsAccepted = pointer.From(adbsProps.IsPreviewVersionWithServiceTermsAccepted)
+				state.PrivateEndpoint = pointer.From(adbsProps.PrivateEndpoint)
+				state.PrivateEndpointIP = pointer.From(adbsProps.PrivateEndpointIP)
+				state.PrivateEndpointLabel = pointer.From(adbsProps.PrivateEndpointLabel)
+				state.ProvisionableCPUs = pointer.From(adbsProps.ProvisionableCPUs)
+				state.RemoteDataGuardEnabled = pointer.From(adbsProps.IsRemoteDataGuardEnabled)
+				state.ServiceConsoleUrl = pointer.From(adbsProps.ServiceConsoleURL)
+				state.SqlWebDeveloperUrl = pointer.From(adbsProps.SqlWebDeveloperURL)
+
+				if adbsProps.SubnetId != nil {
+					subnetID, err := commonids.ParseSubnetIDInsensitively(*adbsProps.SubnetId)
+					if err != nil {
+						return err
+					}
+					state.SubnetId = subnetID.ID()
+				}
+
+				state.TimeCreatedInUtc = pointer.From(adbsProps.TimeCreated)
+				state.TimeDataGuardRoleChangedInUtc = pointer.From(adbsProps.TimeDataGuardRoleChanged)
+				state.TimeDeletionOfFreeAutonomousDatabaseInUtc = pointer.From(adbsProps.TimeDeletionOfFreeAutonomousDatabase)
+				state.TimeLocalDataGuardEnabledInUtc = pointer.From(adbsProps.TimeLocalDataGuardEnabled)
+				state.TimeMaintenanceBeginInUtc = pointer.From(adbsProps.TimeMaintenanceBegin)
+				state.TimeMaintenanceEndInUtc = pointer.From(adbsProps.TimeMaintenanceEnd)
+				state.TimeOfLastFailoverInUtc = pointer.From(adbsProps.TimeOfLastFailover)
+				state.TimeOfLastRefreshInUtc = pointer.From(adbsProps.TimeOfLastRefresh)
+				state.TimeOfLastRefreshPointInUtc = pointer.From(adbsProps.TimeOfLastRefreshPoint)
+				state.TimeOfLastSwitchoverInUtc = pointer.From(adbsProps.TimeOfLastSwitchover)
+				state.TimeReclamationOfFreeAutonomousDatabaseInUtc = pointer.From(adbsProps.TimeReclamationOfFreeAutonomousDatabase)
+				state.UsedDataStorageSizeInGb = pointer.From(adbsProps.UsedDataStorageSizeInGbs)
+				state.UsedDataStorageSizeInTb = pointer.From(adbsProps.UsedDataStorageSizeInTbs)
+
+				if vnetIdRaw := pointer.From(adbsProps.VnetId); vnetIdRaw != "" {
+					vnetId, err := commonids.ParseVirtualNetworkIDInsensitively(vnetIdRaw)
+					if err != nil {
+						return err
+					}
+					state.VnetId = vnetId.ID()
+				}
+			}
+
+			metadata.SetID(id)
+
+			return metadata.Encode(&state)
+		},
+	}
+}

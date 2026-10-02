@@ -28,7 +28,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func resourceMsSqlVirtualMachineAutoBackupSettingsRefreshFunc(ctx context.Context, client *sqlvirtualmachines.SqlVirtualMachinesClient, d *pluginsdk.ResourceData) pluginsdk.StateRefreshFunc {
-	return func() (interface{}, string, error) {
+	return func() (any, string, error) {
 		id, err := sqlvirtualmachines.ParseSqlVirtualMachineID(d.Id())
 		if err != nil {
 			return nil, "Error", err
@@ -45,30 +45,30 @@ func resourceMsSqlVirtualMachineAutoBackupSettingsRefreshFunc(ctx context.Contex
 
 				if len(autoBackupSettings) == 0 {
 					// auto backup was nil or disabled in the response
-					if v, ok := d.GetOk("auto_backup"); !ok || len(v.([]interface{})) == 0 {
+					if v, ok := d.GetOk("auto_backup"); !ok || len(v.([]any)) == 0 {
 						// also disabled in the config
 						return resp, "Updated", nil
 					}
 					return resp, "Pending", nil
 				}
 
-				if v, ok := d.GetOk("auto_backup"); !ok || len(v.([]interface{})) == 0 {
+				if v, ok := d.GetOk("auto_backup"); !ok || len(v.([]any)) == 0 {
 					// still waiting for it to be disabled
 					return resp, "Pending", nil
 				}
 
 				// check each property in the auto_backup block for drift
-				for prop, val := range autoBackupSettings[0].(map[string]interface{}) {
+				for prop, val := range autoBackupSettings[0].(map[string]any) {
 					v := d.Get(fmt.Sprintf("auto_backup.0.%s", prop))
 					switch prop {
 					case "manual_schedule":
-						if m := val.([]interface{}); len(m) > 0 {
-							if b, ok := d.GetOk("auto_backup.0.manual_schedule"); !ok || len(b.([]interface{})) == 0 {
+						if m := val.([]any); len(m) > 0 {
+							if b, ok := d.GetOk("auto_backup.0.manual_schedule"); !ok || len(b.([]any)) == 0 {
 								// manual schedule disabled in config but still showing in response
 								return resp, "Pending", nil
 							}
 							// check each property in the manual_schedule block for drift
-							for prop2, val2 := range m[0].(map[string]interface{}) {
+							for prop2, val2 := range m[0].(map[string]any) {
 								v2 := d.Get(fmt.Sprintf("auto_backup.0.manual_schedule.0.%s", prop2))
 								switch prop2 {
 								case "full_backup_frequency":
@@ -83,9 +83,9 @@ func resourceMsSqlVirtualMachineAutoBackupSettingsRefreshFunc(ctx context.Contex
 										}
 									}
 
-									daysOfWeekRemote := make([]interface{}, 0)
+									daysOfWeekRemote := make([]any, 0)
 									if val2 != nil {
-										daysOfWeekRemote = val2.([]interface{})
+										daysOfWeekRemote = val2.([]any)
 									}
 
 									if len(daysOfWeekRemote) != len(daysOfWeekLocal) {
@@ -103,7 +103,7 @@ func resourceMsSqlVirtualMachineAutoBackupSettingsRefreshFunc(ctx context.Contex
 									}
 								}
 							}
-						} else if b, ok := d.GetOk("auto_backup.0.manual_schedule"); ok || len(b.([]interface{})) > 0 {
+						} else if b, ok := d.GetOk("auto_backup.0.manual_schedule"); ok || len(b.([]any)) > 0 {
 							// manual schedule set in config but not reflecting in response
 							return resp, "Pending", nil
 						}

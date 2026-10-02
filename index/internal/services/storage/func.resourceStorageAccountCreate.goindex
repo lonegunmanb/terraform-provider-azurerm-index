@@ -36,7 +36,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta any) error {
 	tenantId := meta.(*clients.Client).Account.TenantId
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	storageUtils := meta.(*clients.Client).Storage
@@ -79,13 +79,13 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 		}
 	}
 
-	expandedIdentity, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+	expandedIdentity, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]any))
 	if err != nil {
 		return fmt.Errorf("expanding `identity`: %+v", err)
 	}
 
 	httpsTrafficOnlyEnabled := true
-	// nolint staticcheck
+	//nolint:staticcheck
 	if v, ok := d.GetOkExists("https_traffic_only_enabled"); ok {
 		httpsTrafficOnlyEnabled = v.(bool)
 	}
@@ -110,32 +110,32 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 			IsLocalUserEnabled:           pointer.To(d.Get("local_user_enabled").(bool)),
 			IsSftpEnabled:                pointer.To(d.Get("sftp_enabled").(bool)),
 			MinimumTlsVersion:            pointer.ToEnum[storageaccounts.MinimumTlsVersion](d.Get("min_tls_version").(string)),
-			NetworkAcls:                  expandAccountNetworkRules(d.Get("network_rules").([]interface{}), tenantId),
+			NetworkAcls:                  expandAccountNetworkRules(d.Get("network_rules").([]any), tenantId),
 			PublicNetworkAccess:          pointer.To(publicNetworkAccess),
-			SasPolicy:                    expandAccountSASPolicy(d.Get("sas_policy").([]interface{})),
+			SasPolicy:                    expandAccountSASPolicy(d.Get("sas_policy").([]any)),
 		},
 		Sku: storageaccounts.Sku{
 			Name: storageaccounts.SkuName(fmt.Sprintf("%s%s_%s", string(accountTier), provisionedBillingModelVersion, replicationType)),
 			Tier: pointer.To(accountTier),
 		},
-		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+		Tags: tags.Expand(d.Get("tags").(map[string]any)),
 	}
 
 	if v := d.Get("allowed_copy_scope").(string); v != "" {
 		payload.Properties.AllowedCopyScope = pointer.ToEnum[storageaccounts.AllowedCopyScope](v)
 	}
 	if v, ok := d.GetOk("azure_files_authentication"); ok {
-		expandAADFilesAuthentication, err := expandAccountAzureFilesAuthentication(v.([]interface{}))
+		expandAADFilesAuthentication, err := expandAccountAzureFilesAuthentication(v.([]any))
 		if err != nil {
 			return fmt.Errorf("parsing `azure_files_authentication`: %v", err)
 		}
 		payload.Properties.AzureFilesIdentityBasedAuthentication = expandAADFilesAuthentication
 	}
 	if _, ok := d.GetOk("custom_domain"); ok {
-		payload.Properties.CustomDomain = expandAccountCustomDomain(d.Get("custom_domain").([]interface{}))
+		payload.Properties.CustomDomain = expandAccountCustomDomain(d.Get("custom_domain").([]any))
 	}
 	if v, ok := d.GetOk("immutability_policy"); ok {
-		payload.Properties.ImmutableStorageWithVersioning = expandAccountImmutabilityPolicy(v.([]interface{}))
+		payload.Properties.ImmutableStorageWithVersioning = expandAccountImmutabilityPolicy(v.([]any))
 	}
 
 	// BlobStorage does not support ZRS
@@ -171,7 +171,7 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 		}
 	}
 
-	// nolint staticcheck
+	//nolint:staticcheck
 	if v, ok := d.GetOkExists("large_file_share_enabled"); ok {
 		// @tombuildsstuff: we can't set this to `false` because the API returns:
 		//
@@ -188,7 +188,7 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 	}
 
 	if v, ok := d.GetOk("routing"); ok {
-		payload.Properties.RoutingPreference = expandAccountRoutingPreference(v.([]interface{}))
+		payload.Properties.RoutingPreference = expandAccountRoutingPreference(v.([]any))
 	}
 
 	// TODO look into standardizing this across resources that support CMK and at the very least look at improving the UX
@@ -200,7 +200,7 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 	// See: https://docs.microsoft.com/azure/storage/common/account-encryption-key-create?tabs=portal
 	queueEncryptionKeyType := storageaccounts.KeyType(d.Get("queue_encryption_key_type").(string))
 	tableEncryptionKeyType := storageaccounts.KeyType(d.Get("table_encryption_key_type").(string))
-	encryptionRaw := d.Get("customer_managed_key").([]interface{})
+	encryptionRaw := d.Get("customer_managed_key").([]any)
 	encryption, err := expandAccountCustomerManagedKey(ctx, keyVaultClient, id.SubscriptionId, encryptionRaw, accountTier, accountKind, *expandedIdentity, queueEncryptionKeyType, tableEncryptionKeyType)
 	if err != nil {
 		return fmt.Errorf("expanding `customer_managed_key`: %+v", err)
@@ -246,7 +246,7 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 			return fmt.Errorf("`blob_properties` aren't supported for account kind %q in sku tier %q", accountKind, accountTier)
 		}
 
-		blobProperties, err := expandAccountBlobServiceProperties(accountKind, val.([]interface{}))
+		blobProperties, err := expandAccountBlobServiceProperties(accountKind, val.([]any))
 		if err != nil {
 			return err
 		}
@@ -299,7 +299,7 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta interface{}) e
 			return fmt.Errorf("`share_properties` aren't supported for account kind %q in sku tier %q", accountKind, accountTier)
 		}
 
-		sharePayload := expandAccountShareProperties(val.([]interface{}))
+		sharePayload := expandAccountShareProperties(val.([]any))
 
 		// The API complains if any multichannel info is sent on non premium fileshares. Even if multichannel is set to false
 		if accountTier != storageaccounts.SkuTierPremium && sharePayload.Properties != nil && sharePayload.Properties.ProtocolSettings != nil {

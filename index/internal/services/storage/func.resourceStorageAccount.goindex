@@ -77,10 +77,15 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			"location": commonschema.Location(),
 
 			"account_kind": {
-				Type:         pluginsdk.TypeString,
-				Optional:     true,
-				ValidateFunc: validation.StringInSlice(storageaccounts.PossibleValuesForKind(), false),
-				Default:      string(storageaccounts.KindStorageVTwo),
+				Type:     pluginsdk.TypeString,
+				Optional: true,
+				ValidateFunc: validation.StringInSlice([]string{
+					string(storageaccounts.KindBlobStorage),
+					string(storageaccounts.KindBlockBlobStorage),
+					string(storageaccounts.KindFileStorage),
+					string(storageaccounts.KindStorageVTwo),
+				}, false),
+				Default: string(storageaccounts.KindStorageVTwo),
 			},
 
 			"account_tier": {
@@ -1086,11 +1091,17 @@ func resourceStorageAccount() *pluginsdk.Resource {
 			},
 		},
 		CustomizeDiff: pluginsdk.CustomDiffWithAll(
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
 				if d.HasChange("account_kind") {
 					accountKind, changedKind := d.GetChange("account_kind")
 					// Don't do the check for create case.
 					if accountKind != "" {
+						// Prevent ForceNew on `StorageV2` -> `Storage`, this would fail as GPv1 accounts can no longer be provisioned
+						// Azure is automatically migrating accounts in October due to this retirement.
+						if accountKind == string(storageaccounts.KindStorageVTwo) && changedKind == string(storageaccounts.KindStorage) {
+							return fmt.Errorf("`account_kind` of type `%[1]s` has been retired by Azure, changing from `%[2]s` to `%[1]s` is no longer possible. For additional information, see https://learn.microsoft.com/azure/storage/common/general-purpose-version-1-account-migration-overview#retirement-timeline-and-key-milestones", storageaccounts.KindStorage, storageaccounts.KindStorageVTwo)
+						}
+
 						if accountKind != string(storageaccounts.KindStorage) && changedKind != string(storageaccounts.KindStorageVTwo) {
 							log.Printf("[DEBUG] recreate storage account, couldn't be migrated from %q to %q", accountKind, changedKind)
 							d.ForceNew("account_kind")
@@ -1147,7 +1158,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 				}
 				return nil
 			}),
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
 				if d.Get("account_replication_type_migration_in_progress").(bool) {
 					o, n := d.GetChange("account_replication_type")
 					migratingTo := d.Get("account_replication_type_migrating_to").(string)
@@ -1160,7 +1171,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 
 				return nil
 			}),
-			pluginsdk.ForceNewIfChange("account_replication_type", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("account_replication_type", func(ctx context.Context, old, new, meta any) bool {
 				n := strings.ToUpper(new.(string))
 
 				switch o := strings.ToUpper(old.(string)); o {
@@ -1175,7 +1186,7 @@ func resourceStorageAccount() *pluginsdk.Resource {
 				}
 				return false
 			}),
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
 				if !features.SixPointOh() {
 					// If both are `null`/unset, set diff to return default of `true` / `Enabled`
 					// to ensure removal functions while O+C in 5.x
@@ -1195,6 +1206,27 @@ func resourceStorageAccount() *pluginsdk.Resource {
 	}
 
 	if !features.SixPointOh() {
+		r.Schema["account_kind"] = &pluginsdk.Schema{
+			Type:     pluginsdk.TypeString,
+			Optional: true,
+			ValidateFunc: validation.All(
+				validation.StringInSlice(storageaccounts.PossibleValuesForKind(), false),
+				func(i any, k string) ([]string, []error) {
+					v, ok := i.(string)
+					if !ok {
+						return nil, nil
+					}
+
+					if v == string(storageaccounts.KindStorage) {
+						return []string{fmt.Sprintf("type `%s` has been retired by Azure and will be removed in v6.0 of the AzureRM provider", v)}, nil
+					}
+
+					return nil, nil
+				},
+			),
+			Default: string(storageaccounts.KindStorageVTwo),
+		}
+
 		r.Schema["public_network_access_enabled"] = &pluginsdk.Schema{
 			Type:     pluginsdk.TypeBool,
 			Optional: true,

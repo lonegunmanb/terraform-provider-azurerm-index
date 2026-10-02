@@ -26,7 +26,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	computeValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
@@ -62,7 +62,7 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: computeValidate.VirtualMachineName,
+				ValidateFunc: validate.VirtualMachineName,
 			},
 
 			"resource_group_name": commonschema.ResourceGroupName(),
@@ -103,7 +103,7 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 			"sku_name": {
 				Type:         pluginsdk.TypeString,
 				Optional:     true,
-				ValidateFunc: computeValidate.OrchestratedVirtualMachineScaleSetSku,
+				ValidateFunc: validate.OrchestratedVirtualMachineScaleSetSku,
 			},
 
 			"sku_profile": {
@@ -129,7 +129,7 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 									"name": {
 										Type:         pluginsdk.TypeString,
 										Required:     true,
-										ValidateFunc: computeValidate.SkuProfileVMSizeName,
+										ValidateFunc: validate.SkuProfileVMSizeName,
 									},
 									"rank": {
 										Type:         pluginsdk.TypeInt,
@@ -221,7 +221,7 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 				Type:         pluginsdk.TypeFloat,
 				Optional:     true,
 				Default:      -1,
-				ValidateFunc: computeValidate.SpotMaxPrice,
+				ValidateFunc: validate.SpotMaxPrice,
 			},
 
 			"plan": planSchema(),
@@ -273,10 +273,10 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 					images.ValidateImageID,
 					validation.AsGeneratedID(galleryimages.ParseGalleryImageIDInsensitively),
 					validation.AsGeneratedID(galleryimageversions.ParseImageVersionIDInsensitively),
-					computeValidate.CommunityGalleryImageID,
-					computeValidate.CommunityGalleryImageVersionID,
-					computeValidate.SharedGalleryImageID,
-					computeValidate.SharedGalleryImageVersionID,
+					validate.CommunityGalleryImageID,
+					validate.CommunityGalleryImageVersionID,
+					validate.SharedGalleryImageID,
+					validate.SharedGalleryImageVersionID,
 				),
 				ConflictsWith: []string{
 					"source_image_reference",
@@ -324,7 +324,7 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 
 		CustomizeDiff: pluginsdk.CustomDiffWithAll(
 			// Removing existing zones is currently not supported for Virtual Machine Scale Sets
-			pluginsdk.ForceNewIfChange("zones", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("zones", func(ctx context.Context, old, new, meta any) bool {
 				oldZones := zones.ExpandUntyped(old.(*schema.Set).List())
 				newZones := zones.ExpandUntyped(new.(*schema.Set).List())
 
@@ -340,7 +340,7 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 			}),
 
 			// SKU Profile validation
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
 				skuName, hasSkuName := diff.GetOk("sku_name")
 				_, hasSkuProfile := diff.GetOk("sku_profile")
 
@@ -355,8 +355,8 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 				}
 
 				// Validate SKU Profile configuration
-				if skuProfileRaw := diff.Get("sku_profile").([]interface{}); len(skuProfileRaw) > 0 {
-					skuProfile := skuProfileRaw[0].(map[string]interface{})
+				if skuProfileRaw := diff.Get("sku_profile").([]any); len(skuProfileRaw) > 0 {
+					skuProfile := skuProfileRaw[0].(map[string]any)
 					allocationStrategy := skuProfile["allocation_strategy"].(string)
 
 					configRaw := diff.GetRawConfig().AsValueMap()["sku_profile"]
@@ -371,7 +371,7 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 
 					if vmSizes := skuProfile["virtual_machine_size"].(*pluginsdk.Set).List(); len(vmSizes) > 0 {
 						for _, vmSize := range vmSizes {
-							vmSizeMap := vmSize.(map[string]interface{})
+							vmSizeMap := vmSize.(map[string]any)
 							rank := vmSizeMap["rank"].(int)
 
 							if rank != 0 && allocationStrategy != string(virtualmachinescalesets.AllocationStrategyPrioritized) {
@@ -385,7 +385,7 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 			}),
 
 			// Force recreation when sku_profile is removed and sku_name changes from mix
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
 				oldName, newName := diff.GetChange("sku_name")
 
 				if oldName.(string) == "Mix" && newName.(string) != "Mix" {
@@ -398,9 +398,9 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 			}),
 
 			// Upgrade policy validation
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
 				upgradeMode := virtualmachinescalesets.UpgradeMode(diff.Get("upgrade_mode").(string))
-				rollingUpgradePolicyRaw := diff.Get("rolling_upgrade_policy").([]interface{})
+				rollingUpgradePolicyRaw := diff.Get("rolling_upgrade_policy").([]any)
 
 				if upgradeMode == virtualmachinescalesets.UpgradeModeManual && len(rollingUpgradePolicyRaw) > 0 {
 					return fmt.Errorf("`rolling_upgrade_policy` cannot be specified when `upgrade_mode` is set to `%s`", string(upgradeMode))
@@ -414,10 +414,10 @@ func resourceOrchestratedVirtualMachineScaleSet() *pluginsdk.Resource {
 			}),
 
 			// Network interface validation
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
-				networkInterfaces := diff.Get("network_interface").([]interface{})
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
+				networkInterfaces := diff.Get("network_interface").([]any)
 				for _, networkInterface := range networkInterfaces {
-					raw := networkInterface.(map[string]interface{})
+					raw := networkInterface.(map[string]any)
 					auxiliaryMode := raw["auxiliary_mode"].(string)
 					auxiliarySku := raw["auxiliary_sku"].(string)
 

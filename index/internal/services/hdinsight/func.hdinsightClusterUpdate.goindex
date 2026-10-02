@@ -19,7 +19,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
 func hdinsightClusterUpdate(clusterKind string, readFunc pluginsdk.ReadFunc) pluginsdk.UpdateFunc {
-	return func(d *pluginsdk.ResourceData, meta interface{}) error {
+	return func(d *pluginsdk.ResourceData, meta any) error {
 		client := meta.(*clients.Client).HDInsight.Clusters
 		extensionsClient := meta.(*clients.Client).HDInsight.Extensions
 		applicationsClient := meta.(*clients.Client).HDInsight.Applications
@@ -33,7 +33,7 @@ func hdinsightClusterUpdate(clusterKind string, readFunc pluginsdk.ReadFunc) plu
 
 		if d.HasChange("tags") {
 			payload := clusters.ClusterPatchParameters{
-				Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+				Tags: tags.Expand(d.Get("tags").(map[string]any)),
 			}
 			if _, err := client.Update(ctx, *id, payload); err != nil {
 				return fmt.Errorf("updating Tags for %s %s: %+v", clusterKind, id, err)
@@ -42,10 +42,10 @@ func hdinsightClusterUpdate(clusterKind string, readFunc pluginsdk.ReadFunc) plu
 
 		if d.HasChange("roles.0.worker_node") {
 			log.Printf("[DEBUG] Resizing the HDInsight %q Cluster", clusterKind)
-			rolesRaw := d.Get("roles").([]interface{})
-			roles := rolesRaw[0].(map[string]interface{})
-			workerNodes := roles["worker_node"].([]interface{})
-			workerNode := workerNodes[0].(map[string]interface{})
+			rolesRaw := d.Get("roles").([]any)
+			roles := rolesRaw[0].(map[string]any)
+			workerNodes := roles["worker_node"].([]any)
+			workerNode := workerNodes[0].(map[string]any)
 			if d.HasChange("roles.0.worker_node.0.target_instance_count") {
 				targetInstanceCount := workerNode["target_instance_count"].(int)
 				payload := clusters.ClusterResizeParameters{
@@ -58,7 +58,7 @@ func hdinsightClusterUpdate(clusterKind string, readFunc pluginsdk.ReadFunc) plu
 			}
 
 			if d.HasChange("roles.0.worker_node.0.autoscale") {
-				autoscale := ExpandHDInsightNodeAutoScaleDefinition(workerNode["autoscale"].([]interface{}))
+				autoscale := ExpandHDInsightNodeAutoScaleDefinition(workerNode["autoscale"].([]any))
 				payload := clusters.AutoscaleConfigurationUpdateParameter{
 					Autoscale: autoscale,
 				}
@@ -74,8 +74,8 @@ func hdinsightClusterUpdate(clusterKind string, readFunc pluginsdk.ReadFunc) plu
 		if clusterKind == "Hadoop" {
 			if d.HasChange("roles.0.edge_node") {
 				log.Printf("[DEBUG] Detected change in edge nodes")
-				edgeNodeRaw := d.Get("roles.0.edge_node").([]interface{})
-				edgeNodeConfig := edgeNodeRaw[0].(map[string]interface{})
+				edgeNodeRaw := d.Get("roles.0.edge_node").([]any)
+				edgeNodeConfig := edgeNodeRaw[0].(map[string]any)
 
 				oldEdgeNodeCount, newEdgeNodeCount := d.GetChange("roles.0.edge_node.0.target_instance_count")
 				oldEdgeNodeInt := oldEdgeNodeCount.(int)
@@ -109,7 +109,7 @@ func hdinsightClusterUpdate(clusterKind string, readFunc pluginsdk.ReadFunc) plu
 		if d.HasChange("monitor") {
 			log.Printf("[DEBUG] Change Azure Monitor for the HDInsight %q Cluster", clusterKind)
 			if v, ok := d.GetOk("monitor"); ok {
-				monitorRaw := v.([]interface{})
+				monitorRaw := v.([]any)
 				if err := enableHDInsightMonitoring(ctx, extensionsClient, *id, monitorRaw); err != nil {
 					return err
 				}
@@ -120,7 +120,7 @@ func hdinsightClusterUpdate(clusterKind string, readFunc pluginsdk.ReadFunc) plu
 		if d.HasChange("extension") {
 			log.Printf("[DEBUG] Change Azure Monitor for the HDInsight %q Cluster", clusterKind)
 			if v, ok := d.GetOk("extension"); ok {
-				extensionRaw := v.([]interface{})
+				extensionRaw := v.([]any)
 				if err := enableHDInsightAzureMonitor(ctx, extensionsClient, *id, extensionRaw); err != nil {
 					return err
 				}
@@ -130,7 +130,7 @@ func hdinsightClusterUpdate(clusterKind string, readFunc pluginsdk.ReadFunc) plu
 		}
 		if d.HasChange("gateway") {
 			log.Printf("[DEBUG] Updating the HDInsight %q Cluster gateway", clusterKind)
-			vs := d.Get("gateway").([]interface{})[0].(map[string]interface{})
+			vs := d.Get("gateway").([]any)[0].(map[string]any)
 
 			payload := clusters.UpdateGatewaySettingsParameters{
 				RestAuthCredentialIsEnabled: pointer.To(true),

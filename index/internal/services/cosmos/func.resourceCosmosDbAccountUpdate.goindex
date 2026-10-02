@@ -31,7 +31,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).Cosmos.CosmosDBClient
 
 	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
@@ -83,7 +83,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 		backup = existing.Model.Properties.BackupPolicy
 		if d.HasChange("backup") {
 			if v, ok := d.GetOk("backup"); ok {
-				newBackup, err := expandCosmosdbAccountBackup(v.([]interface{}), d.HasChange("backup.0.type"), string(pointer.From(existing.Model.Properties.CreateMode)))
+				newBackup, err := expandCosmosdbAccountBackup(v.([]any), d.HasChange("backup.0.type"), pointer.FromEnum(existing.Model.Properties.CreateMode))
 				if err != nil {
 					return fmt.Errorf("expanding `backup`: %+v", err)
 				}
@@ -99,7 +99,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 				}
 
 				backup = newBackup
-			} else if string(pointer.From(existing.Model.Properties.CreateMode)) != "" {
+			} else if pointer.FromEnum(existing.Model.Properties.CreateMode) != "" {
 				return fmt.Errorf("`create_mode` only works when `backup.type` is `Continuous`")
 			}
 		}
@@ -156,16 +156,16 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 			EnableMultipleWriteLocations:       props.EnableMultipleWriteLocations,
 			PublicNetworkAccess:                expandCosmosdbAccountPublicNetworkAccess(d.Get("public_network_access_enabled").(bool)),
 			EnableAnalyticalStorage:            pointer.To(d.Get("analytical_storage_enabled").(bool)),
-			Cors:                               common.ExpandCosmosCorsRule(d.Get("cors_rule").([]interface{})),
+			Cors:                               common.ExpandCosmosCorsRule(d.Get("cors_rule").([]any)),
 			DisableKeyBasedMetadataWriteAccess: pointer.To(!d.Get("access_key_metadata_writes_enabled").(bool)),
 			NetworkAclBypass:                   expandCosmosdbAccountNetworkBypass(d.Get("network_acl_bypass_for_azure_services").(bool)),
-			NetworkAclBypassResourceIds:        pluginsdk.ExpandStringSlice(d.Get("network_acl_bypass_ids").([]interface{})),
+			NetworkAclBypassResourceIds:        pluginsdk.ExpandStringSlice(d.Get("network_acl_bypass_ids").([]any)),
 			DisableLocalAuth:                   pointer.To(!d.Get("local_authentication_enabled").(bool)),
 			BackupPolicy:                       backup,
 			EnablePartitionMerge:               pointer.To(d.Get("partition_merge_enabled").(bool)),
 			EnableBurstCapacity:                pointer.To(d.Get("burst_capacity_enabled").(bool)),
 		},
-		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+		Tags: tags.Expand(d.Get("tags").(map[string]any)),
 	}
 
 	// 'default_identity_type' will always have a value since it now has a default value of "FirstPartyIdentity" per the API documentation.
@@ -181,11 +181,11 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 
 	// we need the following in the accountProps even if they have not changed...
 	if v, ok := d.GetOk("analytical_storage"); ok {
-		account.Properties.AnalyticalStorageConfiguration = expandCosmosDBAccountAnalyticalStorageConfiguration(v.([]interface{}))
+		account.Properties.AnalyticalStorageConfiguration = expandCosmosDBAccountAnalyticalStorageConfiguration(v.([]any))
 	}
 
 	if v, ok := d.GetOk("capacity"); ok {
-		account.Properties.Capacity = expandCosmosDBAccountCapacity(v.([]interface{}))
+		account.Properties.Capacity = expandCosmosDBAccountCapacity(v.([]any))
 	}
 
 	var createMode string
@@ -195,7 +195,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 	}
 
 	if v, ok := d.GetOk("restore"); ok {
-		account.Properties.RestoreParameters = expandCosmosdbAccountRestoreParameters(v.([]interface{}))
+		account.Properties.RestoreParameters = expandCosmosdbAccountRestoreParameters(v.([]any))
 	}
 
 	if !pluginsdk.IsExplicitlyNullInConfig(d, "mongo_server_version") {
@@ -286,7 +286,7 @@ func resourceCosmosDbAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) 
 			return fmt.Errorf("updating 'identity' %q: %+v", id, err)
 		}
 
-		expandedIdentity, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+		expandedIdentity, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]any))
 		if err != nil {
 			return fmt.Errorf("expanding `identity`: %+v", err)
 		}

@@ -352,7 +352,7 @@ func resourceDatabricksWorkspace() *pluginsdk.Resource {
 		},
 
 		CustomizeDiff: pluginsdk.CustomDiffWithAll(
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
 				_, customerEncryptionEnabled := d.GetChange("customer_managed_key_enabled")
 				_, defaultStorageFirewallEnabled := d.GetChange("default_storage_firewall_enabled")
 				_, infrastructureEncryptionEnabled := d.GetChange("infrastructure_encryption_enabled")
@@ -387,7 +387,7 @@ func resourceDatabricksWorkspace() *pluginsdk.Resource {
 					}
 				}
 
-				if (customerEncryptionEnabled.(bool) || defaultStorageFirewallEnabled.(bool) || len(enhancedSecurityCompliance.([]interface{})) > 0 || infrastructureEncryptionEnabled.(bool) || managedServicesCMK.(string) != "" || managedDiskCMK.(string) != "") && !strings.EqualFold("premium", newSku.(string)) {
+				if (customerEncryptionEnabled.(bool) || defaultStorageFirewallEnabled.(bool) || len(enhancedSecurityCompliance.([]any)) > 0 || infrastructureEncryptionEnabled.(bool) || managedServicesCMK.(string) != "" || managedDiskCMK.(string) != "") && !strings.EqualFold("premium", newSku.(string)) {
 					return fmt.Errorf("`customer_managed_key_enabled`, `default_storage_firewall_enabled`, `enhanced_security_compliance`, `infrastructure_encryption_enabled`, `managed_disk_cmk_key_vault_key_id` and `managed_services_cmk_key_vault_key_id` are only available with a `premium` workspace `sku`, got %q", newSku)
 				}
 
@@ -395,18 +395,18 @@ func resourceDatabricksWorkspace() *pluginsdk.Resource {
 			}),
 
 			// Once compliance security profile has been enabled, disabling it will force a workspace replacement
-			pluginsdk.ForceNewIfChange("enhanced_security_compliance.0.compliance_security_profile_enabled", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("enhanced_security_compliance.0.compliance_security_profile_enabled", func(ctx context.Context, old, new, meta any) bool {
 				return old.(bool) && !new.(bool)
 			}),
 
 			// Once a compliance standard is enabled, disabling it will force a workspace replacement
-			pluginsdk.ForceNewIfChange("enhanced_security_compliance.0.compliance_security_profile_standards", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("enhanced_security_compliance.0.compliance_security_profile_standards", func(ctx context.Context, old, new, meta any) bool {
 				removedStandards := old.(*pluginsdk.Set).Difference(new.(*pluginsdk.Set))
 				return removedStandards.Len() > 0
 			}),
 
 			// Compliance security profile requires automatic cluster update and enhanced security monitoring to be enabled
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
 				_, complianceSecurityProfileEnabled := d.GetChange("enhanced_security_compliance.0.compliance_security_profile_enabled")
 				_, automaticClusterUpdateEnabled := d.GetChange("enhanced_security_compliance.0.automatic_cluster_update_enabled")
 				_, enhancedSecurityMonitoringEnabled := d.GetChange("enhanced_security_compliance.0.enhanced_security_monitoring_enabled")
@@ -419,7 +419,7 @@ func resourceDatabricksWorkspace() *pluginsdk.Resource {
 			}),
 
 			// compliance standards cannot be specified without enabling compliance profile
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
 				_, complianceSecurityProfileEnabled := d.GetChange("enhanced_security_compliance.0.compliance_security_profile_enabled")
 				_, complianceStandards := d.GetChange("enhanced_security_compliance.0.compliance_security_profile_standards")
 
@@ -430,7 +430,7 @@ func resourceDatabricksWorkspace() *pluginsdk.Resource {
 				return nil
 			}),
 
-			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
 				// Neither of these arguments can be removed once set
 				for _, k := range []string{"managed_disk_cmk_key_vault_key_id", "managed_services_cmk_key_vault_key_id"} {
 					o, n := d.GetChange(k)

@@ -18,12 +18,12 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
-	frontDoorValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceFrontDoorUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceFrontDoorUpdate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).Frontdoor.FrontDoorsClient
 	ctx, cancel := timeouts.ForCreateUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
@@ -58,7 +58,7 @@ func resourceFrontDoorUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 		existingModel.Properties.FriendlyName = pointer.To(d.Get("friendly_name").(string))
 	}
 
-	routingRules := d.Get("routing_rule").([]interface{})
+	routingRules := d.Get("routing_rule").([]any)
 	if d.HasChange("routing_rule") {
 		rulesEngines := make(map[string]*frontdoors.SubResource)
 		if existingModel.Properties != nil && existingModel.Properties.RoutingRules != nil {
@@ -71,22 +71,22 @@ func resourceFrontDoorUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 		existingModel.Properties.RoutingRules = expandFrontDoorRoutingRule(routingRules, id, &rulesEngines)
 	}
 
-	loadBalancingSettings := d.Get("backend_pool_load_balancing").([]interface{})
+	loadBalancingSettings := d.Get("backend_pool_load_balancing").([]any)
 	if d.HasChange("backend_pool_load_balancing") {
 		existingModel.Properties.LoadBalancingSettings = expandFrontDoorLoadBalancingSettingsModel(loadBalancingSettings, id)
 	}
 
-	healthProbeSettings := d.Get("backend_pool_health_probe").([]interface{})
+	healthProbeSettings := d.Get("backend_pool_health_probe").([]any)
 	if d.HasChange("backend_pool_health_probe") {
 		existingModel.Properties.HealthProbeSettings = expandFrontDoorHealthProbeSettingsModel(healthProbeSettings, id)
 	}
 
-	backendPools := d.Get("backend_pool").([]interface{})
+	backendPools := d.Get("backend_pool").([]any)
 	if d.HasChange("backend_pool") {
 		existingModel.Properties.BackendPools = expandFrontDoorBackendPools(backendPools, id)
 	}
 
-	frontendEndpoints := d.Get("frontend_endpoint").([]interface{})
+	frontendEndpoints := d.Get("frontend_endpoint").([]any)
 	if d.HasChange("frontend_endpoint") {
 		existingModel.Properties.FrontendEndpoints = expandFrontDoorFrontendEndpoint(frontendEndpoints, id)
 	}
@@ -94,8 +94,8 @@ func resourceFrontDoorUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 	if d.HasChange("backend_pool_settings") {
 		var backendCertNameCheck bool
 		var backendPoolsSendReceiveTimeoutSeconds int64
-		if bps, ok := d.Get("backend_pool_settings").([]interface{}); ok && len(bps) > 0 {
-			bpsMap := bps[0].(map[string]interface{})
+		if bps, ok := d.Get("backend_pool_settings").([]any); ok && len(bps) > 0 {
+			bpsMap := bps[0].(map[string]any)
 			if v, ok := bpsMap["enforce_backend_pools_certificate_name_check"].(bool); ok {
 				backendCertNameCheck = v
 			}
@@ -112,13 +112,13 @@ func resourceFrontDoorUpdate(d *pluginsdk.ResourceData, meta interface{}) error 
 	}
 
 	if d.HasChanges("tags") {
-		existingModel.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+		existingModel.Tags = tags.Expand(d.Get("tags").(map[string]any))
 	}
 
 	// If the explicitResourceOrder is empty and it's not a new resource set the mapping table to the state file and return an error.
 	// If the explicitResourceOrder is empty and it is a new resource it will run the CreateOrUpdate as expected
 	// If the explicitResourceOrder is NOT empty and it is NOT a new resource it will run the CreateOrUpdate as expected
-	explicitResourceOrder := d.Get("explicit_resource_order").([]interface{})
+	explicitResourceOrder := d.Get("explicit_resource_order").([]any)
 	if len(explicitResourceOrder) == 0 {
 		d.Set("explicit_resource_order", flattenExplicitResourceOrder(backendPools, frontendEndpoints, routingRules, loadBalancingSettings, healthProbeSettings, id))
 	} else {

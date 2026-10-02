@@ -16,8 +16,8 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumes"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
-	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -32,7 +32,7 @@ func (r NetAppVolumeGroupOracleResource) Update() sdk.ResourceFunc {
 				return err
 			}
 
-			var state netAppModels.NetAppVolumeGroupOracleModel
+			var state models.NetAppVolumeGroupOracleModel
 			if err := metadata.Decode(&state); err != nil {
 				return fmt.Errorf("decoding: %+v", err)
 			}
@@ -64,10 +64,10 @@ func (r NetAppVolumeGroupOracleResource) Update() sdk.ResourceFunc {
 						}
 
 						if metadata.ResourceData.HasChange(fmt.Sprintf("%v.export_policy_rule", volumeItem)) {
-							exportPolicyRuleRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.export_policy_rule", volumeItem)).([]interface{})
+							exportPolicyRuleRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.export_policy_rule", volumeItem)).([]any)
 
 							// Validating export policy rules
-							volumeProtocolRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.protocols", volumeItem)).([]interface{})[0]
+							volumeProtocolRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.protocols", volumeItem)).([]any)[0]
 							volumeProtocol := volumeProtocolRaw.(string)
 
 							errors := make([]error, 0)
@@ -75,11 +75,11 @@ func (r NetAppVolumeGroupOracleResource) Update() sdk.ResourceFunc {
 								if ruleRaw != nil {
 									rule := volumegroups.ExportPolicyRule{}
 
-									v := ruleRaw.(map[string]interface{})
+									v := ruleRaw.(map[string]any)
 									rule.Nfsv3 = pointer.To(v["nfsv3_enabled"].(bool))
 									rule.Nfsv41 = pointer.To(v["nfsv41_enabled"].(bool))
 
-									errors = append(errors, netAppValidate.ValidateNetAppVolumeGroupExportPolicyRule(rule, volumeProtocol)...)
+									errors = append(errors, validate.ValidateNetAppVolumeGroupExportPolicyRule(rule, volumeProtocol)...)
 								}
 							}
 
@@ -90,7 +90,7 @@ func (r NetAppVolumeGroupOracleResource) Update() sdk.ResourceFunc {
 							var protocolOverride []string
 							// Only override export policy protocols if we're also changing volume protocols
 							if metadata.ResourceData.HasChange(fmt.Sprintf("%v.protocols", volumeItem)) {
-								protocolsRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.protocols", volumeItem)).([]interface{})
+								protocolsRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.protocols", volumeItem)).([]any)
 								protocolOverride = make([]string, len(protocolsRaw))
 								for i, p := range protocolsRaw {
 									protocolOverride[i] = p.(string)
@@ -101,7 +101,7 @@ func (r NetAppVolumeGroupOracleResource) Update() sdk.ResourceFunc {
 						}
 
 						if metadata.ResourceData.HasChange(fmt.Sprintf("%v.protocols", volumeItem)) {
-							protocolsRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.protocols", volumeItem)).([]interface{})
+							protocolsRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.protocols", volumeItem)).([]any)
 							protocols := make([]string, len(protocolsRaw))
 							for i, p := range protocolsRaw {
 								protocols[i] = p.(string)
@@ -111,16 +111,16 @@ func (r NetAppVolumeGroupOracleResource) Update() sdk.ResourceFunc {
 
 						if metadata.ResourceData.HasChange(fmt.Sprintf("%v.data_protection_snapshot_policy", volumeItem)) {
 							// Validating that snapshot policies are not being created in a data protection volume
-							dataProtectionReplicationRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.data_protection_replication", volumeItem)).([]interface{})
+							dataProtectionReplicationRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.data_protection_replication", volumeItem)).([]any)
 							dataProtectionReplication := expandNetAppVolumeDataProtectionReplication(dataProtectionReplicationRaw)
 
 							if dataProtectionReplication != nil &&
 								dataProtectionReplication.EndpointType != nil &&
-								strings.EqualFold(string(pointer.From(dataProtectionReplication.EndpointType)), string(volumegroups.EndpointTypeDst)) {
+								strings.EqualFold(pointer.FromEnum(dataProtectionReplication.EndpointType), string(volumegroups.EndpointTypeDst)) {
 								return fmt.Errorf("snapshot policy cannot be enabled on a data protection volume, %s", volumeId)
 							}
 
-							dataProtectionSnapshotPolicyRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.data_protection_snapshot_policy", volumeItem)).([]interface{})
+							dataProtectionSnapshotPolicyRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.data_protection_snapshot_policy", volumeItem)).([]any)
 							dataProtectionSnapshotPolicy := expandNetAppVolumeDataProtectionSnapshotPolicyPatch(dataProtectionSnapshotPolicyRaw)
 							update.Properties.DataProtection = &volumes.VolumePatchPropertiesDataProtection{
 								Snapshot: dataProtectionSnapshotPolicy,
@@ -133,7 +133,7 @@ func (r NetAppVolumeGroupOracleResource) Update() sdk.ResourceFunc {
 						}
 
 						if metadata.ResourceData.HasChange(fmt.Sprintf("%v.tags", volumeItem)) {
-							tagsRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.tags", volumeItem)).(map[string]interface{})
+							tagsRaw := metadata.ResourceData.Get(fmt.Sprintf("%v.tags", volumeItem)).(map[string]any)
 							update.Tags = tags.Expand(tagsRaw)
 						}
 

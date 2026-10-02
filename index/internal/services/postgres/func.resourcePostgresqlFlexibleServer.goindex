@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -137,7 +139,7 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 				Type:         pluginsdk.TypeInt,
 				Optional:     true,
 				Computed:     true, // azignore:AZS007 - pre-existing violation
-				ValidateFunc: validation.IntInSlice([]int{32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4193280, 4194304, 8388608, 16777216, 33553408}),
+				ValidateFunc: validation.IntBetween(int(math.Exp2(15)), int(math.Exp2(26))),
 			},
 
 			"storage_tier": {
@@ -391,7 +393,7 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 		},
 
 		CustomizeDiff: pluginsdk.CustomDiffWithAll(
-			func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+			func(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
 				if d.HasChange("version") {
 					oldVersionVal, newVersionVal := d.GetChange("version")
 					// `version` value has been validated already, ignore the parse errors is safe
@@ -404,13 +406,13 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 					return nil
 				}
 				return nil
-			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
 				oldLoginName, _ := diff.GetChange("administrator_login")
 				if oldLoginName != "" {
 					diff.ForceNew("administrator_login")
 				}
 				return nil
-			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
 				if diff.Get("storage_type").(string) == string(servers.StorageTypePremiumVTwoLRS) {
 					return nil
 				}
@@ -446,7 +448,10 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 
 				// get the valid mappings for the passed
 				// storage_mb size...
-				storageTiers := storageTierMappings[newMb]
+				storageTiers, ok := storageTierMappings[newMb]
+				if !ok {
+					return nil
+				}
 
 				if newTier == "" {
 					newTier = string(storageTiers.DefaultTier)
@@ -477,19 +482,19 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 				}
 
 				return nil
-			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
 				oldIdentityRaw, newIdentityRaw := diff.GetChange("identity")
-				oldIdentity := oldIdentityRaw.([]interface{})
+				oldIdentity := oldIdentityRaw.([]any)
 				oldIdentityType := string(identity.TypeNone)
 				if len(oldIdentity) > 0 {
-					oldIdentityBlock := oldIdentity[0].(map[string]interface{})
+					oldIdentityBlock := oldIdentity[0].(map[string]any)
 					oldIdentityType = oldIdentityBlock["type"].(string)
 				}
 
-				newIdentity := newIdentityRaw.([]interface{})
+				newIdentity := newIdentityRaw.([]any)
 				newIdentityType := string(identity.TypeNone)
 				if len(newIdentity) > 0 {
-					newIdentityBlock := newIdentity[0].(map[string]interface{})
+					newIdentityBlock := newIdentity[0].(map[string]any)
 					newIdentityType = newIdentityBlock["type"].(string)
 				}
 
@@ -498,7 +503,7 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 				}
 
 				return nil
-			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
 				configMap := diff.GetRawConfig().AsValueMap()
 				createMode := diff.Get("create_mode").(string)
 
@@ -550,7 +555,7 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 				}
 
 				return nil
-			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
 				// only pg 17+ support cluster, and cluster does not support major version upgrade
 				if _, ok := diff.GetOk("cluster"); !ok {
 					return nil
@@ -559,14 +564,14 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 				// can't downgrade cluster size
 				if diff.HasChange("cluster") {
 					oldCluster, newCluster := diff.GetChange("cluster")
-					oldClusterObj := oldCluster.([]interface{})
-					newClusterObj := newCluster.([]interface{})
+					oldClusterObj := oldCluster.([]any)
+					newClusterObj := newCluster.([]any)
 					if len(oldClusterObj) > 0 && len(newClusterObj) > 0 {
 						var oldClusterSize, newClusterSize int
-						if tmpObj, ok := oldClusterObj[0].(map[string]interface{}); ok {
+						if tmpObj, ok := oldClusterObj[0].(map[string]any); ok {
 							oldClusterSize, _ = tmpObj["size"].(int)
 						}
-						if tempObj, ok := newClusterObj[0].(map[string]interface{}); ok {
+						if tempObj, ok := newClusterObj[0].(map[string]any); ok {
 							newClusterSize, _ = tempObj["size"].(int)
 						}
 
@@ -595,10 +600,31 @@ func resourcePostgresqlFlexibleServer() *pluginsdk.Resource {
 				}
 
 				return nil
-			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v interface{}) error {
+			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
 				if diff.HasChange("sku_name") {
 					skuOld, skuNew := diff.GetChange("sku_name")
 					return validate.FlexibleServerSkuNameChange(skuOld.(string), skuNew.(string))
+				}
+
+				return nil
+			}, func(ctx context.Context, diff *pluginsdk.ResourceDiff, v any) error {
+				if diff.GetRawConfig().AsValueMap()["storage_mb"].IsNull() {
+					return nil
+				}
+
+				storageMb := diff.Get("storage_mb").(int)
+
+				if diff.Get("storage_type").(string) == string(servers.StorageTypePremiumVTwoLRS) {
+					if storageMb%1024 != 0 {
+						return fmt.Errorf("`storage_mb` must be a multiple of `1024` when `storage_type` is `PremiumV2_LRS`, got `%d`", storageMb)
+					}
+
+					return nil
+				}
+
+				validStorageMb := slices.Sorted(maps.Keys(validate.InitializeFlexibleServerStorageTierDefaults()))
+				if !slices.Contains(validStorageMb, storageMb) {
+					return fmt.Errorf("`storage_mb` must be one of %v when `storage_type` is `Premium_LRS`, got `%d`", validStorageMb, storageMb)
 				}
 
 				return nil

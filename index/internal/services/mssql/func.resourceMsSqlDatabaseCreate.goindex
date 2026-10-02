@@ -38,7 +38,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceMsSqlDatabaseCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceMsSqlDatabaseCreate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).MSSQL.DatabasesClient
 	serversClient := meta.(*clients.Client).MSSQL.ServersClient
 	elasticPoolClient := meta.(*clients.Client).MSSQL.ElasticPoolsClient
@@ -172,7 +172,7 @@ func resourceMsSqlDatabaseCreate(d *pluginsdk.ResourceData, meta interface{}) er
 
 		if elasticPool.Model != nil {
 			if elasticPool.Model.Properties != nil && elasticPool.Model.Properties.PreferredEnclaveType != nil {
-				elasticEnclaveType := string(pointer.From(elasticPool.Model.Properties.PreferredEnclaveType))
+				elasticEnclaveType := pointer.FromEnum(elasticPool.Model.Properties.PreferredEnclaveType)
 				databaseEnclaveType := string(enclaveType)
 
 				if !strings.EqualFold(elasticEnclaveType, databaseEnclaveType) {
@@ -202,7 +202,7 @@ func resourceMsSqlDatabaseCreate(d *pluginsdk.ResourceData, meta interface{}) er
 			SecondaryType:                    pointer.ToEnum[databases.SecondaryType](d.Get("secondary_type").(string)),
 		},
 
-		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+		Tags: tags.Expand(d.Get("tags").(map[string]any)),
 	}
 
 	// NOTE: The 'PreferredEnclaveType' field cannot be passed to the APIs Create if the 'sku_name' is a DW or DC-series SKU...
@@ -322,7 +322,7 @@ func resourceMsSqlDatabaseCreate(d *pluginsdk.ResourceData, meta interface{}) er
 	}
 
 	if v, ok := d.GetOk("identity"); ok {
-		expandedIdentity, err := identity.ExpandUserAssignedMap(v.([]interface{}))
+		expandedIdentity, err := identity.ExpandUserAssignedMap(v.([]any))
 		if err != nil {
 			return fmt.Errorf("expanding `identity`: %+v", err)
 		}
@@ -367,7 +367,7 @@ func resourceMsSqlDatabaseCreate(d *pluginsdk.ResourceData, meta interface{}) er
 	stateConf := &pluginsdk.StateChangeConf{
 		Pending: pendingStatuses,
 		Target:  []string{string(databases.DatabaseStatusOnline)},
-		Refresh: func() (interface{}, string, error) {
+		Refresh: func() (any, string, error) {
 			log.Printf("[DEBUG] Checking to see if %s is online...", id)
 
 			resp, err := client.Get(ctx, id, databases.DefaultGetOperationOptions())
@@ -376,7 +376,7 @@ func resourceMsSqlDatabaseCreate(d *pluginsdk.ResourceData, meta interface{}) er
 			}
 
 			if resp.Model != nil && resp.Model.Properties != nil && resp.Model.Properties.Status != nil {
-				return resp, string(pointer.From(resp.Model.Properties.Status)), nil
+				return resp, pointer.FromEnum(resp.Model.Properties.Status), nil
 			}
 
 			return resp, "", nil
@@ -487,7 +487,7 @@ func resourceMsSqlDatabaseCreate(d *pluginsdk.ResourceData, meta interface{}) er
 		return err
 	}
 
-	longTermRetentionPolicyProps := helper.ExpandLongTermRetentionPolicy(d.Get("long_term_retention_policy").([]interface{}))
+	longTermRetentionPolicyProps := helper.ExpandLongTermRetentionPolicy(d.Get("long_term_retention_policy").([]any))
 	if longTermRetentionPolicyProps != nil {
 		longTermRetentionPolicyPayload := longtermretentionpolicies.LongTermRetentionPolicy{}
 
@@ -501,7 +501,7 @@ func resourceMsSqlDatabaseCreate(d *pluginsdk.ResourceData, meta interface{}) er
 		}
 	}
 
-	shortTermRetentionPolicyProps := helper.ExpandShortTermRetentionPolicy(d.Get("short_term_retention_policy").([]interface{}))
+	shortTermRetentionPolicyProps := helper.ExpandShortTermRetentionPolicy(d.Get("short_term_retention_policy").([]any))
 	if shortTermRetentionPolicyProps != nil {
 		shortTermRetentionPolicyPayload := backupshorttermretentionpolicies.BackupShortTermRetentionPolicy{}
 

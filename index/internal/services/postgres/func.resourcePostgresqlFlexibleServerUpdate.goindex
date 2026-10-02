@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,7 +32,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).Postgres.FlexibleServersClient
 	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
 	defer cancel()
@@ -58,7 +60,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 
 		pwdEnabled := true // it defaults to true
 		if authRaw, authExist := d.GetOk("authentication"); authExist {
-			authConfig := expandFlexibleServerAuthConfig(authRaw.([]interface{}))
+			authConfig := expandFlexibleServerAuthConfig(authRaw.([]any))
 			if authConfig.PasswordAuth != nil {
 				pwdEnabled = *authConfig.PasswordAuth == servers.PasswordBasedAuthEnabled
 			}
@@ -154,7 +156,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if d.HasChange("authentication") {
-		parameters.Properties.AuthConfig = expandFlexibleServerAuthConfigForPatch(d.Get("authentication").([]interface{}))
+		parameters.Properties.AuthConfig = expandFlexibleServerAuthConfigForPatch(d.Get("authentication").([]any))
 	}
 
 	if d.HasChanges("auto_grow_enabled", "storage_mb", "storage_tier", "storage_iops", "storage_throughput") {
@@ -177,7 +179,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if d.HasChange("maintenance_window") {
-		parameters.Properties.MaintenanceWindow = expandArmServerMaintenanceWindow(d.Get("maintenance_window").([]interface{}))
+		parameters.Properties.MaintenanceWindow = expandArmServerMaintenanceWindow(d.Get("maintenance_window").([]any))
 	}
 
 	if d.HasChange("sku_name") {
@@ -189,19 +191,19 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if d.HasChange("tags") {
-		parameters.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+		parameters.Tags = tags.Expand(d.Get("tags").(map[string]any))
 	}
 
 	if d.HasChange("high_availability") {
-		parameters.Properties.HighAvailability = expandFlexibleServerHighAvailabilityForPatch(d.Get("high_availability").([]interface{}), false)
+		parameters.Properties.HighAvailability = expandFlexibleServerHighAvailabilityForPatch(d.Get("high_availability").([]any), false)
 	}
 
 	if d.HasChange("customer_managed_key") {
-		parameters.Properties.DataEncryption = expandFlexibleServerDataEncryption(d.Get("customer_managed_key").([]interface{}))
+		parameters.Properties.DataEncryption = expandFlexibleServerDataEncryption(d.Get("customer_managed_key").([]any))
 	}
 
 	if d.HasChange("identity") {
-		identity, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+		identity, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]any))
 		if err != nil {
 			return fmt.Errorf("expanding `identity` for %s: %+v", *id, err)
 		}
@@ -214,7 +216,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if d.HasChange("cluster") {
-		parameters.Properties.Cluster = expandFlexibleServerCluster(d.Get("cluster").([]interface{}))
+		parameters.Properties.Cluster = expandFlexibleServerCluster(d.Get("cluster").([]any))
 	}
 
 	if d.HasChange("version") {
@@ -233,7 +235,7 @@ func resourcePostgresqlFlexibleServerUpdate(d *pluginsdk.ResourceData, meta inte
 			Location: location.Normalize(d.Get("location").(string)),
 			Properties: &servers.ServerProperties{
 				CreateMode:                 pointer.To(servers.CreateModeUpdate),
-				AuthConfig:                 expandFlexibleServerAuthConfig(d.Get("authentication").([]interface{})),
+				AuthConfig:                 expandFlexibleServerAuthConfig(d.Get("authentication").([]any)),
 				AdministratorLogin:         pointer.To(d.Get("administrator_login").(string)),
 				AdministratorLoginPassword: &loginPassword,
 				Network:                    expandArmServerNetwork(d),

@@ -25,7 +25,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceHDInsightHadoopClusterCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceHDInsightHadoopClusterCreate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).HDInsight.Clusters
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	extensionsClient := meta.(*clients.Client).HDInsight.Extensions
@@ -35,36 +35,36 @@ func resourceHDInsightHadoopClusterCreate(d *pluginsdk.ResourceData, meta interf
 	id := commonids.NewHDInsightClusterID(subscriptionId, d.Get("resource_group_name").(string), d.Get("name").(string))
 	location := location.Normalize(d.Get("location").(string))
 	clusterVersion := d.Get("cluster_version").(string)
-	t := d.Get("tags").(map[string]interface{})
+	t := d.Get("tags").(map[string]any)
 	tier := clusters.Tier(d.Get("tier").(string))
 	tls := d.Get("tls_min_version").(string)
 
-	componentVersionsRaw := d.Get("component_version").([]interface{})
+	componentVersionsRaw := d.Get("component_version").([]any)
 	componentVersions := expandHDInsightHadoopComponentVersion(componentVersionsRaw)
 
-	gatewayRaw := d.Get("gateway").([]interface{})
+	gatewayRaw := d.Get("gateway").([]any)
 	configurations := ExpandHDInsightsConfigurations(gatewayRaw)
 
-	metastoresRaw := d.Get("metastores").([]interface{})
+	metastoresRaw := d.Get("metastores").([]any)
 	metastores := expandHDInsightsMetastore(metastoresRaw)
 	maps.Copy(configurations, metastores)
 
-	networkPropertiesRaw := d.Get("network").([]interface{})
+	networkPropertiesRaw := d.Get("network").([]any)
 	networkProperties := ExpandHDInsightsNetwork(networkPropertiesRaw)
 
-	privateLinkConfigurationsRaw := d.Get("private_link_configuration").([]interface{})
+	privateLinkConfigurationsRaw := d.Get("private_link_configuration").([]any)
 	privateLinkConfigurations := ExpandHDInsightPrivateLinkConfigurations(privateLinkConfigurationsRaw)
 
-	computeIsolationProperties := ExpandHDInsightComputeIsolationProperties(d.Get("compute_isolation").([]interface{}))
+	computeIsolationProperties := ExpandHDInsightComputeIsolationProperties(d.Get("compute_isolation").([]any))
 
-	storageAccountsRaw := d.Get("storage_account").([]interface{})
-	storageAccountsGen2Raw := d.Get("storage_account_gen2").([]interface{})
+	storageAccountsRaw := d.Get("storage_account").([]any)
+	storageAccountsGen2Raw := d.Get("storage_account_gen2").([]any)
 	storageAccounts, expandedIdentity, err := ExpandHDInsightsStorageAccounts(storageAccountsRaw, storageAccountsGen2Raw)
 	if err != nil {
 		return fmt.Errorf("expanding `storage_account`: %s", err)
 	}
 
-	rolesRaw := d.Get("roles").([]interface{})
+	rolesRaw := d.Get("roles").([]any)
 	hadoopRoles := hdInsightRoleDefinition{
 		HeadNodeDef:      hdInsightHadoopClusterHeadNodeDefinition,
 		WorkerNodeDef:    hdInsightHadoopClusterWorkerNodeDefinition,
@@ -88,7 +88,7 @@ func resourceHDInsightHadoopClusterCreate(d *pluginsdk.ResourceData, meta interf
 		}
 	}
 
-	var configurationsRaw interface{} = configurations
+	var configurationsRaw any = configurations
 	payload := clusters.ClusterCreateParametersExtended{
 		Location: pointer.To(location),
 		Properties: &clusters.ClusterCreateProperties{
@@ -116,7 +116,7 @@ func resourceHDInsightHadoopClusterCreate(d *pluginsdk.ResourceData, meta interf
 	}
 
 	if diskEncryptionPropertiesRaw, ok := d.GetOk("disk_encryption"); ok {
-		diskEncryptionProperties, err := ExpandHDInsightsDiskEncryptionProperties(diskEncryptionPropertiesRaw.([]interface{}))
+		diskEncryptionProperties, err := ExpandHDInsightsDiskEncryptionProperties(diskEncryptionPropertiesRaw.([]any))
 		if err != nil {
 			return err
 		}
@@ -124,7 +124,7 @@ func resourceHDInsightHadoopClusterCreate(d *pluginsdk.ResourceData, meta interf
 	}
 
 	if v, ok := d.GetOk("security_profile"); ok {
-		payload.Properties.SecurityProfile = ExpandHDInsightSecurityProfile(v.([]interface{}))
+		payload.Properties.SecurityProfile = ExpandHDInsightSecurityProfile(v.([]any))
 
 		// @tombuildsstuff: this behaviour is likely wrong and wants reevaluating - users should need to explicitly define this in the config?
 		payload.Identity = &identity.SystemAndUserAssignedMap{
@@ -145,9 +145,9 @@ func resourceHDInsightHadoopClusterCreate(d *pluginsdk.ResourceData, meta interf
 
 	// We can only add an edge node after creation
 	if v, ok := d.GetOk("roles.0.edge_node"); ok {
-		edgeNodeRaw := v.([]interface{})
+		edgeNodeRaw := v.([]any)
 		applicationsClient := meta.(*clients.Client).HDInsight.Applications
-		edgeNodeConfig := edgeNodeRaw[0].(map[string]interface{})
+		edgeNodeConfig := edgeNodeRaw[0].(map[string]any)
 		applicationId := applications.NewApplicationID(id.SubscriptionId, id.ResourceGroupName, id.ClusterName, id.ClusterName) // 2 id.ClusterName's are intentional
 
 		if err := createHDInsightEdgeNodes(ctx, applicationsClient, applicationId, edgeNodeConfig); err != nil {
@@ -165,14 +165,14 @@ func resourceHDInsightHadoopClusterCreate(d *pluginsdk.ResourceData, meta interf
 
 	// We can only enable monitoring after creation
 	if v, ok := d.GetOk("monitor"); ok {
-		monitorRaw := v.([]interface{})
+		monitorRaw := v.([]any)
 		if err := enableHDInsightMonitoring(ctx, extensionsClient, id, monitorRaw); err != nil {
 			return err
 		}
 	}
 
 	if v, ok := d.GetOk("extension"); ok {
-		extensionRaw := v.([]interface{})
+		extensionRaw := v.([]any)
 		if err := enableHDInsightAzureMonitor(ctx, extensionsClient, id, extensionRaw); err != nil {
 			return err
 		}

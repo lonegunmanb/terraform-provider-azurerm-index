@@ -24,12 +24,12 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
-	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).Containers.ContainerRegistryClient.Registries
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
@@ -52,12 +52,12 @@ func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}
 
 	sku := d.Get("sku").(string)
 
-	networkRuleSet := expandNetworkRuleSet(d.Get("network_rule_set").([]interface{}))
+	networkRuleSet := expandNetworkRuleSet(d.Get("network_rule_set").([]any))
 	if networkRuleSet != nil && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
 		return fmt.Errorf("`network_rule_set` can only be specified for a Premium Sku. If you are reverting from a Premium to Basic SKU please set network_rule_set = []")
 	}
 
-	identity, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+	identity, err := identity.ExpandSystemAndUserAssignedMap(d.Get("identity").([]any))
 	if err != nil {
 		return fmt.Errorf("expanding `identity`: %+v", err)
 	}
@@ -91,7 +91,7 @@ func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}
 		Identity: identity,
 		Properties: &registries.RegistryProperties{
 			AdminUserEnabled: pointer.To(d.Get("admin_enabled").(bool)),
-			Encryption:       expandEncryption(d.Get("encryption").([]interface{})),
+			Encryption:       expandEncryption(d.Get("encryption").([]any)),
 			NetworkRuleSet:   networkRuleSet,
 			Policies: &registries.Policies{
 				QuarantinePolicy:                 expandQuarantinePolicy(d.Get("quarantine_policy_enabled").(bool)),
@@ -108,7 +108,7 @@ func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}
 			NetworkRuleBypassAllowedForTasks: pointer.To(d.Get("network_rule_bypass_for_tasks_enabled").(bool)),
 		},
 
-		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+		Tags: tags.Expand(d.Get("tags").(map[string]any)),
 	}
 
 	if err := client.CreateCallbackThenPoll(ctx, id, parameters, sdk.SetIDCallback(meta, &id, d)); err != nil {
@@ -118,7 +118,7 @@ func resourceContainerRegistryCreate(d *pluginsdk.ResourceData, meta interface{}
 
 	// the ACR is being created so no previous geo-replication locations
 	var oldGeoReplicationLocations, newGeoReplicationLocations []replications.Replication
-	newGeoReplicationLocations = expandReplications(d.Get("georeplications").([]interface{}))
+	newGeoReplicationLocations = expandReplications(d.Get("georeplications").([]any))
 	// geo replications have been specified
 	if len(newGeoReplicationLocations) > 0 {
 		if err = applyGeoReplicationLocations(ctx, meta, id, oldGeoReplicationLocations, newGeoReplicationLocations); err != nil {

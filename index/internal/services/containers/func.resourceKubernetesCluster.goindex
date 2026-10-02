@@ -22,7 +22,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/agentpools"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
-	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -31,7 +31,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
-	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
 	keyVaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
@@ -48,7 +48,7 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 		Importer: pluginsdk.ImporterValidatingResourceIdThen(func(id string) error {
 			_, err := commonids.ParseKubernetesClusterID(id)
 			return err
-		}, func(ctx context.Context, d *pluginsdk.ResourceData, meta interface{}) ([]*pluginsdk.ResourceData, error) {
+		}, func(ctx context.Context, d *pluginsdk.ResourceData, meta any) ([]*pluginsdk.ResourceData, error) {
 			resourceId, err := commonids.ParseKubernetesClusterID(d.Id())
 			if err != nil {
 				return []*pluginsdk.ResourceData{d}, err
@@ -73,33 +73,33 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 
 		CustomizeDiff: pluginsdk.CustomDiffInSequence(
 			// The behaviour of the API requires this, but this could be removed when https://github.com/Azure/azure-rest-api-specs/issues/27373 has been addressed
-			pluginsdk.ForceNewIfChange("default_node_pool.0.upgrade_settings.0.drain_timeout_in_minutes", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("default_node_pool.0.upgrade_settings.0.drain_timeout_in_minutes", func(ctx context.Context, old, new, meta any) bool {
 				return old != 0 && new == 0
 			}),
-			pluginsdk.ForceNewIfChange("default_node_pool.0.upgrade_settings.0.undrainable_node_behavior", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("default_node_pool.0.upgrade_settings.0.undrainable_node_behavior", func(ctx context.Context, old, new, meta any) bool {
 				return old != "" && new == ""
 			}),
-			pluginsdk.ForceNewIfChange("oidc_issuer_enabled", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("oidc_issuer_enabled", func(ctx context.Context, old, new, meta any) bool {
 				// The API does not allow disabling OIDC after it has been enabled
 				return old.(bool) && !new.(bool)
 			}),
 			// Migration of `identity` to `service_principal` is not allowed, the other way around is
-			pluginsdk.ForceNewIfChange("service_principal.0.client_id", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("service_principal.0.client_id", func(ctx context.Context, old, new, meta any) bool {
 				return old == "msi" || old == ""
 			}),
-			pluginsdk.ForceNewIfChange("windows_profile.0.gmsa", func(ctx context.Context, old, new, meta interface{}) bool {
-				return len(old.([]interface{})) != 0 && len(new.([]interface{})) == 0
+			pluginsdk.ForceNewIfChange("windows_profile.0.gmsa", func(ctx context.Context, old, new, meta any) bool {
+				return len(old.([]any)) != 0 && len(new.([]any)) == 0
 			}),
-			pluginsdk.ForceNewIfChange("windows_profile.0.gmsa.0.dns_server", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("windows_profile.0.gmsa.0.dns_server", func(ctx context.Context, old, new, meta any) bool {
 				return old != "" && new == ""
 			}),
-			pluginsdk.ForceNewIfChange("windows_profile.0.gmsa.0.root_domain", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("windows_profile.0.gmsa.0.root_domain", func(ctx context.Context, old, new, meta any) bool {
 				return old != "" && new == ""
 			}),
-			pluginsdk.ForceNewIfChange("api_server_access_profile.0.subnet_id", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("api_server_access_profile.0.subnet_id", func(ctx context.Context, old, new, meta any) bool {
 				return old != "" && new == ""
 			}),
-			pluginsdk.ForceNewIf("default_node_pool.0.name", func(ctx context.Context, d *schema.ResourceDiff, meta interface{}) bool {
+			pluginsdk.ForceNewIf("default_node_pool.0.name", func(ctx context.Context, d *schema.ResourceDiff, meta any) bool {
 				old, new := d.GetChange("default_node_pool.0.name")
 				defaultName := d.Get("default_node_pool.0.name")
 				tempName := d.Get("default_node_pool.0.temporary_name_for_rotation")
@@ -111,7 +111,7 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 				}
 				return true
 			}),
-			pluginsdk.ForceNewIfChange("network_profile.0.network_data_plane", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("network_profile.0.network_data_plane", func(ctx context.Context, old, new, meta any) bool {
 				oldStr := old.(string)
 				newStr := new.(string)
 
@@ -125,7 +125,7 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 
 				return true
 			}),
-			func(ctx context.Context, d *schema.ResourceDiff, meta interface{}) error {
+			func(ctx context.Context, d *schema.ResourceDiff, meta any) error {
 				if d.HasChange("network_profile.0.network_plugin") {
 					old, new := d.GetChange("network_profile.0.network_plugin")
 					oldStr := old.(string)
@@ -142,16 +142,16 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 				}
 				return nil
 			},
-			func(ctx context.Context, d *schema.ResourceDiff, meta interface{}) error {
+			func(ctx context.Context, d *schema.ResourceDiff, meta any) error {
 				if d.HasChange("oidc_issuer_enabled") {
 					d.SetNewComputed("oidc_issuer_url")
 				}
 				return nil
 			},
-			pluginsdk.ForceNewIfChange("network_profile.0.network_plugin_mode", func(ctx context.Context, _, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("network_profile.0.network_plugin_mode", func(ctx context.Context, _, new, meta any) bool {
 				return !strings.EqualFold(new.(string), string(managedclusters.NetworkPluginModeOverlay))
 			}),
-			pluginsdk.ForceNewIfChange("network_profile.0.network_policy", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("network_profile.0.network_policy", func(ctx context.Context, old, new, meta any) bool {
 				// Azure supports in-place upgrade from Azure Network Policy Manager to Cilium and Calico to Cilium
 				// Other transitions (removing policy, etc.) require cluster recreation
 				oldStr := old.(string)
@@ -170,13 +170,13 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 
 				return true
 			}),
-			pluginsdk.ForceNewIfChange("network_profile.0.pod_cidr", func(ctx context.Context, old, new, meta interface{}) bool {
+			pluginsdk.ForceNewIfChange("network_profile.0.pod_cidr", func(ctx context.Context, old, new, meta any) bool {
 				return old.(string) != ""
 			}),
-			pluginsdk.ForceNewIfChange("network_profile.0.pod_cidrs", func(ctx context.Context, old, new, meta interface{}) bool {
-				return len(old.([]interface{})) > 0
+			pluginsdk.ForceNewIfChange("network_profile.0.pod_cidrs", func(ctx context.Context, old, new, meta any) bool {
+				return len(old.([]any)) > 0
 			}),
-			func(ctx context.Context, d *schema.ResourceDiff, meta interface{}) error {
+			func(ctx context.Context, d *schema.ResourceDiff, meta any) error {
 				outboundType := d.Get("network_profile.0.outbound_type").(string)
 				artifactSource := d.Get("bootstrap_profile.0.artifact_source").(string)
 
@@ -186,8 +186,8 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 
 				return nil
 			},
-			func(ctx context.Context, d *schema.ResourceDiff, meta interface{}) error {
-				if len(d.Get("network_profile.0.advanced_networking").([]interface{})) == 1 {
+			func(ctx context.Context, d *schema.ResourceDiff, meta any) error {
+				if len(d.Get("network_profile.0.advanced_networking").([]any)) == 1 {
 					securityEnabled := d.Get("network_profile.0.advanced_networking.0.security_enabled").(bool)
 
 					if securityEnabled {
@@ -314,7 +314,7 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							Default:      "15m",
-							ValidateFunc: containerValidate.Duration,
+							ValidateFunc: validate.Duration,
 						},
 
 						"max_unready_nodes": {
@@ -335,49 +335,49 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							Computed:     true, // azignore:AZS007 - pre-existing violation
-							ValidateFunc: containerValidate.Duration,
+							ValidateFunc: validate.Duration,
 						},
 
 						"scan_interval": {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							Computed:     true, // azignore:AZS007 - pre-existing violation
-							ValidateFunc: containerValidate.Duration,
+							ValidateFunc: validate.Duration,
 						},
 
 						"scale_down_delay_after_add": {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							Computed:     true, // azignore:AZS007 - pre-existing violation
-							ValidateFunc: containerValidate.Duration,
+							ValidateFunc: validate.Duration,
 						},
 
 						"scale_down_delay_after_delete": {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							Computed:     true, // azignore:AZS007 - pre-existing violation
-							ValidateFunc: containerValidate.Duration,
+							ValidateFunc: validate.Duration,
 						},
 
 						"scale_down_delay_after_failure": {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							Computed:     true, // azignore:AZS007 - pre-existing violation
-							ValidateFunc: containerValidate.Duration,
+							ValidateFunc: validate.Duration,
 						},
 
 						"scale_down_unneeded": {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							Computed:     true, // azignore:AZS007 - pre-existing violation
-							ValidateFunc: containerValidate.Duration,
+							ValidateFunc: validate.Duration,
 						},
 
 						"scale_down_unready": {
 							Type:         pluginsdk.TypeString,
 							Optional:     true,
 							Computed:     true, // azignore:AZS007 - pre-existing violation
-							ValidateFunc: containerValidate.Duration,
+							ValidateFunc: validate.Duration,
 						},
 
 						"scale_down_utilization_threshold": {
@@ -474,7 +474,7 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 				Optional:     true,
 				ForceNew:     true,
 				ExactlyOneOf: []string{"dns_prefix", "dns_prefix_private_cluster"},
-				ValidateFunc: containerValidate.KubernetesDNSPrefix,
+				ValidateFunc: validate.KubernetesDNSPrefix,
 			},
 
 			"dns_prefix_private_cluster": {
@@ -546,7 +546,7 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 							Elem: &pluginsdk.Schema{
 								Type: pluginsdk.TypeString,
 								ValidateFunc: validation.Any(
-									dnsValidate.ValidateDnsZoneID,
+									zones.ValidateDnsZoneID,
 									privatezones.ValidatePrivateDnsZoneID,
 									validation.StringIsEmpty,
 								),
@@ -743,7 +743,7 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 							Type:         pluginsdk.TypeString,
 							Required:     true,
 							ForceNew:     true,
-							ValidateFunc: containerValidate.KubernetesAdminUserName,
+							ValidateFunc: validate.KubernetesAdminUserName,
 						},
 						"ssh_key": {
 							Type:     pluginsdk.TypeList,
@@ -1509,7 +1509,7 @@ func resourceKubernetesCluster() *pluginsdk.Resource {
 						"client_id": {
 							Type:         pluginsdk.TypeString,
 							Required:     true,
-							ValidateFunc: containerValidate.ClientID,
+							ValidateFunc: validate.ClientID,
 						},
 
 						"client_secret": {

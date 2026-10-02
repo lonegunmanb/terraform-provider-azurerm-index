@@ -36,7 +36,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta any) error {
 	tenantId := meta.(*clients.Client).Account.TenantId
 	storageClient := meta.(*clients.Client).Storage.ResourceManager
 	client := storageClient.StorageAccounts
@@ -112,7 +112,7 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 
 	expandedIdentity := existing.Model.Identity
 	if d.HasChange("identity") {
-		expandedIdentity, err = identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+		expandedIdentity, err = identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]any))
 		if err != nil {
 			return fmt.Errorf("expanding `identity`: %+v", err)
 		}
@@ -131,12 +131,12 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 		props.AllowCrossTenantReplication = pointer.To(d.Get("cross_tenant_replication_enabled").(bool))
 	}
 	if d.HasChange("custom_domain") {
-		props.CustomDomain = expandAccountCustomDomain(d.Get("custom_domain").([]interface{}))
+		props.CustomDomain = expandAccountCustomDomain(d.Get("custom_domain").([]any))
 	}
 	if d.HasChange("customer_managed_key") {
 		queueEncryptionKeyType := storageaccounts.KeyType(d.Get("queue_encryption_key_type").(string))
 		tableEncryptionKeyType := storageaccounts.KeyType(d.Get("table_encryption_key_type").(string))
-		encryptionRaw := d.Get("customer_managed_key").([]interface{})
+		encryptionRaw := d.Get("customer_managed_key").([]any)
 		encryption, err := expandAccountCustomerManagedKey(ctx, keyVaultClient, id.SubscriptionId, encryptionRaw, accountTier, accountKind, *expandedIdentity, queueEncryptionKeyType, tableEncryptionKeyType)
 		if err != nil {
 			return fmt.Errorf("expanding `customer_managed_key`: %+v", err)
@@ -193,7 +193,7 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 		props.MinimumTlsVersion = pointer.ToEnum[storageaccounts.MinimumTlsVersion](d.Get("min_tls_version").(string))
 	}
 	if d.HasChange("network_rules") {
-		props.NetworkAcls = expandAccountNetworkRules(d.Get("network_rules").([]interface{}), tenantId)
+		props.NetworkAcls = expandAccountNetworkRules(d.Get("network_rules").([]any), tenantId)
 	}
 
 	if d.HasChange("public_network_access") {
@@ -211,17 +211,17 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 	}
 
 	if d.HasChange("routing") {
-		props.RoutingPreference = expandAccountRoutingPreference(d.Get("routing").([]interface{}))
+		props.RoutingPreference = expandAccountRoutingPreference(d.Get("routing").([]any))
 	}
 	if d.HasChange("sas_policy") {
 		// TODO: Currently, there is no way to represent a `null` value in the payload - instead it will be omitted, `sas_policy` can not be disabled once enabled.
-		props.SasPolicy = expandAccountSASPolicy(d.Get("sas_policy").([]interface{}))
+		props.SasPolicy = expandAccountSASPolicy(d.Get("sas_policy").([]any))
 	}
 	if d.HasChange("sftp_enabled") {
 		props.IsSftpEnabled = pointer.To(d.Get("sftp_enabled").(bool))
 	}
 	if d.HasChange("immutability_policy") {
-		props.ImmutableStorageWithVersioning = expandAccountImmutabilityPolicy(d.Get("immutability_policy").([]interface{}))
+		props.ImmutableStorageWithVersioning = expandAccountImmutabilityPolicy(d.Get("immutability_policy").([]any))
 	}
 
 	payload := storageaccounts.StorageAccountCreateParameters{
@@ -265,7 +265,7 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 		payload.Identity = expandedIdentity
 	}
 	if d.HasChange("tags") {
-		payload.Tags = tags.Expand(d.Get("tags").(map[string]interface{}))
+		payload.Tags = tags.Expand(d.Get("tags").(map[string]any))
 	}
 
 	if updateRequired {
@@ -292,7 +292,7 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 			}
 		}
 
-		expandAADFilesAuthentication, err := expandAccountAzureFilesAuthentication(d.Get("azure_files_authentication").([]interface{}))
+		expandAADFilesAuthentication, err := expandAccountAzureFilesAuthentication(d.Get("azure_files_authentication").([]any))
 		if err != nil {
 			return fmt.Errorf("expanding `azure_files_authentication`: %+v", err)
 		}
@@ -315,7 +315,7 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 			return fmt.Errorf("`blob_properties` aren't supported for account kind %q in sku tier %q", accountKind, accountTier)
 		}
 
-		blobProperties, err := expandAccountBlobServiceProperties(accountKind, d.Get("blob_properties").([]interface{}))
+		blobProperties, err := expandAccountBlobServiceProperties(accountKind, d.Get("blob_properties").([]any))
 		if err != nil {
 			return err
 		}
@@ -326,11 +326,11 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 
 		// Disable restore_policy first. Disabling restore_policy and while setting delete_retention_policy.allow_permanent_delete to true cause error.
 		// Issue : https://github.com/Azure/azure-rest-api-specs/issues/11237
-		if v := d.Get("blob_properties.0.restore_policy"); d.HasChange("blob_properties.0.restore_policy") && len(v.([]interface{})) == 0 {
+		if v := d.Get("blob_properties.0.restore_policy"); d.HasChange("blob_properties.0.restore_policy") && len(v.([]any)) == 0 {
 			log.Print("[DEBUG] Disabling RestorePolicy prior to changing DeleteRetentionPolicy")
 			blobPayload := blobservices.BlobServiceProperties{
 				Properties: &blobservices.BlobServicePropertiesProperties{
-					RestorePolicy: expandAccountBlobPropertiesRestorePolicy(v.([]interface{})),
+					RestorePolicy: expandAccountBlobPropertiesRestorePolicy(v.([]any)),
 				},
 			}
 			if _, err := storageClient.BlobServices.SetServiceProperties(ctx, *id, blobPayload); err != nil {
@@ -357,7 +357,7 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta interface{}) e
 			return fmt.Errorf("`share_properties` aren't supported for account kind %q in sku tier %q", accountKind, accountTier)
 		}
 
-		sharePayload := expandAccountShareProperties(d.Get("share_properties").([]interface{}))
+		sharePayload := expandAccountShareProperties(d.Get("share_properties").([]any))
 		// The API complains if any multichannel info is sent on non premium fileshares. Even if multichannel is set to false
 		if accountTier != storageaccounts.SkuTierPremium {
 			// Error if the user has tried to enable multichannel on a standard tier storage account

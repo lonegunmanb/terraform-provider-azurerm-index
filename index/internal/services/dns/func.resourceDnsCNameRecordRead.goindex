@@ -9,16 +9,18 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/recordsets"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/trafficmanager/2022-04-01/trafficmanagers"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	cdn "github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/dns/helper"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/dns/migration"
 	frontdoor "github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceDnsCNameRecordRead(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceDnsCNameRecordRead(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).Dns.RecordSets
 	ctx, cancel := timeouts.ForRead(meta.(*clients.Client).StopContext, d)
 	defer cancel()
@@ -37,42 +39,5 @@ func resourceDnsCNameRecordRead(d *pluginsdk.ResourceData, meta interface{}) err
 		return fmt.Errorf("retrieving %s: %+v", *id, err)
 	}
 
-	d.Set("name", id.RelativeRecordSetName)
-	d.Set("resource_group_name", id.ResourceGroupName)
-	d.Set("zone_name", id.DnsZoneName)
-
-	if model := resp.Model; model != nil {
-		if props := model.Properties; props != nil {
-			d.Set("fqdn", props.Fqdn)
-			d.Set("ttl", props.TTL)
-
-			cname := ""
-			if props.CNAMERecord != nil && props.CNAMERecord.Cname != nil {
-				cname = *props.CNAMERecord.Cname
-			}
-			d.Set("record", cname)
-
-			targetResourceId := ""
-			if props.TargetResource != nil && props.TargetResource.Id != nil {
-				// TODO update this once https://github.com/hashicorp/go-azure-helpers/issues/189 is resolved
-				targetResourceId = *props.TargetResource.Id
-				if recordTypeID, err := recordsets.ParseRecordTypeIDInsensitively(targetResourceId); err == nil {
-					targetResourceId = recordTypeID.ID()
-				} else if trafficManagerID, err := trafficmanagers.ParseEndpointTypeIDInsensitively(targetResourceId); err == nil {
-					targetResourceId = trafficManagerID.ID()
-				} else if cdnID, err := cdn.EndpointIDInsensitively(targetResourceId); err == nil {
-					targetResourceId = cdnID.ID()
-				} else if frontDoorID, err := frontdoor.FrontendEndpointIDInsensitively(targetResourceId); err == nil {
-					targetResourceId = frontDoorID.ID()
-				}
-			}
-			d.Set("target_resource_id", targetResourceId)
-
-			if err := tags.FlattenAndSet(d, props.Metadata); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
+	return resourceDnsCNameRecordFlatten(d, id, resp.Model)
 }

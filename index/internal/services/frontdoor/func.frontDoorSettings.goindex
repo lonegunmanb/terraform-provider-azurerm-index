@@ -9,11 +9,11 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 )
 func frontDoorSettings(d *pluginsdk.ResourceDiff) error {
-	routingRules := d.Get("routing_rule").([]interface{})
-	configFrontendEndpoints := d.Get("frontend_endpoint").([]interface{})
-	backendPools := d.Get("backend_pool").([]interface{})
-	loadBalancingSettings := d.Get("backend_pool_load_balancing").([]interface{})
-	healthProbeSettings := d.Get("backend_pool_health_probe").([]interface{})
+	routingRules := d.Get("routing_rule").([]any)
+	configFrontendEndpoints := d.Get("frontend_endpoint").([]any)
+	backendPools := d.Get("backend_pool").([]any)
+	loadBalancingSettings := d.Get("backend_pool_load_balancing").([]any)
+	healthProbeSettings := d.Get("backend_pool_health_probe").([]any)
 
 	if len(configFrontendEndpoints) == 0 {
 		return errors.New(`"frontend_endpoint": must have at least one "frontend_endpoint" defined, found 0`)
@@ -21,10 +21,10 @@ func frontDoorSettings(d *pluginsdk.ResourceDiff) error {
 
 	// Loop over all of the Routing Rules and validate that only one type of configuration is defined per Routing Rule
 	for _, rr := range routingRules {
-		routingRule := rr.(map[string]interface{})
+		routingRule := rr.(map[string]any)
 		routingRuleName := routingRule["name"]
-		redirectConfig := routingRule["redirect_configuration"].([]interface{})
-		forwardConfig := routingRule["forwarding_configuration"].([]interface{})
+		redirectConfig := routingRule["redirect_configuration"].([]any)
+		forwardConfig := routingRule["forwarding_configuration"].([]any)
 
 		// Check 0. validate that at least one routing configuration exists per routing rule
 		if len(redirectConfig) == 0 && len(forwardConfig) == 0 {
@@ -38,7 +38,7 @@ func frontDoorSettings(d *pluginsdk.ResourceDiff) error {
 
 		// Check 2. routing rule is a forwarding_configuration type make sure the backend_pool_name exists in the configuration file
 		if len(forwardConfig) > 0 {
-			fc := forwardConfig[0].(map[string]interface{})
+			fc := forwardConfig[0].(map[string]any)
 
 			if err := verifyBackendPoolExists(fc["backend_pool_name"].(string), backendPools); err != nil {
 				return fmt.Errorf(`routing_rule %s is invalid. %+v`, routingRuleName, err)
@@ -46,7 +46,7 @@ func frontDoorSettings(d *pluginsdk.ResourceDiff) error {
 
 			// cacheConfiguration validation
 			cacheEnabled := fc["cache_enabled"].(bool)
-			cacheQueryParameters := fc["cache_query_parameters"].([]interface{})
+			cacheQueryParameters := fc["cache_query_parameters"].([]any)
 
 			// set cacheQueryParameters to nil if empty
 			if len(cacheQueryParameters) < 1 {
@@ -83,7 +83,7 @@ func frontDoorSettings(d *pluginsdk.ResourceDiff) error {
 		}
 
 		// Check 3. validate that each routing rule frontend_endpoints are actually defined in the resource schema
-		if routingRuleFrontends := routingRule["frontend_endpoints"].([]interface{}); len(routingRuleFrontends) > 0 {
+		if routingRuleFrontends := routingRule["frontend_endpoints"].([]any); len(routingRuleFrontends) > 0 {
 			if err := verifyRoutingRuleFrontendEndpoints(routingRuleFrontends, configFrontendEndpoints); err != nil {
 				return fmt.Errorf(`"routing_rule":%q %+v`, routingRuleName, err)
 			}

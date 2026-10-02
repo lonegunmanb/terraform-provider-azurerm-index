@@ -23,7 +23,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 	"github.com/jackofallops/kermit/sdk/appplatform/2023-05-01-preview/appplatform"
 )
-func resourceSpringCloudServiceCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceSpringCloudServiceCreate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).AppPlatform.ServicesClient
 	configServersClient := meta.(*clients.Client).AppPlatform.ConfigServersClient
 	monitoringSettingsClient := meta.(*clients.Client).AppPlatform.MonitoringSettingsClient
@@ -56,14 +56,14 @@ func resourceSpringCloudServiceCreate(d *pluginsdk.ResourceData, meta interface{
 	resource := appplatform.ServiceResource{
 		Location: pointer.To(location),
 		Properties: &appplatform.ClusterResourceProperties{
-			NetworkProfile:      expandSpringCloudNetwork(d.Get("network").([]interface{})),
+			NetworkProfile:      expandSpringCloudNetwork(d.Get("network").([]any)),
 			ZoneRedundant:       pointer.To(d.Get("zone_redundant").(bool)),
-			MarketplaceResource: expandSpringCloudMarketplaceResource(d.Get("marketplace").([]interface{})),
+			MarketplaceResource: expandSpringCloudMarketplaceResource(d.Get("marketplace").([]any)),
 		},
 		Sku: &appplatform.Sku{
 			Name: pointer.To(d.Get("sku_name").(string)),
 		},
-		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+		Tags: tags.Expand(d.Get("tags").(map[string]any)),
 	}
 
 	if enabled := d.Get("log_stream_public_endpoint_enabled").(bool); enabled {
@@ -79,7 +79,7 @@ func resourceSpringCloudServiceCreate(d *pluginsdk.ResourceData, meta interface{
 		resource.Sku.Tier = pointer.To(d.Get("sku_tier").(string))
 	}
 
-	gitProperty, err := expandSpringCloudConfigServerGitProperty(d.Get("config_server_git_setting").([]interface{}))
+	gitProperty, err := expandSpringCloudConfigServerGitProperty(d.Get("config_server_git_setting").([]any))
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func resourceSpringCloudServiceCreate(d *pluginsdk.ResourceData, meta interface{
 	}
 
 	monitorSettings := appplatform.MonitoringSettingResource{
-		Properties: expandSpringCloudTrace(d.Get("trace").([]interface{})),
+		Properties: expandSpringCloudTrace(d.Get("trace").([]any)),
 	}
 	updateFuture, err := monitoringSettingsClient.UpdatePut(ctx, id.ResourceGroupName, id.ServiceName, monitorSettings)
 	if err != nil {
@@ -131,12 +131,12 @@ func resourceSpringCloudServiceCreate(d *pluginsdk.ResourceData, meta interface{
 	}
 
 	if skuName == "E0" {
-		new := expandSpringCloudContainerRegistries(d.Get("container_registry").([]interface{}))
+		new := expandSpringCloudContainerRegistries(d.Get("container_registry").([]any))
 		if err = applyContainerRegistries(ctx, containerRegistryClient, id, nil, new); err != nil {
 			return fmt.Errorf("applying container registries for %s: %+v", id, err)
 		}
 		buildResource := appplatform.BuildService{
-			Properties: pointer.To(expandSpringCloudBuildService(d.Get("default_build_service").([]interface{}), id)),
+			Properties: pointer.To(expandSpringCloudBuildService(d.Get("default_build_service").([]any), id)),
 		}
 		buildServiceCreateFuture, err := buildServiceClient.CreateOrUpdate(ctx, id.ResourceGroupName, id.ServiceName, "default", buildResource)
 		if err != nil {

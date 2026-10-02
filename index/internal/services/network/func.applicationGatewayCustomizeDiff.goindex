@@ -25,13 +25,13 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
-	networkValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func applicationGatewayCustomizeDiff(ctx context.Context, d *pluginsdk.ResourceDiff, _ interface{}) error {
+func applicationGatewayCustomizeDiff(ctx context.Context, d *pluginsdk.ResourceDiff, _ any) error {
 	_, hasAutoscaleConfig := d.GetOk("autoscale_configuration.0")
 	capacity, hasCapacity := d.GetOk("sku.0.capacity")
 	tier := d.Get("sku.0.tier").(string)
@@ -44,19 +44,19 @@ func applicationGatewayCustomizeDiff(ctx context.Context, d *pluginsdk.ResourceD
 		return fmt.Errorf("the Application Gateway must specify either `capacity` or `autoscale_configuration` for the selected SKU tier %q", tier)
 	}
 
-	if err := checkSslPolicy(d.Get("ssl_policy").([]interface{})); err != nil {
+	if err := checkSslPolicy(d.Get("ssl_policy").([]any)); err != nil {
 		return err
 	}
 
-	sslProfiles := d.Get("ssl_profile").([]interface{})
+	sslProfiles := d.Get("ssl_profile").([]any)
 	if len(sslProfiles) > 0 {
 		for _, profile := range sslProfiles {
 			if profile == nil {
 				continue
 			}
-			v := profile.(map[string]interface{})
+			v := profile.(map[string]any)
 			if policy, ok := v["ssl_policy"]; ok && policy != nil {
-				if err := checkSslPolicy(policy.([]interface{})); err != nil {
+				if err := checkSslPolicy(policy.([]any)); err != nil {
 					return err
 				}
 			}
@@ -75,41 +75,41 @@ func applicationGatewayCustomizeDiff(ctx context.Context, d *pluginsdk.ResourceD
 
 	backendHttpSettings := d.Get("backend_http_settings").(*schema.Set).List()
 	for _, rawSettings := range backendHttpSettings {
-		settings := rawSettings.(map[string]interface{})
+		settings := rawSettings.(map[string]any)
 
 		if settings["sni_name"].(string) != "" && !settings["sni_validation_enabled"].(bool) {
 			return fmt.Errorf("`sni_name` can only be set when `sni_validation_enabled` is set to `true` in `backend_http_settings` block `%s`", settings["name"].(string))
 		}
 	}
 
-	if tier != "" && d.HasChange("sku.0.tier") && slices.Contains(networkValidate.DeprecatedV1SkuTiers, tier) {
+	if tier != "" && d.HasChange("sku.0.tier") && slices.Contains(validate.DeprecatedV1SkuTiers, tier) {
 		return fmt.Errorf("new creation / update to `%s` SKU tier is no longer supported, please use supported SKU tiers: `Basic`, `Standard_v2`, `WAF_v2`, refer to https://aka.ms/V1retirement", tier)
 	}
 
 	if d.HasChange("sku.0.name") {
 		skuName := d.Get("sku.0.name").(string)
 
-		if skuName != "" && slices.Contains(networkValidate.DeprecatedV1SkuNames, skuName) {
+		if skuName != "" && slices.Contains(validate.DeprecatedV1SkuNames, skuName) {
 			return fmt.Errorf("new creation / update to `%s` SKU name is no longer supported, please use supported SKU names: `Basic`, `Standard_v2`, `WAF_v2`, refer to https://aka.ms/V1retirement", skuName)
 		}
 	}
 
-	for _, raw := range d.Get("backend").([]interface{}) {
-		v := raw.(map[string]interface{})
+	for _, raw := range d.Get("backend").([]any) {
+		v := raw.(map[string]any)
 		if v["host_name"].(string) != "" && strings.EqualFold(v["protocol"].(string), string(applicationgateways.ApplicationGatewayProtocolTcp)) {
 			return fmt.Errorf("`host_name` cannot be set when `protocol` is `Tcp` for `backend` %q", v["name"].(string))
 		}
 	}
 
 	for _, raw := range d.Get("backend_http_settings").(*pluginsdk.Set).List() {
-		v := raw.(map[string]interface{})
+		v := raw.(map[string]any)
 		if v["host_name"].(string) != "" && v["pick_host_name_from_backend_address"].(bool) {
 			return fmt.Errorf("only one of `host_name` or `pick_host_name_from_backend_address` can be set for `backend_http_settings` %q", v["name"].(string))
 		}
 	}
 
 	for _, raw := range d.Get("listener").(*pluginsdk.Set).List() {
-		v := raw.(map[string]interface{})
+		v := raw.(map[string]any)
 		if v["host_names"].(*pluginsdk.Set).Len() > 0 && strings.EqualFold(v["protocol"].(string), string(applicationgateways.ApplicationGatewayProtocolTcp)) {
 			return fmt.Errorf("`host_names` cannot be set when `protocol` is `Tcp` for `listener` %q", v["name"].(string))
 		}
@@ -119,7 +119,7 @@ func applicationGatewayCustomizeDiff(ctx context.Context, d *pluginsdk.ResourceD
 	}
 
 	for _, raw := range d.Get("probe").(*schema.Set).List() {
-		v := raw.(map[string]interface{})
+		v := raw.(map[string]any)
 		protocol := v["protocol"].(string)
 		isHTTPProtocol := strings.EqualFold(protocol, string(applicationgateways.ApplicationGatewayProtocolHTTP)) || strings.EqualFold(protocol, string(applicationgateways.ApplicationGatewayProtocolHTTPS))
 		isTcpTlsProtocol := strings.EqualFold(protocol, string(applicationgateways.ApplicationGatewayProtocolTcp)) || strings.EqualFold(protocol, string(applicationgateways.ApplicationGatewayProtocolTls))
@@ -136,7 +136,7 @@ func applicationGatewayCustomizeDiff(ctx context.Context, d *pluginsdk.ResourceD
 
 		if isTcpTlsProtocol {
 			hasPath := v["path"].(string) != ""
-			matchConfigs := v["match"].([]interface{})
+			matchConfigs := v["match"].([]any)
 			hasMatch := len(matchConfigs) > 0 && matchConfigs[0] != nil
 			if hasHost || hasPickHost || hasPath || hasMatch {
 				return fmt.Errorf("`host`, `pick_host_name_from_backend_http_settings`, `path`, and `match` cannot be set when `protocol` is `Tcp` or `Tls` for `probe` %q", v["name"].(string))

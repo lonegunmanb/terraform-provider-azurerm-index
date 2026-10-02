@@ -22,7 +22,7 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/agentpools"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
-	dnsValidate "github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dns/2018-05-01/zones"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -31,14 +31,14 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
-	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
 	keyVaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/suppress"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta any) error {
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	client := meta.(*clients.Client).Containers.KubernetesClustersClient
 	keyVaultsClient := meta.(*clients.Client).KeyVault
@@ -69,7 +69,7 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 	dnsPrefix := d.Get("dns_prefix").(string)
 	kubernetesVersion := d.Get("kubernetes_version").(string)
 
-	linuxProfileRaw := d.Get("linux_profile").([]interface{})
+	linuxProfileRaw := d.Get("linux_profile").([]any)
 	linuxProfile := expandKubernetesClusterLinuxProfile(linuxProfileRaw)
 
 	// NOTE: we /could/ validate the default node pool version here - but since the entire cluster deployment
@@ -98,7 +98,7 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 		return err
 	}
 
-	networkProfileRaw := d.Get("network_profile").([]interface{})
+	networkProfileRaw := d.Get("network_profile").([]any)
 	networkProfile, err := expandKubernetesClusterNetworkProfile(networkProfileRaw, d)
 	if err != nil {
 		return err
@@ -111,18 +111,18 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 
 	var azureADProfile *managedclusters.ManagedClusterAADProfile
 	if v, ok := d.GetOk("azure_active_directory_role_based_access_control"); ok {
-		azureADProfile = expandKubernetesClusterAzureActiveDirectoryRoleBasedAccessControl(v.([]interface{}))
+		azureADProfile = expandKubernetesClusterAzureActiveDirectoryRoleBasedAccessControl(v.([]any))
 	}
 
-	t := d.Get("tags").(map[string]interface{})
+	t := d.Get("tags").(map[string]any)
 
-	windowsProfileRaw := d.Get("windows_profile").([]interface{})
+	windowsProfileRaw := d.Get("windows_profile").([]any)
 	windowsProfile := expandKubernetesClusterWindowsProfile(windowsProfileRaw)
 
-	workloadAutoscalerProfileRaw := d.Get("workload_autoscaler_profile").([]interface{})
+	workloadAutoscalerProfileRaw := d.Get("workload_autoscaler_profile").([]any)
 	workloadAutoscalerProfile := expandKubernetesClusterWorkloadAutoscalerProfile(workloadAutoscalerProfileRaw, d)
 
-	nodeProvisioningProfileRaw := d.Get("node_provisioning_profile").([]interface{})
+	nodeProvisioningProfileRaw := d.Get("node_provisioning_profile").([]any)
 	nodeProvisioningProfile := expandKubernetesClusterNodeProvisioningProfile(nodeProvisioningProfileRaw)
 
 	apiAccessProfile := expandKubernetesClusterAPIAccessProfile(d)
@@ -132,31 +132,31 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 
 	nodeResourceGroup := d.Get("node_resource_group").(string)
 
-	autoScalerProfileRaw := d.Get("auto_scaler_profile").([]interface{})
+	autoScalerProfileRaw := d.Get("auto_scaler_profile").([]any)
 	autoScalerProfile := expandKubernetesClusterAutoScalerProfile(autoScalerProfileRaw)
 
-	azureMonitorKubernetesMetricsRaw := d.Get("monitor_metrics").([]interface{})
+	azureMonitorKubernetesMetricsRaw := d.Get("monitor_metrics").([]any)
 	azureMonitorProfile := expandKubernetesClusterAzureMonitorProfile(azureMonitorKubernetesMetricsRaw)
 
-	bootstrapProfileRaw := d.Get("bootstrap_profile").([]interface{})
+	bootstrapProfileRaw := d.Get("bootstrap_profile").([]any)
 	bootstrapProfile := expandBootstrapProfile(bootstrapProfileRaw)
 
-	httpProxyConfigRaw := d.Get("http_proxy_config").([]interface{})
+	httpProxyConfigRaw := d.Get("http_proxy_config").([]any)
 	httpProxyConfig := expandKubernetesClusterHttpProxyConfig(httpProxyConfigRaw)
 
 	enableOidcIssuer := d.Get("oidc_issuer_enabled").(bool)
 	oidcIssuerProfile := expandKubernetesClusterOidcIssuerProfile(enableOidcIssuer)
 
-	storageProfileRaw := d.Get("storage_profile").([]interface{})
+	storageProfileRaw := d.Get("storage_profile").([]any)
 	storageProfile := expandStorageProfile(storageProfileRaw)
 
-	upgradeOverrideSettingRaw := d.Get("upgrade_override").([]interface{})
+	upgradeOverrideSettingRaw := d.Get("upgrade_override").([]any)
 	upgradeOverrideSetting := expandKubernetesClusterUpgradeOverrideSetting(upgradeOverrideSettingRaw)
 
 	// assemble securityProfile (Defender, WorkloadIdentity, ImageCleaner, AzureKeyVaultKms)
 	securityProfile := &managedclusters.ManagedClusterSecurityProfile{}
 
-	microsoftDefenderRaw := d.Get("microsoft_defender").([]interface{})
+	microsoftDefenderRaw := d.Get("microsoft_defender").([]any)
 	securityProfile.Defender = expandKubernetesClusterMicrosoftDefender(d, microsoftDefenderRaw)
 
 	workloadIdentity := false
@@ -179,7 +179,7 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 		}
 	}
 
-	azureKeyVaultKmsRaw := d.Get("key_management_service").([]interface{})
+	azureKeyVaultKmsRaw := d.Get("key_management_service").([]any)
 	securityProfile.AzureKeyVaultKms, err = expandKubernetesClusterAzureKeyVaultKms(ctx, keyVaultsClient, id.SubscriptionId, d, azureKeyVaultKmsRaw)
 	if err != nil {
 		return err
@@ -207,7 +207,7 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 		autoUpgradeProfile.NodeOSUpgradeChannel = pointer.ToEnum[managedclusters.NodeOSUpgradeChannel](nodeOsChannelUpgrade)
 	}
 
-	if customCaTrustCertListRaw := d.Get("custom_ca_trust_certificates_base64").([]interface{}); len(customCaTrustCertListRaw) > 0 {
+	if customCaTrustCertListRaw := d.Get("custom_ca_trust_certificates_base64").([]any); len(customCaTrustCertListRaw) > 0 {
 		securityProfile.CustomCATrustCertificates = pluginsdk.ExpandStringSlice(customCaTrustCertListRaw)
 	}
 
@@ -252,9 +252,9 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 			Enabled: pointer.To(true),
 		}
 	}
-	managedClusterIdentityRaw := d.Get("identity").([]interface{})
-	kubernetesClusterIdentityRaw := d.Get("kubelet_identity").([]interface{})
-	servicePrincipalProfileRaw := d.Get("service_principal").([]interface{})
+	managedClusterIdentityRaw := d.Get("identity").([]any)
+	kubernetesClusterIdentityRaw := d.Get("kubelet_identity").([]any)
+	servicePrincipalProfileRaw := d.Get("service_principal").([]any)
 
 	if len(managedClusterIdentityRaw) == 0 && len(servicePrincipalProfileRaw) == 0 {
 		return fmt.Errorf("either an `identity` or `service_principal` block must be specified for cluster authentication")
@@ -276,7 +276,7 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 
 	servicePrincipalSet := false
 	if len(servicePrincipalProfileRaw) > 0 {
-		servicePrincipalProfileVal := servicePrincipalProfileRaw[0].(map[string]interface{})
+		servicePrincipalProfileVal := servicePrincipalProfileRaw[0].(map[string]any)
 		parameters.Properties.ServicePrincipalProfile = &managedclusters.ManagedClusterServicePrincipalProfile{
 			ClientId: servicePrincipalProfileVal["client_id"].(string),
 			Secret:   pointer.To(servicePrincipalProfileVal["client_secret"].(string)),
@@ -306,11 +306,11 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 		parameters.Properties.SupportPlan = pointer.ToEnum[managedclusters.KubernetesSupportPlan](v)
 	}
 
-	if ingressProfile := expandKubernetesClusterIngressProfile(d, d.Get("web_app_routing").([]interface{})); ingressProfile != nil {
+	if ingressProfile := expandKubernetesClusterIngressProfile(d, d.Get("web_app_routing").([]any)); ingressProfile != nil {
 		parameters.Properties.IngressProfile = ingressProfile
 	}
 
-	if serviceMeshProfile := expandKubernetesClusterServiceMeshProfile(d.Get("service_mesh_profile").([]interface{}), &managedclusters.ServiceMeshProfile{}); serviceMeshProfile != nil {
+	if serviceMeshProfile := expandKubernetesClusterServiceMeshProfile(d.Get("service_mesh_profile").([]any), &managedclusters.ServiceMeshProfile{}); serviceMeshProfile != nil {
 		parameters.Properties.ServiceMeshProfile = serviceMeshProfile
 	}
 
@@ -322,7 +322,7 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 	if maintenanceConfigRaw, ok := d.GetOk("maintenance_window"); ok {
 		client := meta.(*clients.Client).Containers.MaintenanceConfigurationsClient
 		parameters := maintenanceconfigurations.MaintenanceConfiguration{
-			Properties: expandKubernetesClusterMaintenanceConfigurationDefault(maintenanceConfigRaw.([]interface{})),
+			Properties: expandKubernetesClusterMaintenanceConfigurationDefault(maintenanceConfigRaw.([]any)),
 		}
 		maintenanceId := maintenanceconfigurations.NewMaintenanceConfigurationID(id.SubscriptionId, id.ResourceGroupName, id.ManagedClusterName, "default")
 		if _, err := client.CreateOrUpdate(ctx, maintenanceId, parameters); err != nil {
@@ -333,7 +333,7 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 	if maintenanceConfigRaw, ok := d.GetOk("maintenance_window_auto_upgrade"); ok {
 		client := meta.(*clients.Client).Containers.MaintenanceConfigurationsClient
 		parameters := maintenanceconfigurations.MaintenanceConfiguration{
-			Properties: expandKubernetesClusterMaintenanceConfigurationForCreate(maintenanceConfigRaw.([]interface{})),
+			Properties: expandKubernetesClusterMaintenanceConfigurationForCreate(maintenanceConfigRaw.([]any)),
 		}
 		maintenanceId := maintenanceconfigurations.NewMaintenanceConfigurationID(id.SubscriptionId, id.ResourceGroupName, id.ManagedClusterName, "aksManagedAutoUpgradeSchedule")
 		if _, err := client.CreateOrUpdate(ctx, maintenanceId, parameters); err != nil {
@@ -344,7 +344,7 @@ func resourceKubernetesClusterCreate(d *pluginsdk.ResourceData, meta interface{}
 	if maintenanceConfigRaw, ok := d.GetOk("maintenance_window_node_os"); ok {
 		client := meta.(*clients.Client).Containers.MaintenanceConfigurationsClient
 		parameters := maintenanceconfigurations.MaintenanceConfiguration{
-			Properties: expandKubernetesClusterMaintenanceConfigurationForCreate(maintenanceConfigRaw.([]interface{})),
+			Properties: expandKubernetesClusterMaintenanceConfigurationForCreate(maintenanceConfigRaw.([]any)),
 		}
 		maintenanceId := maintenanceconfigurations.NewMaintenanceConfigurationID(id.SubscriptionId, id.ResourceGroupName, id.ManagedClusterName, "aksManagedNodeOSUpgradeSchedule")
 		if _, err := client.CreateOrUpdate(ctx, maintenanceId, parameters); err != nil {

@@ -15,8 +15,8 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumes"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
-	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -27,10 +27,10 @@ func (r NetAppVolumeGroupSAPHanaResource) CustomizeDiff() sdk.ResourceFunc {
 			rd := metadata.ResourceDiff
 
 			// Validate NFSv3 usage restrictions for SAP HANA volume groups
-			volumes := rd.Get("volume").([]interface{})
+			volumes := rd.Get("volume").([]any)
 			for i, vol := range volumes {
-				volumeMap := vol.(map[string]interface{})
-				protocols := volumeMap["protocols"].([]interface{})
+				volumeMap := vol.(map[string]any)
+				protocols := volumeMap["protocols"].([]any)
 				volumeSpecName := volumeMap["volume_spec_name"].(string)
 
 				// Check if NFSv3 is being used on critical SAP HANA volumes
@@ -49,8 +49,8 @@ func (r NetAppVolumeGroupSAPHanaResource) CustomizeDiff() sdk.ResourceFunc {
 
 				if rd.HasChange(protocolsKey) {
 					old, new := rd.GetChange(protocolsKey)
-					oldProtocols := old.([]interface{})
-					newProtocols := new.([]interface{})
+					oldProtocols := old.([]any)
+					newProtocols := new.([]any)
 
 					// Convert to string slices for validation
 					oldProtocolsStr := make([]string, len(oldProtocols))
@@ -65,13 +65,13 @@ func (r NetAppVolumeGroupSAPHanaResource) CustomizeDiff() sdk.ResourceFunc {
 
 					// Get the export policy rules configuration for this volume
 					exportPolicyRulesKey := fmt.Sprintf("volume.%d.export_policy_rule", i)
-					exportPolicyRules := rd.Get(exportPolicyRulesKey).([]interface{})
+					exportPolicyRules := rd.Get(exportPolicyRulesKey).([]any)
 
 					// For volume groups, kerberos and data replication are not directly supported, so we pass empty values
 					var kerberosEnabled bool
-					var dataReplication []interface{}
+					var dataReplication []any
 
-					validationErrors := netAppValidate.ValidateNetAppVolumeProtocolConversion(oldProtocolsStr, newProtocolsStr, kerberosEnabled, dataReplication, exportPolicyRules)
+					validationErrors := validate.ValidateNetAppVolumeProtocolConversion(oldProtocolsStr, newProtocolsStr, kerberosEnabled, dataReplication, exportPolicyRules)
 					for _, err := range validationErrors {
 						return err
 					}

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,7 +32,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta any) error {
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	client := meta.(*clients.Client).Postgres.FlexibleServersClient
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
@@ -82,7 +84,7 @@ func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta inte
 
 		pwdEnabled := true // it defaults to true
 		if authRaw, authExist := d.GetOk("authentication"); authExist {
-			authConfig := expandFlexibleServerAuthConfig(authRaw.([]interface{}))
+			authConfig := expandFlexibleServerAuthConfig(authRaw.([]any))
 			if authConfig.PasswordAuth != nil {
 				pwdEnabled = *authConfig.PasswordAuth == servers.PasswordBasedAuthEnabled
 			}
@@ -138,13 +140,13 @@ func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta inte
 		Properties: &servers.ServerProperties{
 			Network:          expandArmServerNetwork(d),
 			Storage:          storage,
-			HighAvailability: expandFlexibleServerHighAvailability(d.Get("high_availability").([]interface{}), true),
+			HighAvailability: expandFlexibleServerHighAvailability(d.Get("high_availability").([]any), true),
 			Backup:           expandArmServerBackup(d),
-			DataEncryption:   expandFlexibleServerDataEncryption(d.Get("customer_managed_key").([]interface{})),
-			Cluster:          expandFlexibleServerCluster(d.Get("cluster").([]interface{})),
+			DataEncryption:   expandFlexibleServerDataEncryption(d.Get("customer_managed_key").([]any)),
+			Cluster:          expandFlexibleServerCluster(d.Get("cluster").([]any)),
 		},
 		Sku:  sku,
-		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+		Tags: tags.Expand(d.Get("tags").(map[string]any)),
 	}
 
 	if v, ok := d.GetOk("administrator_login"); ok && v.(string) != "" {
@@ -190,10 +192,10 @@ func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta inte
 	}
 
 	if authRaw, ok := d.GetOk("authentication"); ok {
-		parameters.Properties.AuthConfig = expandFlexibleServerAuthConfig(authRaw.([]interface{}))
+		parameters.Properties.AuthConfig = expandFlexibleServerAuthConfig(authRaw.([]any))
 	}
 
-	identity, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]interface{}))
+	identity, err := identity.ExpandLegacySystemAndUserAssignedMap(d.Get("identity").([]any))
 	if err != nil {
 		return fmt.Errorf("expanding `identity`")
 	}
@@ -209,7 +211,7 @@ func resourcePostgresqlFlexibleServerCreate(d *pluginsdk.ResourceData, meta inte
 	// `maintenance_window` could only be updated with, could not be created with
 	if v, ok := d.GetOk("maintenance_window"); ok {
 		requireAdditionalUpdate = true
-		updateProperties.MaintenanceWindow = expandArmServerMaintenanceWindow(v.([]interface{}))
+		updateProperties.MaintenanceWindow = expandArmServerMaintenanceWindow(v.([]any))
 	}
 
 	if requireAdditionalUpdate {

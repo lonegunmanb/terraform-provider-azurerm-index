@@ -24,7 +24,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/custompollers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/migration"
-	containerValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -59,7 +59,7 @@ func resourceContainerRegistry() *pluginsdk.Resource {
 				Type:         pluginsdk.TypeString,
 				Required:     true,
 				ForceNew:     true,
-				ValidateFunc: containerValidate.ContainerRegistryName,
+				ValidateFunc: validate.ContainerRegistryName,
 			},
 
 			"resource_group_name": commonschema.ResourceGroupName(),
@@ -264,10 +264,10 @@ func resourceContainerRegistry() *pluginsdk.Resource {
 			"tags": commonschema.Tags(),
 		},
 
-		CustomizeDiff: pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v interface{}) error {
+		CustomizeDiff: pluginsdk.CustomizeDiffShim(func(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
 			sku := d.Get("sku").(string)
 
-			geoReplications := d.Get("georeplications").([]interface{})
+			geoReplications := d.Get("georeplications").([]any)
 			// if locations have been specified for geo-replication then, the SKU has to be Premium
 			if len(geoReplications) > 0 && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
 				return errors.New("an ACR geo-replication can only be applied when using the Premium Sku")
@@ -276,7 +276,7 @@ func resourceContainerRegistry() *pluginsdk.Resource {
 			// ensure location is different than any location of the geo-replication
 			var geoReplicationLocations []string
 			for _, v := range geoReplications {
-				v := v.(map[string]interface{})
+				v := v.(map[string]any)
 				geoReplicationLocations = append(geoReplicationLocations, location.Normalize(v["location"].(string)))
 			}
 			location := location.Normalize(d.Get("location").(string))
@@ -305,7 +305,7 @@ func resourceContainerRegistry() *pluginsdk.Resource {
 			}
 
 			encryptionEnabled, ok := d.GetOk("encryption")
-			if ok && len(encryptionEnabled.([]interface{})) > 0 && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
+			if ok && len(encryptionEnabled.([]any)) > 0 && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
 				return errors.New("an ACR encryption can only be applied when using the Premium Sku")
 			}
 
@@ -315,7 +315,7 @@ func resourceContainerRegistry() *pluginsdk.Resource {
 				return fmt.Errorf("ACR zone redundancy can only be applied when using the Premium Sku")
 			}
 			for _, loc := range geoReplications {
-				loc := loc.(map[string]interface{})
+				loc := loc.(map[string]any)
 				zoneRedundancyEnabled, ok := loc["zone_redundancy_enabled"]
 				if ok && zoneRedundancyEnabled.(bool) && !strings.EqualFold(sku, string(registries.SkuNamePremium)) {
 					return fmt.Errorf("ACR zone redundancy can only be applied when using the Premium Sku")

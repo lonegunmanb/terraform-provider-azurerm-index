@@ -16,8 +16,8 @@ import (
 	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumes"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
-	netAppModels "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
-	netAppValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 )
@@ -28,14 +28,14 @@ func (r NetAppVolumeGroupOracleResource) CustomizeDiff() sdk.ResourceFunc {
 			rd := metadata.ResourceDiff
 
 			// Validate NFSv3 to NFSv4.1 protocol conversion restrictions for volume groups
-			volumes := rd.Get("volume").([]interface{})
+			volumes := rd.Get("volume").([]any)
 			for i := range volumes {
 				protocolsKey := fmt.Sprintf("volume.%d.protocols", i)
 
 				if rd.HasChange(protocolsKey) {
 					old, new := rd.GetChange(protocolsKey)
-					oldProtocols := old.([]interface{})
-					newProtocols := new.([]interface{})
+					oldProtocols := old.([]any)
+					newProtocols := new.([]any)
 
 					// Convert to string slices for validation
 					oldProtocolsStr := make([]string, len(oldProtocols))
@@ -50,13 +50,13 @@ func (r NetAppVolumeGroupOracleResource) CustomizeDiff() sdk.ResourceFunc {
 
 					// Get the export policy rules configuration for this volume
 					exportPolicyRulesKey := fmt.Sprintf("volume.%d.export_policy_rule", i)
-					exportPolicyRules := rd.Get(exportPolicyRulesKey).([]interface{})
+					exportPolicyRules := rd.Get(exportPolicyRulesKey).([]any)
 
 					// For volume groups, kerberos and data replication are not directly supported, so we pass empty values
 					var kerberosEnabled bool
-					var dataReplication []interface{}
+					var dataReplication []any
 
-					validationErrors := netAppValidate.ValidateNetAppVolumeProtocolConversion(oldProtocolsStr, newProtocolsStr, kerberosEnabled, dataReplication, exportPolicyRules)
+					validationErrors := validate.ValidateNetAppVolumeProtocolConversion(oldProtocolsStr, newProtocolsStr, kerberosEnabled, dataReplication, exportPolicyRules)
 					for _, err := range validationErrors {
 						return err
 					}

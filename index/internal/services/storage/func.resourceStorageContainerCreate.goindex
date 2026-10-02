@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/services/storage
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -9,11 +10,11 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/storage/2025-08-01/blobcontainers"
 	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/client"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/custompollers"
-	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/helpers"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/storage/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -22,7 +23,7 @@ import (
 	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/accounts"
 	"github.com/jackofallops/giovanni/storage/2023-11-03/blob/containers"
 )
-func resourceStorageContainerCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceStorageContainerCreate(d *pluginsdk.ResourceData, meta any) error {
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	containerClient := meta.(*clients.Client).Storage.ResourceManager.BlobContainers
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
@@ -30,7 +31,7 @@ func resourceStorageContainerCreate(d *pluginsdk.ResourceData, meta interface{})
 
 	containerName := d.Get("name").(string)
 	accessLevelRaw := d.Get("container_access_type").(string)
-	metaDataRaw := d.Get("metadata").(map[string]interface{})
+	metaDataRaw := d.Get("metadata").(map[string]any)
 	metaData := ExpandMetaData(metaDataRaw)
 
 	accountId, err := commonids.ParseStorageAccountID(d.Get("storage_account_id").(string))
@@ -48,7 +49,7 @@ func resourceStorageContainerCreate(d *pluginsdk.ResourceData, meta interface{})
 			}
 		}
 		if !response.WasNotFound(existing.HttpResponse) {
-			return tf.ImportAsExistsError("azurerm_storage_container", id.ID())
+			return tf.ImportAsExistsError(StorageContainerResourceName, id.ID())
 		}
 	}
 
@@ -73,6 +74,13 @@ func resourceStorageContainerCreate(d *pluginsdk.ResourceData, meta interface{})
 		return fmt.Errorf("creating %s: %v", id, err)
 	}
 
+	if meta.(*clients.Client).Features.PersistIDOnCreateBeforePollingForCompletion {
+		d.SetId(id.ID())
+		if err := pluginsdk.SetResourceIdentityData(d, &id); err != nil {
+			return err
+		}
+	}
+
 	pollerType := custompollers.NewStorageContainerCreatePoller(containerClient, id, resp.HttpResponse)
 	poller := pollers.NewPoller(pollerType, 5*time.Second, pollers.DefaultNumberOfDroppedConnectionsToAllow)
 
@@ -81,6 +89,9 @@ func resourceStorageContainerCreate(d *pluginsdk.ResourceData, meta interface{})
 	}
 
 	d.SetId(id.ID())
+	if err := pluginsdk.SetResourceIdentityData(d, &id); err != nil {
+		return err
+	}
 
 	return resourceStorageContainerRead(d, meta)
 }

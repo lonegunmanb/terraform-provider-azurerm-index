@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
-	waf "github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
@@ -20,7 +20,7 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
 )
-func resourceCdnFrontDoorFirewallPolicyCreate(d *pluginsdk.ResourceData, meta interface{}) error {
+func resourceCdnFrontDoorFirewallPolicyCreate(d *pluginsdk.ResourceData, meta any) error {
 	client := meta.(*clients.Client).Cdn.FrontDoorFirewallPoliciesClient
 	subscriptionId := meta.(*clients.Client).Account.SubscriptionId
 	ctx, cancel := timeouts.ForCreate(meta.(*clients.Client).StopContext, d)
@@ -29,7 +29,7 @@ func resourceCdnFrontDoorFirewallPolicyCreate(d *pluginsdk.ResourceData, meta in
 	name := d.Get("name").(string)
 	resourceGroup := d.Get("resource_group_name").(string)
 
-	id := waf.NewFrontDoorWebApplicationFirewallPolicyID(subscriptionId, resourceGroup, name)
+	id := webapplicationfirewallpolicies.NewFrontDoorWebApplicationFirewallPolicyID(subscriptionId, resourceGroup, name)
 
 	if !meta.(*clients.Client).Features.SkipImportCheckOnCreateAndAllowOverwritingExistingResources {
 		result, err := client.PoliciesGet(ctx, id)
@@ -44,59 +44,59 @@ func resourceCdnFrontDoorFirewallPolicyCreate(d *pluginsdk.ResourceData, meta in
 		}
 	}
 
-	enabled := waf.PolicyEnabledStateDisabled
+	enabled := webapplicationfirewallpolicies.PolicyEnabledStateDisabled
 
 	if d.Get("enabled").(bool) {
-		enabled = waf.PolicyEnabledStateEnabled
+		enabled = webapplicationfirewallpolicies.PolicyEnabledStateEnabled
 	}
 
-	requestBodyCheck := waf.PolicyRequestBodyCheckDisabled
+	requestBodyCheck := webapplicationfirewallpolicies.PolicyRequestBodyCheckDisabled
 
 	if d.Get("request_body_check_enabled").(bool) {
-		requestBodyCheck = waf.PolicyRequestBodyCheckEnabled
+		requestBodyCheck = webapplicationfirewallpolicies.PolicyRequestBodyCheckEnabled
 	}
 
 	sku := d.Get("sku_name").(string)
-	mode := waf.PolicyMode(d.Get("mode").(string))
+	mode := webapplicationfirewallpolicies.PolicyMode(d.Get("mode").(string))
 	redirectUrl := d.Get("redirect_url").(string)
 	customBlockResponseStatusCode := d.Get("custom_block_response_status_code").(int)
 	customBlockResponseBody := d.Get("custom_block_response_body").(string)
-	customRules := d.Get("custom_rule").([]interface{})
+	customRules := d.Get("custom_rule").([]any)
 
-	managedRules, err := expandCdnFrontDoorFirewallManagedRules(d.Get("managed_rule").([]interface{}))
+	managedRules, err := expandCdnFrontDoorFirewallManagedRules(d.Get("managed_rule").([]any))
 	if err != nil {
 		return fmt.Errorf("expanding 'managed_rule': %+v", err)
 	}
 
-	logScrubbingRules, err := expandCdnFrontDoorFirewallLogScrubbingPolicy(d.Get("log_scrubbing").([]interface{}))
+	logScrubbingRules, err := expandCdnFrontDoorFirewallLogScrubbingPolicy(d.Get("log_scrubbing").([]any))
 	if err != nil {
 		return fmt.Errorf("expanding 'log_scrubbing': %+v", err)
 	}
 
-	if sku != string(waf.SkuNamePremiumAzureFrontDoor) && managedRules != nil {
+	if sku != string(webapplicationfirewallpolicies.SkuNamePremiumAzureFrontDoor) && managedRules != nil {
 		return fmt.Errorf("the 'managed_rule' field is only supported with the 'Premium_AzureFrontDoor' sku, got %q", sku)
 	}
 
-	payload := waf.WebApplicationFirewallPolicy{
+	payload := webapplicationfirewallpolicies.WebApplicationFirewallPolicy{
 		Location: pointer.To(location.Normalize("Global")),
-		Sku: &waf.Sku{
-			Name: pointer.ToEnum[waf.SkuName](sku),
+		Sku: &webapplicationfirewallpolicies.Sku{
+			Name: pointer.ToEnum[webapplicationfirewallpolicies.SkuName](sku),
 		},
-		Properties: &waf.WebApplicationFirewallPolicyProperties{
-			PolicySettings: &waf.PolicySettings{
+		Properties: &webapplicationfirewallpolicies.WebApplicationFirewallPolicyProperties{
+			PolicySettings: &webapplicationfirewallpolicies.PolicySettings{
 				EnabledState:     pointer.To(enabled),
 				Mode:             pointer.To(mode),
 				RequestBodyCheck: pointer.To(requestBodyCheck),
 			},
 			CustomRules: expandCdnFrontDoorFirewallCustomRules(customRules),
 		},
-		Tags: tags.Expand(d.Get("tags").(map[string]interface{})),
+		Tags: tags.Expand(d.Get("tags").(map[string]any)),
 	}
 
 	// NOTE: CAPTCHA and JS Challenge Expiration policy is enabled by default on Premium SKU's with a default of
 	// 30 minutes, if it is not in the config set the default and include it in the policy settings
 	// payload block...
-	if sku == string(waf.SkuNamePremiumAzureFrontDoor) {
+	if sku == string(webapplicationfirewallpolicies.SkuNamePremiumAzureFrontDoor) {
 		// Set the Default values...
 		jsChallengeExpirationInMinutes := 30
 		captchaExpirationInMinutes := 30
