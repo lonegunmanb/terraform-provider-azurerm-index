@@ -1,0 +1,31 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
+)
+func (r *reporter) handleLine(line []byte) {
+	var e event
+	if err := json.Unmarshal(line, &e); err != nil || e.Action == "" {
+		// not a test event (e.g. a message from the go toolchain) so pass it through untouched
+		r.print(string(line))
+		return
+	}
+	r.events++
+
+	switch {
+	case e.Action == "build-output":
+		r.print(e.Output)
+	case e.Action == "build-fail":
+		// reported when the package fails, below
+	case e.Test == "":
+		r.handlePackage(e)
+	default:
+		r.handleTest(e)
+	}
+}

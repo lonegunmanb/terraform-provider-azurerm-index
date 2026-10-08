@@ -83,8 +83,12 @@ func (r DashboardGrafanaResource) Update() sdk.ResourceFunc {
 				properties.Tags = &model.Tags
 			}
 
-			if metadata.ResourceData.HasChange("smtp") {
-				properties.Properties.GrafanaConfigurations = expandSMTPConfigurationModel(model.SMTP)
+			// The SMTP password is never returned by the API, so it must be re-expanded from config on every update,
+			// not just when `smtp` changes, otherwise Azure rejects the request with `InvalidConfigurationForSMTP`.
+			if properties.Properties.GrafanaConfigurations != nil {
+				properties.Properties.GrafanaConfigurations.Smtp = expandSMTPConfigurationModel(model.SMTP)
+			} else {
+				properties.Properties.GrafanaConfigurations = expandGrafanaConfigurationsModel(model.SMTP)
 			}
 
 			if metadata.ResourceData.HasChange("grafana_major_version") {

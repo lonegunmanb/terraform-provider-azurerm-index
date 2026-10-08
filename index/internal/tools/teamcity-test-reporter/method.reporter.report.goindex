@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
+)
+func (r *reporter) report(key testKey, result string, elapsed float64, failureMessage string) {
+	output := ""
+	if running, ok := r.running[key]; ok {
+		output = strings.TrimRight(running.String(), "\n")
+	}
+	delete(r.running, key)
+	r.ended[key] = true
+
+	if pkg, ok := r.duplicateOf[key]; ok {
+		result = "fail"
+		failureMessage = fmt.Sprintf("Test name is already used by a test in %s - test names must be unique", pkg)
+	}
+
+	name := escape(key.name)
+	fmt.Fprintf(r.out, "##teamcity[testStarted name='%s' captureStandardOutput='false']\n", name)
+	if output != "" {
+		fmt.Fprintf(r.out, "##teamcity[testStdOut name='%s' out='%s']\n", name, escape(output))
+	}
+
+	switch result {
+	case "fail":
+		r.failed = true
+		r.failedTests[key.pkg]++
+		fmt.Fprintf(r.out, "##teamcity[testFailed name='%s' message='%s']\n", name, escape(failureMessage))
+	case "skip":
+		fmt.Fprintf(r.out, "##teamcity[testIgnored name='%s' message='Test skipped']\n", name)
+	}
+
+	if elapsed < 0 {
+		fmt.Fprintf(r.out, "##teamcity[testFinished name='%s']\n", name)
+		return
+	}
+	fmt.Fprintf(r.out, "##teamcity[testFinished name='%s' duration='%d']\n", name, int64(elapsed*1000))
+}

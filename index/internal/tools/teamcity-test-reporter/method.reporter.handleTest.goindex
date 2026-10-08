@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
+)
+func (r *reporter) handleTest(e event) {
+	// subtests (`TestFoo/bar`) are folded into their top-level test
+	name, _, isSubtest := strings.Cut(e.Test, "/")
+	key := testKey{pkg: e.Package, name: name}
+
+	if r.ended[key] {
+		if e.Action == "run" && !isSubtest {
+			// the test is being run again (`-count`)
+			delete(r.ended, key)
+		} else {
+			// output arriving after the test's result has nothing to be attached to
+			if e.Action == "output" {
+				r.print(e.Output)
+			}
+			return
+		}
+	}
+
+	if _, ok := r.running[key]; !ok {
+		r.running[key] = &strings.Builder{}
+		r.checkNameIsUnique(key)
+	}
+
+	switch e.Action {
+	case "output":
+		r.running[key].WriteString(e.Output)
+
+	case "pass", "fail", "skip":
+		if !isSubtest {
+			r.report(key, e.Action, e.Elapsed, "Test failed")
+		}
+	}
+}

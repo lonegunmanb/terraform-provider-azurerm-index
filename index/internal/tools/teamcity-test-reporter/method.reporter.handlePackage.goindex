@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
+)
+func (r *reporter) handlePackage(e event) {
+	switch e.Action {
+	case "output":
+		r.print(e.Output)
+
+	case "pass", "skip", "fail":
+		// the test binary has exited, so anything still running was cut short by a panic or timeout
+		for _, key := range r.unfinished(e.Package) {
+			r.report(key, "fail", -1, "Test did not finish: the test binary exited before it reported a result (another test panicked, or the run timed out)")
+		}
+
+		if e.Action != "fail" {
+			return
+		}
+
+		switch {
+		case e.FailedBuild != "":
+			r.buildProblem(fmt.Sprintf("%s failed to build", e.Package))
+		case r.failedTests[e.Package] == 0:
+			r.buildProblem(fmt.Sprintf("%s failed without a failing test", e.Package))
+		}
+	}
+}

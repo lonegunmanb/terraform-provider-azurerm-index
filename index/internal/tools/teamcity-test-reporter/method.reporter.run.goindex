@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/main
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
+)
+func (r *reporter) run(in io.Reader) bool {
+	reader := bufio.NewReader(in)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			r.handleLine(line)
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	// `go test` was cut short, so no package result arrived to close these off
+	for _, key := range r.unfinished("") {
+		r.report(key, "fail", -1, "Test did not finish: `go test` exited before it reported a result")
+	}
+
+	if r.events == 0 {
+		r.buildProblem("no test results were read from `go test`")
+	}
+
+	return !r.failed
+}
