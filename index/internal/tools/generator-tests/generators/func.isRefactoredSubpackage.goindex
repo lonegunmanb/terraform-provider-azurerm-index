@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/generator-tests/generators
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"text/template"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/templatehelpers"
+	"github.com/mitchellh/cli"
+)
+func isRefactoredSubpackage(dir string) bool {
+	if os.Getenv("GOFILE") == "resource.go" {
+		return true
+	}
+	if info, err := os.Stat(filepath.Join(dir, "resource.go")); err == nil && !info.IsDir() {
+		return true
+	}
+
+	providerRoot, err := findProviderRoot(dir)
+	if err != nil {
+		return false
+	}
+	servicesDir := filepath.Join(providerRoot, "internal", "services")
+	rel, err := filepath.Rel(servicesDir, dir)
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	return len(parts) >= 2 && parts[0] != ".." && parts[0] != "."
+}

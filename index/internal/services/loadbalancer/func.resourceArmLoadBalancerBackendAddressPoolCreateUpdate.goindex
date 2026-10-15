@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/loadbalancers"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
@@ -39,7 +40,7 @@ func resourceArmLoadBalancerBackendAddressPoolCreateUpdate(d *pluginsdk.Resource
 			}
 
 			if !response.WasNotFound(existing.HttpResponse) {
-				return tf.ImportAsExistsError("azurerm_lb_backend_address_pool", id.ID())
+				return tf.ImportAsExistsError(backendAddressPoolResourceName, id.ID())
 			}
 		}
 	}
@@ -125,7 +126,7 @@ func resourceArmLoadBalancerBackendAddressPoolCreateUpdate(d *pluginsdk.Resource
 			properties.BackendAddressPools = &backendAddressPools
 
 			if d.IsNewResource() {
-				if err := lbClient.CreateOrUpdateCallbackThenPoll(ctx, plbId, *lb.Model, sdk.SetIDCallback(meta, &id, d)); err != nil {
+				if err := lbClient.CreateOrUpdateCallbackThenPoll(ctx, plbId, *lb.Model, sdk.SetIDAndIdentityCallback(meta, &id, d)); err != nil {
 					return fmt.Errorf("creating %s: %+v", id, err)
 				}
 			} else {
@@ -141,7 +142,7 @@ func resourceArmLoadBalancerBackendAddressPoolCreateUpdate(d *pluginsdk.Resource
 			}
 
 			if d.IsNewResource() {
-				if err := lbClient.LoadBalancerBackendAddressPoolsCreateOrUpdateCallbackThenPoll(ctx, id, param, sdk.SetIDCallback(meta, &id, d)); err != nil {
+				if err := lbClient.LoadBalancerBackendAddressPoolsCreateOrUpdateCallbackThenPoll(ctx, id, param, sdk.SetIDAndIdentityCallback(meta, &id, d)); err != nil {
 					return fmt.Errorf("creating %s: %+v", id, err)
 				}
 			} else {
@@ -156,7 +157,7 @@ func resourceArmLoadBalancerBackendAddressPoolCreateUpdate(d *pluginsdk.Resource
 			param.Properties.TunnelInterfaces = expandGatewayLoadBalancerTunnelInterfaces(d.Get("tunnel_interface").([]any))
 
 			if d.IsNewResource() {
-				if err := lbClient.LoadBalancerBackendAddressPoolsCreateOrUpdateCallbackThenPoll(ctx, id, param, sdk.SetIDCallback(meta, &id, d)); err != nil {
+				if err := lbClient.LoadBalancerBackendAddressPoolsCreateOrUpdateCallbackThenPoll(ctx, id, param, sdk.SetIDAndIdentityCallback(meta, &id, d)); err != nil {
 					return fmt.Errorf("creating %s: %+v", id, err)
 				}
 			} else {
@@ -168,6 +169,9 @@ func resourceArmLoadBalancerBackendAddressPoolCreateUpdate(d *pluginsdk.Resource
 
 		if d.IsNewResource() {
 			d.SetId(id.ID())
+			if err := pluginsdk.SetResourceIdentityData(d, &id); err != nil {
+				return err
+			}
 		}
 	}
 

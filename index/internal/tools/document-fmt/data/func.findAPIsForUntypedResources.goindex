@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -20,10 +21,17 @@ func findAPIsForUntypedResources(d packageData, s *Service) map[string][]API {
 	result := make(map[string][]API)
 
 	servicePackages, ok := d.packages[s.Name]
-	// todo: refactor loadPackages to only return the service package and ignore others such as `client`
-	servicePackage := servicePackages[0]
-	if !ok {
+	if !ok || len(servicePackages) == 0 {
 		return nil // err?
+	}
+
+	servicePackage := servicePackages[0]
+	rootPkgPath := fmt.Sprintf("github.com/hashicorp/terraform-provider-azurerm/internal/services/%s", s.Name)
+	for _, p := range servicePackages {
+		if p.pkg.PkgPath == rootPkgPath {
+			servicePackage = p
+			break
+		}
 	}
 
 	registration := servicePackage.pkg.Types.Scope().Lookup("Registration")
@@ -49,12 +57,25 @@ func findAPIsForUntypedResources(d packageData, s *Service) map[string][]API {
 	// Resources
 	findRegistrationFuncs(servicePackage.pkg, rsRegistration, registrationFuncs, ResourceTypeResource)
 
+	allServicePkgs := make([]*packages.Package, 0, len(servicePackages))
+	for _, sp := range servicePackages {
+		allServicePkgs = append(allServicePkgs, sp.pkg)
+	}
+
 	for _, fn := range registrationFuncs {
 		filenames := make(map[string]struct{})
 		resourceFileName := d.fset.Position(d.prog.FuncValue(fn).Pos()).Filename
 		filenames[resourceFileName] = struct{}{} // for most resources this is all we need
 
-		fnDecl := funcToFuncDeclWithPkgs([]*packages.Package{servicePackage.pkg}, fn)
+		fnPkg := servicePackage
+		for _, sp := range servicePackages {
+			if fn.Pkg() != nil && sp.pkg.PkgPath == fn.Pkg().Path() {
+				fnPkg = sp
+				break
+			}
+		}
+
+		fnDecl := funcToFuncDeclWithPkgs(allServicePkgs, fn)
 		if fnDecl == nil {
 			continue
 		}
@@ -83,13 +104,13 @@ func findAPIsForUntypedResources(d packageData, s *Service) map[string][]API {
 
 				switch k.Name {
 				case "Create":
-					resourceFn = findUntypedSSAFunc(servicePackage, n.Value)
+					resourceFn = findUntypedSSAFunc(fnPkg, n.Value)
 				case "Read":
-					resourceFn = findUntypedSSAFunc(servicePackage, n.Value)
+					resourceFn = findUntypedSSAFunc(fnPkg, n.Value)
 				case "Update":
-					resourceFn = findUntypedSSAFunc(servicePackage, n.Value)
+					resourceFn = findUntypedSSAFunc(fnPkg, n.Value)
 				case "Delete":
-					resourceFn = findUntypedSSAFunc(servicePackage, n.Value)
+					resourceFn = findUntypedSSAFunc(fnPkg, n.Value)
 				}
 
 				if resourceFn != nil {
@@ -100,7 +121,7 @@ func findAPIsForUntypedResources(d packageData, s *Service) map[string][]API {
 			return false
 		})
 
-		sdkMethods := usedMethods(d.fset, servicePackage.pkg, util.MapKeys2Slice(filenames))
+		sdkMethods := usedMethods(d.fset, fnPkg.pkg, util.MapKeys2Slice(filenames))
 		result[resourceFileName] = methodsToAPIs(sdkMethods)
 	}
 

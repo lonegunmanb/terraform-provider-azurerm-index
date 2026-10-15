@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/batch/resources/batch_pool
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/batch/2024-07-01/pool"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenBatchPoolUserAccount(d *pluginsdk.ResourceData, account *pool.UserAccount) map[string]any {
+	userAccount := make(map[string]any)
+	userAccount["name"] = account.Name
+	if account.ElevationLevel != nil {
+		userAccount["elevation_level"] = string(*account.ElevationLevel)
+	}
+	userAccountIndex := -1
+
+	if num, ok := d.GetOk("user_accounts.#"); ok {
+		n := num.(int)
+		for i := range n {
+			if src, nameOk := d.GetOk(fmt.Sprintf("user_accounts.%d.name", i)); nameOk && src == account.Name {
+				userAccount["password"] = d.Get(fmt.Sprintf("user_accounts.%d.password", i)).(string)
+				userAccountIndex = i
+				break
+			}
+		}
+	}
+
+	if account.LinuxUserConfiguration != nil {
+		linuxUserConfig := make(map[string]any)
+
+		if account.LinuxUserConfiguration.Uid != nil {
+			linuxUserConfig["uid"] = *account.LinuxUserConfiguration.Uid
+			linuxUserConfig["gid"] = *account.LinuxUserConfiguration.Gid
+		}
+
+		if userAccountIndex > -1 {
+			if sshPrivateKey, ok := d.GetOk(fmt.Sprintf("user_accounts.%d.linux_user_configuration.0.ssh_private_key", userAccountIndex)); ok {
+				linuxUserConfig["ssh_private_key"] = sshPrivateKey
+			}
+		}
+
+		userAccount["linux_user_configuration"] = []any{
+			linuxUserConfig,
+		}
+	}
+
+	if account.WindowsUserConfiguration != nil {
+		loginMode := make(map[string]any)
+		if account.WindowsUserConfiguration.LoginMode != nil {
+			loginMode["login_mode"] = string(*account.WindowsUserConfiguration.LoginMode)
+		}
+		userAccount["windows_user_configuration"] = []any{
+			loginMode,
+		}
+	}
+	return userAccount
+}

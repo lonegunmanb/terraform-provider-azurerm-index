@@ -1,0 +1,92 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/network
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math/big"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/ipampools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/routetables"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/serviceendpointpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/subnets"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func subnetServiceEndpointDiffSuppress(_, _, _ string, d *schema.ResourceData) bool {
+	if d == nil {
+		return false
+	}
+
+	listKey := "service_endpoint"
+
+	oldRaw, newRaw := d.GetChange(listKey)
+	if oldRaw == nil || newRaw == nil {
+		return false
+	}
+
+	oldList, okOld := oldRaw.([]any)
+	newList, okNew := newRaw.([]any)
+	if !okOld || !okNew {
+		return false
+	}
+
+	if len(oldList) != len(newList) {
+		return false
+	}
+
+	type endpointItem struct {
+		service           string
+		networkIdentifier string
+	}
+
+	canonicalize := func(rawList []any) []endpointItem {
+		items := make([]endpointItem, 0, len(rawList))
+		for _, raw := range rawList {
+			m, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			item := endpointItem{}
+			if s, ok := m["service"].(string); ok {
+				item.service = s
+			}
+			if ni, ok := m["network_identifier"].(string); ok {
+				item.networkIdentifier = ni
+			}
+			items = append(items, item)
+		}
+
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].service != items[j].service {
+				return items[i].service < items[j].service
+			}
+			return items[i].networkIdentifier < items[j].networkIdentifier
+		})
+
+		return items
+	}
+
+	canonicalOld := canonicalize(oldList)
+	canonicalNew := canonicalize(newList)
+
+	return reflect.DeepEqual(canonicalOld, canonicalNew)
+}

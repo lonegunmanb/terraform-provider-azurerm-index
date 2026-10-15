@@ -1,5 +1,6 @@
 package github.com/hashicorp/terraform-provider-azurerm/internal/tools/document-fmt/data
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -21,57 +22,57 @@ func findAPIsForTypedResources(d packageData, s *Service) map[string][]API {
 	result := make(map[string][]API)
 
 	servicePackages, ok := d.packages[s.Name]
-	// todo: refactor loadPackages to only return the service package and ignore others such as `client`
-	servicePackage := servicePackages[0]
 	if !ok {
 		return nil // err?
 	}
 
-	ssaPkg := servicePackage.ssa
-	scope := ssaPkg.Pkg.Scope()
+	for _, servicePackage := range servicePackages {
+		ssaPkg := servicePackage.ssa
+		scope := ssaPkg.Pkg.Scope()
 
-	for _, scopeName := range scope.Names() {
-		obj := scope.Lookup(scopeName)
-		typeName, ok := obj.(*types.TypeName)
-		if !ok {
-			continue
-		}
+		for _, scopeName := range scope.Names() {
+			obj := scope.Lookup(scopeName)
+			typeName, ok := obj.(*types.TypeName)
+			if !ok {
+				continue
+			}
 
-		named, ok := typeName.Type().(*types.Named)
-		if !ok {
-			continue
-		}
+			named, ok := typeName.Type().(*types.Named)
+			if !ok {
+				continue
+			}
 
-		sel := d.prog.MethodSets.MethodSet(named).Lookup(servicePackage.pkg.Types, "ResourceType") // if contains `ResourceType` method then we know we want to parse this file for used sdk methods
-		if sel == nil {
-			continue
-		}
-
-		filenames := make(map[string]struct{})
-		fPos := d.fset.Position(d.prog.MethodValue(sel).Pos())
-		resourceFileName := fPos.Filename
-		filenames[resourceFileName] = struct{}{}
-
-		for _, n := range possibleFunctionNames {
-			sel := d.prog.MethodSets.MethodSet(named).Lookup(servicePackage.pkg.Types, n)
+			sel := d.prog.MethodSets.MethodSet(named).Lookup(servicePackage.pkg.Types, "ResourceType") // if contains `ResourceType` method then we know we want to parse this file for used sdk methods
 			if sel == nil {
 				continue
 			}
 
-			ssaFn := d.prog.MethodValue(sel)
+			filenames := make(map[string]struct{})
+			fPos := d.fset.Position(d.prog.MethodValue(sel).Pos())
+			resourceFileName := fPos.Filename
+			filenames[resourceFileName] = struct{}{}
 
-			rfn := findResourceFunc(d.prog, servicePackage.pkg, servicePackage.ssa, ssaFn)
-			if rfn == nil {
-				continue // err or debug log?
+			for _, n := range possibleFunctionNames {
+				sel := d.prog.MethodSets.MethodSet(named).Lookup(servicePackage.pkg.Types, n)
+				if sel == nil {
+					continue
+				}
+
+				ssaFn := d.prog.MethodValue(sel)
+
+				rfn := findResourceFunc(d.prog, servicePackage.pkg, servicePackage.ssa, ssaFn)
+				if rfn == nil {
+					continue // err or debug log?
+				}
+
+				// for the SSA func, get file name and add to map, most of the time this is exactly the same as `resourceFileName`
+				ssaFnPos := d.fset.Position(rfn.Pos())
+				filenames[ssaFnPos.Filename] = struct{}{} // overwrite ok
 			}
 
-			// for the SSA func, get file name and add to map, most of the time this is exactly the same as `resourceFileName`
-			ssaFnPos := d.fset.Position(rfn.Pos())
-			filenames[ssaFnPos.Filename] = struct{}{} // overwrite ok
+			sdkMethods := usedMethods(d.fset, servicePackage.pkg, util.MapKeys2Slice(filenames))
+			result[resourceFileName] = methodsToAPIs(sdkMethods)
 		}
-
-		sdkMethods := usedMethods(d.fset, servicePackage.pkg, util.MapKeys2Slice(filenames))
-		result[resourceFileName] = methodsToAPIs(sdkMethods)
 	}
 	return result
 }

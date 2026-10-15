@@ -7,8 +7,8 @@ import (
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
 	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2023-08-01/scheduledactions"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2023-08-01/views"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2025-03-01/scheduledactionoperationgroup"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2025-03-01/viewoperationgroup"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/costmanagement/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
@@ -18,9 +18,9 @@ func (r AnomalyAlertResource) Update() sdk.ResourceFunc {
 	return sdk.ResourceFunc{
 		Timeout: 30 * time.Minute,
 		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
-			client := metadata.Client.CostManagement.ScheduledActionsClient
+			client := metadata.Client.CostManagement.ScheduledActionOperationGroupClient
 
-			id, err := scheduledactions.ParseScopedScheduledActionID(metadata.ResourceData.Id())
+			id, err := scheduledactionoperationgroup.ParseScopedScheduledActionID(metadata.ResourceData.Id())
 			if err != nil {
 				return err
 			}
@@ -30,7 +30,7 @@ func (r AnomalyAlertResource) Update() sdk.ResourceFunc {
 				return fmt.Errorf("decoding: %+v", err)
 			}
 
-			resp, err := client.GetByScope(ctx, *id)
+			resp, err := client.ScheduledActionsGetByScope(ctx, *id)
 			if err != nil {
 				return fmt.Errorf("reading %s: %+v", id, err)
 			}
@@ -45,10 +45,10 @@ func (r AnomalyAlertResource) Update() sdk.ResourceFunc {
 			if subscriptionId == "" {
 				subscriptionId = commonids.NewSubscriptionID(metadata.Client.Account.SubscriptionId).ID()
 			}
-			viewId := views.NewScopedViewID(subscriptionId, "ms:DailyAnomalyByResourceGroup")
+			viewId := viewoperationgroup.NewScopedViewID(subscriptionId, "ms:DailyAnomalyByResourceGroup")
 
-			schedule := scheduledactions.ScheduleProperties{
-				Frequency: scheduledactions.ScheduleFrequencyDaily,
+			schedule := scheduledactionoperationgroup.ScheduleProperties{
+				Frequency: scheduledactionoperationgroup.ScheduleFrequencyDaily,
 			}
 			schedule.SetEndDateAsTime(time.Now().AddDate(1, 0, 0))
 			schedule.SetStartDateAsTime(time.Now())
@@ -58,15 +58,15 @@ func (r AnomalyAlertResource) Update() sdk.ResourceFunc {
 				notificationEmail = config.NotificationEmail
 			}
 
-			param := scheduledactions.ScheduledAction{
-				Kind: pointer.To(scheduledactions.ScheduledActionKindInsightAlert),
+			param := scheduledactionoperationgroup.ScheduledAction{
+				Kind: pointer.To(scheduledactionoperationgroup.ScheduledActionKindInsightAlert),
 				ETag: resp.Model.ETag,
-				Properties: &scheduledactions.ScheduledActionProperties{
+				Properties: &scheduledactionoperationgroup.ScheduledActionProperties{
 					DisplayName:       config.DisplayName,
-					Status:            scheduledactions.ScheduledActionStatusEnabled,
+					Status:            scheduledactionoperationgroup.ScheduledActionStatusEnabled,
 					ViewId:            viewId.ID(),
 					NotificationEmail: &notificationEmail,
-					Notification: scheduledactions.NotificationProperties{
+					Notification: scheduledactionoperationgroup.NotificationProperties{
 						Subject: config.EmailSubject,
 						Message: pointer.To(config.Message),
 						To:      config.EmailAddresses,
@@ -74,7 +74,7 @@ func (r AnomalyAlertResource) Update() sdk.ResourceFunc {
 					Schedule: schedule,
 				},
 			}
-			if _, err := client.CreateOrUpdateByScope(ctx, *id, param, scheduledactions.DefaultCreateOrUpdateByScopeOperationOptions()); err != nil {
+			if _, err := client.ScheduledActionsCreateOrUpdateByScope(ctx, *id, param, scheduledactionoperationgroup.DefaultScheduledActionsCreateOrUpdateByScopeOperationOptions()); err != nil {
 				return fmt.Errorf("creating %s: %+v", id, err)
 			}
 

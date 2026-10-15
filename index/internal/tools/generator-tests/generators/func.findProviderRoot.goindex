@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/generator-tests/generators
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
+	"unicode"
+)
+func findProviderRoot(startDir string) (string, error) {
+	if startDir == "" {
+		var err error
+		startDir, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get current working directory: %w", err)
+		}
+	}
+	dir, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve absolute path for %s: %w", startDir, err)
+	}
+
+	for {
+		goModPath := filepath.Join(dir, "go.mod")
+		if info, err := os.Stat(goModPath); err == nil && !info.IsDir() {
+			content, err := os.ReadFile(goModPath)
+			if err == nil && strings.Contains(string(content), "module github.com/hashicorp/terraform-provider-azurerm") {
+				return dir, nil
+			}
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	return "", fmt.Errorf("could not locate provider root (go.mod) starting from %s", startDir)
+}
