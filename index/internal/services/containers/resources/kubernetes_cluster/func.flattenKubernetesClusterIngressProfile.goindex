@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster
+import (
+	"maps"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2025-11-01/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenKubernetesClusterIngressProfile(input *managedclusters.ManagedClusterIngressProfile) []any {
+	if input == nil || input.WebAppRouting == nil || (input.WebAppRouting.Enabled != nil && !*input.WebAppRouting.Enabled) {
+		return []any{}
+	}
+
+	out := map[string]any{}
+	out["dns_zone_ids"] = pluginsdk.FlattenSlice(input.WebAppRouting.DnsZoneResourceIds)
+
+	webAppRoutingIdentity := []any{}
+
+	if v := input.WebAppRouting.Identity; v != nil {
+		webAppRoutingIdentity = flattenKubernetesClusterAddOnIdentityProfile(v)
+	}
+
+	out["web_app_routing_identity"] = webAppRoutingIdentity
+
+	if input.WebAppRouting.Nginx != nil {
+		out["default_nginx_controller"] = pointer.From(input.WebAppRouting.Nginx.DefaultIngressControllerType)
+	}
+
+	return []any{out}
+}

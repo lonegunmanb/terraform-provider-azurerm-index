@@ -1,0 +1,269 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/helpers
+import (
+	"fmt"
+	"maps"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/publicipprefixes"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func SchemaDefaultNodePool() *pluginsdk.Schema {
+	return &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Required: true,
+		MaxItems: 1,
+		Elem: &pluginsdk.Resource{
+			Schema: func() map[string]*pluginsdk.Schema {
+				return map[string]*pluginsdk.Schema{
+					// Required and conditionally ForceNew: updating `name` back to name when it's been set to the value
+					// of `temporary_name_for_rotation` during the resizing of the default node pool should be allowed and
+					// not force cluster recreation
+					"name": {
+						Type:         pluginsdk.TypeString,
+						Required:     true,
+						ValidateFunc: validate.KubernetesAgentPoolName,
+					},
+
+					"temporary_name_for_rotation": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: validate.KubernetesAgentPoolName,
+					},
+
+					"type": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						ForceNew: true,
+						Default:  string(managedclusters.AgentPoolTypeVirtualMachineScaleSets),
+						ValidateFunc: validation.StringInSlice([]string{
+							string(managedclusters.AgentPoolTypeVirtualMachineScaleSets),
+						}, false),
+					},
+
+					"vm_size": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						// NOTE: O+C AKS RP provides a new feature that will automatically select an available vm size when it's omitted.
+						Computed:     true,
+						ValidateFunc: validation.StringIsNotEmpty,
+					},
+
+					"capacity_reservation_group_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ForceNew:     true,
+						ValidateFunc: capacityreservationgroups.ValidateCapacityReservationGroupID,
+					},
+
+					"kubelet_config": SchemaNodePoolKubeletConfig(),
+
+					"linux_os_config": SchemaNodePoolLinuxOSConfig(),
+
+					"fips_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+					},
+
+					"gpu_instance": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ForceNew:     true,
+						ValidateFunc: validation.StringInSlice(managedclusters.PossibleValuesForGPUInstanceProfile(), false),
+					},
+
+					"gpu_driver": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ForceNew:     true,
+						ValidateFunc: validation.StringInSlice(agentpools.PossibleValuesForGPUDriver(), false),
+					},
+
+					"kubelet_disk_type": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Computed:     true, // azignore:AZS007 - pre-existing violation
+						ValidateFunc: validation.StringInSlice(managedclusters.PossibleValuesForKubeletDiskType(), false),
+					},
+
+					"max_count": {
+						Type:     pluginsdk.TypeInt,
+						Optional: true,
+						// NOTE: rather than setting `0` users should instead pass `null` here
+						ValidateFunc: validation.IntBetween(1, 1000),
+					},
+
+					"max_pods": {
+						Type:     pluginsdk.TypeInt,
+						Optional: true,
+						Computed: true, // azignore:AZS007 - pre-existing violation
+					},
+
+					"min_count": {
+						Type:     pluginsdk.TypeInt,
+						Optional: true,
+						// NOTE: rather than setting `0` users should instead pass `null` here
+						ValidateFunc: validation.IntBetween(1, 1000),
+					},
+
+					"node_network_profile": SchemaNodePoolNetworkProfile(),
+
+					"node_count": {
+						Type:         pluginsdk.TypeInt,
+						Optional:     true,
+						Computed:     true, // azignore:AZS007 - pre-existing violation
+						ValidateFunc: validation.IntBetween(1, 1000),
+					},
+
+					"node_labels": {
+						Type:     pluginsdk.TypeMap,
+						Optional: true,
+						Computed: true, // azignore:AZS007 - pre-existing violation
+						Elem: &pluginsdk.Schema{
+							Type: pluginsdk.TypeString,
+						},
+					},
+
+					"node_public_ip_prefix_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ForceNew:     true,
+						ValidateFunc: publicipprefixes.ValidatePublicIPPrefixID,
+						RequiredWith: []string{"default_node_pool.0.node_public_ip_enabled"},
+					},
+
+					"tags": commonschema.Tags(),
+
+					"os_disk_size_gb": {
+						Type:         pluginsdk.TypeInt,
+						Optional:     true,
+						Computed:     true, // azignore:AZS007 - pre-existing violation
+						ValidateFunc: validation.IntAtLeast(1),
+					},
+
+					"os_disk_type": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Default:      agentpools.OSDiskTypeManaged,
+						ValidateFunc: validation.StringInSlice(managedclusters.PossibleValuesForOSDiskType(), false),
+					},
+
+					"os_sku": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						// Note: O+C because defaults to Ubuntu if using Linux
+						Computed: true,
+						ValidateFunc: validation.StringInSlice([]string{
+							string(agentpools.OSSKUAzureLinux),
+							string(agentpools.OSSKUAzureLinuxThree),
+							string(agentpools.OSSKUUbuntu),
+							string(agentpools.OSSKUUbuntuTwoTwoZeroFour),
+							string(agentpools.OSSKUUbuntuTwoFourZeroFour),
+							string(agentpools.OSSKUWindowsTwoZeroOneNine),
+							string(agentpools.OSSKUWindowsTwoZeroTwoTwo),
+							string(agentpools.OSSKUWindowsTwoZeroTwoFive),
+						}, false),
+					},
+
+					"ultra_ssd_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Default:  false,
+						Optional: true,
+					},
+
+					"vnet_subnet_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: commonids.ValidateSubnetID,
+					},
+					"orchestrator_version": {
+						Type:             pluginsdk.TypeString,
+						Optional:         true,
+						Computed:         true, // azignore:AZS007 - pre-existing violation
+						ValidateFunc:     validation.StringIsNotEmpty,
+						DiffSuppressFunc: SuppressKubernetesVersionDiff,
+					},
+					"pod_subnet_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: commonids.ValidateSubnetID,
+					},
+					"proximity_placement_group_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ForceNew:     true,
+						ValidateFunc: proximityplacementgroups.ValidateProximityPlacementGroupID,
+					},
+					"only_critical_addons_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+					},
+
+					"scale_down_mode": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						Default:      string(managedclusters.ScaleDownModeDelete),
+						ValidateFunc: validation.StringInSlice(managedclusters.PossibleValuesForScaleDownMode(), false),
+					},
+
+					"snapshot_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ValidateFunc: snapshots.ValidateSnapshotID,
+					},
+
+					"host_group_id": {
+						Type:         pluginsdk.TypeString,
+						Optional:     true,
+						ForceNew:     true,
+						ValidateFunc: validation.AsGeneratedID(commonids.ParseDedicatedHostGroupIDInsensitively),
+					},
+
+					"upgrade_settings": UpgradeSettingsSchemaClusterDefaultNodePool(),
+
+					"workload_runtime": {
+						Type:     pluginsdk.TypeString,
+						Optional: true,
+						Computed: true, // azignore:AZS007 - pre-existing violation
+						ValidateFunc: validation.StringInSlice([]string{
+							string(managedclusters.WorkloadRuntimeKataVMIsolation),
+							string(managedclusters.WorkloadRuntimeOCIContainer),
+						}, false),
+					},
+
+					"zones": commonschema.ZonesMultipleOptional(),
+
+					"auto_scaling_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+					},
+
+					"node_public_ip_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+					},
+
+					"host_encryption_enabled": {
+						Type:     pluginsdk.TypeBool,
+						Optional: true,
+					},
+				}
+			}(),
+		},
+	}
+}

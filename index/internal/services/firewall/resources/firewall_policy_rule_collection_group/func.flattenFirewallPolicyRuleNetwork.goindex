@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/resources/firewall_policy_rule_collection_group
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/firewallpolicyrulecollectiongroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenFirewallPolicyRuleNetwork(input *[]firewallpolicyrulecollectiongroups.FirewallPolicyRule) ([]any, error) {
+	if input == nil {
+		return []any{}, nil
+	}
+	output := make([]any, 0)
+	for _, e := range *input {
+		rule, ok := e.(firewallpolicyrulecollectiongroups.NetworkRule)
+		if !ok {
+			return nil, fmt.Errorf("unexpected non-network rule: %+v", e)
+		}
+
+		protocols := make([]any, 0)
+		if rule.IPProtocols != nil {
+			for _, protocol := range *rule.IPProtocols {
+				protocols = append(protocols, string(protocol))
+			}
+		}
+
+		output = append(output, map[string]any{
+			"name":                  pointer.From(rule.Name),
+			"protocols":             protocols,
+			"source_addresses":      pluginsdk.FlattenSlice(rule.SourceAddresses),
+			"source_ip_groups":      pluginsdk.FlattenSlice(rule.SourceIPGroups),
+			"destination_addresses": pluginsdk.FlattenSlice(rule.DestinationAddresses),
+			"destination_ip_groups": pluginsdk.FlattenSlice(rule.DestinationIPGroups),
+			"destination_fqdns":     pluginsdk.FlattenSlice(rule.DestinationFqdns),
+			"destination_ports":     pluginsdk.FlattenSlice(rule.DestinationPorts),
+			"description":           pointer.From(rule.Description),
+		})
+	}
+	return output, nil
+}

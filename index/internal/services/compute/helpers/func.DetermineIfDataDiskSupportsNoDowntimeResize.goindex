@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/helpers
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2021-07-01/skus"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2023-04-02/disks"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+)
+func DetermineIfDataDiskSupportsNoDowntimeResize(disk *disks.Disk, requiresDetaching bool) bool {
+	if disk == nil || disk.Properties == nil {
+		return false
+	}
+
+	// Only supported for data disks.
+	isDataDisk := disk.Properties.OsType != nil && string(*disk.Properties.OsType) != ""
+	if isDataDisk {
+		return false
+	}
+
+	// Not supported for shared disks, the maxShares of which is greater than 1: https://learn.microsoft.com/azure/virtual-machines/disks-shared-enable?tabs=azure-portal#deploy-an-ultra-disk-as-a-shared-disk
+	isSharedDisk := disk.Properties.MaxShares != nil && *disk.Properties.MaxShares > 1
+	if isSharedDisk {
+		log.Printf("[DEBUG] Disk is shared so does not support no-downtime-resize")
+		return false
+	}
+
+	if requiresDetaching {
+		return false
+	}
+
+	return true
+}

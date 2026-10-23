@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/costmanagement/helpers
+import (
+	"context"
+	"fmt"
+	"maps"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/costmanagement/2025-03-01/exports"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func FlattenExportDataStorageLocationToModel(input exports.ExportDeliveryInfo) ([]CostManagementExportDataStorageLocationModel, error) {
+	destination := input.Destination
+
+	var storageAccountId *commonids.StorageAccountId
+
+	if v := destination.ResourceId; v != nil {
+		var err error
+		storageAccountId, err = commonids.ParseStorageAccountIDInsensitively(*v)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	containerId := ""
+	if v := destination.Container; v != "" && storageAccountId != nil {
+		containerId = commonids.NewStorageContainerID(storageAccountId.SubscriptionId, storageAccountId.ResourceGroupName, storageAccountId.StorageAccountName, v).ID()
+	}
+
+	rootFolderPath := pointer.From(destination.RootFolderPath)
+
+	return []CostManagementExportDataStorageLocationModel{
+		{
+			ContainerId:    containerId,
+			RootFolderPath: rootFolderPath,
+		},
+	}, nil
+}

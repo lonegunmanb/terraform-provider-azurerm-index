@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster_node_pool
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenAgentPoolLinuxOSConfig(input *agentpools.LinuxOSConfig) ([]any, error) {
+	if input == nil {
+		return make([]any, 0), nil
+	}
+
+	var swapFileSizeMB int
+	if input.SwapFileSizeMB != nil {
+		swapFileSizeMB = int(*input.SwapFileSizeMB)
+	}
+	transparentHugePageDefrag := pointer.From(input.TransparentHugePageDefrag)
+	transparentHugePageEnabled := pointer.From(input.TransparentHugePageEnabled)
+	sysctlConfig, err := flattenAgentPoolSysctlConfig(input.Sysctls)
+	if err != nil {
+		return nil, err
+	}
+	config := []any{
+		map[string]any{
+			"swap_file_size_mb":            swapFileSizeMB,
+			"sysctl_config":                sysctlConfig,
+			"transparent_huge_page_defrag": transparentHugePageDefrag,
+			"transparent_huge_page":        transparentHugePageEnabled,
+		},
+	}
+
+	return config, nil
+}

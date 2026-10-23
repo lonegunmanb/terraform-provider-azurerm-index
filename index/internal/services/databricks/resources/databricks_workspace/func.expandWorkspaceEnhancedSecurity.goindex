@@ -1,0 +1,54 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/resources/databricks_workspace
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2026-01-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandWorkspaceEnhancedSecurity(input []any) *workspaces.EnhancedSecurityComplianceDefinition {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	config := input[0].(map[string]any)
+
+	automaticClusterUpdateEnabled := workspaces.AutomaticClusterUpdateValueDisabled
+	if enabled, ok := config["automatic_cluster_update_enabled"].(bool); ok && enabled {
+		automaticClusterUpdateEnabled = workspaces.AutomaticClusterUpdateValueEnabled
+	}
+
+	enhancedSecurityMonitoringEnabled := workspaces.EnhancedSecurityMonitoringValueDisabled
+	if enabled, ok := config["enhanced_security_monitoring_enabled"].(bool); ok && enabled {
+		enhancedSecurityMonitoringEnabled = workspaces.EnhancedSecurityMonitoringValueEnabled
+	}
+
+	complianceSecurityProfileEnabled := workspaces.ComplianceSecurityProfileValueDisabled
+	if enabled, ok := config["compliance_security_profile_enabled"].(bool); ok && enabled {
+		complianceSecurityProfileEnabled = workspaces.ComplianceSecurityProfileValueEnabled
+	}
+
+	complianceStandards := make([]string, 0)
+	if standardSet, ok := config["compliance_security_profile_standards"].(*pluginsdk.Set); ok {
+		for _, s := range standardSet.List() {
+			complianceStandards = append(complianceStandards, s.(string))
+		}
+	}
+
+	if complianceSecurityProfileEnabled == workspaces.ComplianceSecurityProfileValueEnabled && len(complianceStandards) == 0 {
+		complianceStandards = append(complianceStandards, string(validate.ComplianceStandardNONE))
+	}
+
+	return &workspaces.EnhancedSecurityComplianceDefinition{
+		AutomaticClusterUpdate: &workspaces.AutomaticClusterUpdateDefinition{
+			Value: &automaticClusterUpdateEnabled,
+		},
+		EnhancedSecurityMonitoring: &workspaces.EnhancedSecurityMonitoringDefinition{
+			Value: &enhancedSecurityMonitoringEnabled,
+		},
+		ComplianceSecurityProfile: &workspaces.ComplianceSecurityProfileDefinition{
+			Value:               &complianceSecurityProfileEnabled,
+			ComplianceStandards: &complianceStandards,
+		},
+	}
+}

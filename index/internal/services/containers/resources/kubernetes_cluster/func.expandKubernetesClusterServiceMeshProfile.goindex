@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandKubernetesClusterServiceMeshProfile(input []any, existing *managedclusters.ServiceMeshProfile) *managedclusters.ServiceMeshProfile {
+	if len(input) == 0 {
+		// explicitly disable istio if it was enabled before
+		if existing != nil && existing.Mode == managedclusters.ServiceMeshModeIstio {
+			return &managedclusters.ServiceMeshProfile{
+				Mode: managedclusters.ServiceMeshModeDisabled,
+			}
+		}
+
+		return nil
+	}
+
+	raw := input[0].(map[string]any)
+
+	mode := raw["mode"].(string)
+
+	profile := managedclusters.ServiceMeshProfile{}
+
+	if managedclusters.ServiceMeshMode(mode) == managedclusters.ServiceMeshModeIstio {
+		profile.Mode = managedclusters.ServiceMeshMode(mode)
+		profile.Istio = &managedclusters.IstioServiceMesh{}
+
+		profile.Istio.Components = &managedclusters.IstioComponents{}
+
+		istioIngressGatewaysList := make([]managedclusters.IstioIngressGateway, 0)
+
+		if raw["internal_ingress_gateway_enabled"] != nil {
+			ingressGatewayElementInternal := managedclusters.IstioIngressGateway{
+				Enabled: raw["internal_ingress_gateway_enabled"].(bool),
+				Mode:    managedclusters.IstioIngressGatewayModeInternal,
+			}
+
+			istioIngressGatewaysList = append(istioIngressGatewaysList, ingressGatewayElementInternal)
+		}
+
+		if raw["external_ingress_gateway_enabled"] != nil {
+			ingressGatewayElementExternal := managedclusters.IstioIngressGateway{
+				Enabled: raw["external_ingress_gateway_enabled"].(bool),
+				Mode:    managedclusters.IstioIngressGatewayModeExternal,
+			}
+
+			istioIngressGatewaysList = append(istioIngressGatewaysList, ingressGatewayElementExternal)
+		}
+
+		profile.Istio.Components.IngressGateways = &istioIngressGatewaysList
+
+		if raw["certificate_authority"] != nil {
+			profile.Istio.CertificateAuthority = expandKubernetesClusterServiceMeshProfileCertificateAuthority(raw["certificate_authority"].([]any))
+		}
+
+		if raw["revisions"] != nil {
+			profile.Istio.Revisions = pluginsdk.ExpandStringSlice(raw["revisions"].([]any))
+		}
+	}
+
+	return &profile
+}

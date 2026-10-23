@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/helpers
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-03/galleryapplicationversions"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2025-04-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/publicipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandVirtualMachineScaleSetDataDisk(input []any, ultraSSDEnabled bool) (*[]virtualmachinescalesets.VirtualMachineScaleSetDataDisk, error) {
+	disks := make([]virtualmachinescalesets.VirtualMachineScaleSetDataDisk, 0)
+
+	for _, v := range input {
+		raw := v.(map[string]any)
+
+		storageAccountType := virtualmachinescalesets.StorageAccountTypes(raw["storage_account_type"].(string))
+		disk := virtualmachinescalesets.VirtualMachineScaleSetDataDisk{
+			Caching:    pointer.ToEnum[virtualmachinescalesets.CachingTypes](raw["caching"].(string)),
+			DiskSizeGB: pointer.To(int64(raw["disk_size_gb"].(int))),
+			Lun:        int64(raw["lun"].(int)),
+			ManagedDisk: &virtualmachinescalesets.VirtualMachineScaleSetManagedDiskParameters{
+				StorageAccountType: pointer.To(storageAccountType),
+			},
+			WriteAcceleratorEnabled: pointer.To(raw["write_accelerator_enabled"].(bool)),
+			CreateOption:            virtualmachinescalesets.DiskCreateOptionTypes(raw["create_option"].(string)),
+		}
+
+		if name := raw["name"]; name != nil && name.(string) != "" {
+			disk.Name = pointer.To(name.(string))
+		}
+
+		if id := raw["disk_encryption_set_id"].(string); id != "" {
+			disk.ManagedDisk.DiskEncryptionSet = &virtualmachinescalesets.SubResource{
+				Id: pointer.To(id),
+			}
+		}
+
+		iops, mbps := raw["disk_iops_read_write"].(int), raw["disk_mbps_read_write"].(int)
+
+		if !ultraSSDEnabled && storageAccountType != virtualmachinescalesets.StorageAccountTypesPremiumVTwoLRS {
+			if iops > 0 {
+				return nil, fmt.Errorf("`disk_iops_read_write` can only be set when `storage_account_type` is set to `PremiumV2_LRS` or `UltraSSD_LRS`")
+			}
+
+			if mbps > 0 {
+				return nil, fmt.Errorf("`disk_mbps_read_write` can only be set when `storage_account_type` is set to `PremiumV2_LRS` or `UltraSSD_LRS`")
+			}
+		}
+
+		// Do not set value unless value is greater than 0 - issue 15516
+		if iops > 0 {
+			disk.DiskIOPSReadWrite = pointer.To(int64(iops))
+		}
+
+		// Do not set value unless value is greater than 0 - issue 15516
+		if mbps > 0 {
+			disk.DiskMBpsReadWrite = pointer.To(int64(mbps))
+		}
+
+		disks = append(disks, disk)
+	}
+
+	return &disks, nil
+}

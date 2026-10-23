@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor
+import (
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+)
+func expandFrontDoorHealthProbeSettingsModel(input []any, frontDoorId frontdoors.FrontDoorId) *[]frontdoors.HealthProbeSettingsModel {
+	if len(input) == 0 {
+		return &[]frontdoors.HealthProbeSettingsModel{}
+	}
+
+	output := make([]frontdoors.HealthProbeSettingsModel, 0)
+
+	for _, hps := range input {
+		v := hps.(map[string]any)
+		path := v["path"].(string)
+		intervalInSeconds := int64(v["interval_in_seconds"].(int))
+		name := v["name"].(string)
+		enabled := v["enabled"].(bool)
+
+		healthProbeEnabled := frontdoors.HealthProbeEnabledEnabled
+		if !enabled {
+			healthProbeEnabled = frontdoors.HealthProbeEnabledDisabled
+		}
+		healthProbeId := parse.NewHealthProbeID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, name).ID()
+
+		result := frontdoors.HealthProbeSettingsModel{
+			Id:   pointer.To(healthProbeId),
+			Name: pointer.To(name),
+			Properties: &frontdoors.HealthProbeSettingsProperties{
+				IntervalInSeconds: pointer.To(intervalInSeconds),
+				Path:              pointer.To(path),
+				Protocol:          pointer.ToEnum[frontdoors.FrontDoorProtocol](v["protocol"].(string)),
+				HealthProbeMethod: pointer.ToEnum[frontdoors.FrontDoorHealthProbeMethod](v["probe_method"].(string)),
+				EnabledState:      &healthProbeEnabled,
+			},
+		}
+
+		output = append(output, result)
+	}
+
+	return &output
+}

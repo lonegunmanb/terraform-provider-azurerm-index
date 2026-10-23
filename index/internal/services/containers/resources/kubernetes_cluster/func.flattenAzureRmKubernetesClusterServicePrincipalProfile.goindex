@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster
+import (
+	"maps"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2025-11-01/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenAzureRmKubernetesClusterServicePrincipalProfile(profile *managedclusters.ManagedClusterServicePrincipalProfile, d *pluginsdk.ResourceData) []any {
+	if profile == nil {
+		return []any{}
+	}
+
+	clientId := profile.ClientId
+
+	if strings.EqualFold(clientId, "msi") {
+		return []any{}
+	}
+
+	// client secret isn't returned by the API so pass the existing value along
+	clientSecret := ""
+	if sp, ok := d.GetOk("service_principal"); ok {
+		var val []any
+
+		// prior to 1.34 this was a *pluginsdk.Set, now it's a List - try both
+		if v, ok := sp.([]any); ok {
+			val = v
+		} else if v, ok := sp.(*pluginsdk.Set); ok {
+			val = v.List()
+		}
+
+		if len(val) > 0 && val[0] != nil {
+			raw := val[0].(map[string]any)
+			clientSecret = raw["client_secret"].(string)
+		}
+	}
+
+	return []any{
+		map[string]any{
+			"client_id":     clientId,
+			"client_secret": clientSecret,
+		},
+	}
+}

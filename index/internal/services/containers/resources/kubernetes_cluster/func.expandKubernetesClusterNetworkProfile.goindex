@@ -1,0 +1,102 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandKubernetesClusterNetworkProfile(input []any, d *pluginsdk.ResourceData) (*managedclusters.ContainerServiceNetworkProfile, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	config := input[0].(map[string]any)
+
+	networkPlugin := config["network_plugin"].(string)
+	networkMode := config["network_mode"].(string)
+	if networkPlugin != "azure" && networkMode != "" {
+		return nil, fmt.Errorf("`network_mode` cannot be set if `network_plugin` is not `azure`")
+	}
+	networkPolicy := config["network_policy"].(string)
+	loadBalancerProfileRaw := config["load_balancer_profile"].([]any)
+	loadBalancerSku := config["load_balancer_sku"].(string)
+	natGatewayProfileRaw := config["nat_gateway_profile"].([]any)
+	outboundType := config["outbound_type"].(string)
+	ipVersions, err := expandIPVersions(config["ip_versions"].([]any))
+	if err != nil {
+		return nil, err
+	}
+
+	networkProfile := managedclusters.ContainerServiceNetworkProfile{
+		NetworkPlugin:   pointer.ToEnum[managedclusters.NetworkPlugin](networkPlugin),
+		NetworkMode:     pointer.ToEnum[managedclusters.NetworkMode](networkMode),
+		NetworkPolicy:   pointer.ToEnum[managedclusters.NetworkPolicy](networkPolicy),
+		LoadBalancerSku: pointer.ToEnum[managedclusters.LoadBalancerSku](loadBalancerSku),
+		OutboundType:    pointer.ToEnum[managedclusters.OutboundType](outboundType),
+		IPFamilies:      ipVersions,
+	}
+
+	if networkDataPlane := config["network_data_plane"].(string); networkDataPlane != "" {
+		networkProfile.NetworkDataplane = pointer.ToEnum[managedclusters.NetworkDataplane](networkDataPlane)
+	}
+
+	if networkPluginMode := config["network_plugin_mode"].(string); networkPluginMode != "" {
+		networkProfile.NetworkPluginMode = pointer.ToEnum[managedclusters.NetworkPluginMode](networkPluginMode)
+	}
+
+	if len(loadBalancerProfileRaw) > 0 {
+		if !strings.EqualFold(loadBalancerSku, "standard") {
+			return nil, fmt.Errorf("only load balancer SKU 'Standard' supports load balancer profiles. Provided load balancer type: %s", loadBalancerSku)
+		}
+
+		networkProfile.LoadBalancerProfile = expandLoadBalancerProfile(loadBalancerProfileRaw)
+	}
+
+	if len(natGatewayProfileRaw) > 0 {
+		if !strings.EqualFold(loadBalancerSku, "standard") {
+			return nil, fmt.Errorf("only load balancer SKU 'Standard' supports NAT Gateway profiles. Provided load balancer type: %s", loadBalancerSku)
+		}
+
+		networkProfile.NatGatewayProfile = expandNatGatewayProfile(natGatewayProfileRaw)
+	}
+
+	if v, ok := config["dns_service_ip"]; ok && v.(string) != "" {
+		dnsServiceIP := v.(string)
+		networkProfile.DnsServiceIP = pointer.To(dnsServiceIP)
+	}
+
+	if v, ok := config["pod_cidr"]; ok && v.(string) != "" {
+		podCidr := v.(string)
+		networkProfile.PodCidr = pointer.To(podCidr)
+	}
+
+	if v, ok := config["pod_cidrs"]; ok {
+		networkProfile.PodCidrs = pluginsdk.ExpandStringSlice(v.([]any))
+	}
+
+	if v, ok := config["service_cidr"]; ok && v.(string) != "" {
+		serviceCidr := v.(string)
+		networkProfile.ServiceCidr = pointer.To(serviceCidr)
+	}
+
+	if v, ok := config["service_cidrs"]; ok {
+		networkProfile.ServiceCidrs = pluginsdk.ExpandStringSlice(v.([]any))
+	}
+
+	if v, ok := config["advanced_networking"]; ok {
+		networkProfile.AdvancedNetworking = expandKubernetesClusterAdvancedNetworking(v.([]any), d)
+	}
+
+	return &networkProfile, nil
+}

@@ -1,0 +1,172 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenApplicationGatewayRewriteRuleSets(input *[]applicationgateways.ApplicationGatewayRewriteRuleSet) []any {
+	results := make([]any, 0)
+	if input == nil {
+		return results
+	}
+
+	for _, config := range *input {
+		if props := config.Properties; props != nil {
+			output := map[string]any{}
+
+			if config.Id != nil {
+				output["id"] = *config.Id
+			}
+
+			if config.Name != nil {
+				output["name"] = *config.Name
+			}
+
+			if rulesConfig := props.RewriteRules; rulesConfig != nil {
+				rules := make([]any, 0)
+				for _, rule := range *rulesConfig {
+					ruleOutput := map[string]any{}
+
+					if rule.Name != nil {
+						ruleOutput["name"] = *rule.Name
+					}
+
+					if rule.RuleSequence != nil {
+						ruleOutput["rule_sequence"] = *rule.RuleSequence
+					}
+
+					conditions := make([]any, 0)
+					if rule.Conditions != nil {
+						for _, config := range *rule.Conditions {
+							condition := map[string]any{}
+
+							if config.Variable != nil {
+								condition["variable"] = *config.Variable
+							}
+
+							if config.Pattern != nil {
+								condition["pattern"] = *config.Pattern
+							}
+
+							if config.IgnoreCase != nil {
+								condition["ignore_case"] = *config.IgnoreCase
+							}
+
+							if config.Negate != nil {
+								condition["negate"] = *config.Negate
+							}
+
+							conditions = append(conditions, condition)
+						}
+					}
+					ruleOutput["condition"] = conditions
+
+					requestConfigs := make([]any, 0)
+					responseConfigs := make([]any, 0)
+					urlConfigs := make([]any, 0)
+
+					if rule.ActionSet != nil {
+						actionSet := *rule.ActionSet
+
+						if actionSet.RequestHeaderConfigurations != nil {
+							for _, config := range *actionSet.RequestHeaderConfigurations {
+								requestConfig := map[string]any{}
+
+								if config.HeaderName != nil {
+									requestConfig["header_name"] = *config.HeaderName
+								}
+
+								if config.HeaderValue != nil {
+									requestConfig["header_value"] = *config.HeaderValue
+								}
+
+								requestConfigs = append(requestConfigs, requestConfig)
+							}
+						}
+
+						if actionSet.ResponseHeaderConfigurations != nil {
+							for _, config := range *actionSet.ResponseHeaderConfigurations {
+								responseConfig := map[string]any{}
+
+								if config.HeaderName != nil {
+									responseConfig["header_name"] = *config.HeaderName
+								}
+
+								if config.HeaderValue != nil {
+									responseConfig["header_value"] = *config.HeaderValue
+								}
+
+								responseConfigs = append(responseConfigs, responseConfig)
+							}
+						}
+
+						if actionSet.UrlConfiguration != nil {
+							config := *actionSet.UrlConfiguration
+							components := ""
+
+							path := pointer.From(config.ModifiedPath)
+
+							queryString := pointer.From(config.ModifiedQueryString)
+
+							// `components` doesn't exist in the API - it appears to be purely a UI state in the Portal
+							// as such we should consider removing this field in the future.
+							if path == queryString {
+								// used to represent `both`
+								components = ""
+							}
+							if config.ModifiedQueryString != nil && config.ModifiedPath == nil {
+								components = "query_string_only"
+							}
+							if config.ModifiedQueryString == nil && config.ModifiedPath != nil {
+								components = "path_only"
+							}
+
+							urlConfigs = append(urlConfigs, map[string]any{
+								"components":   components,
+								"query_string": queryString,
+								"path":         path,
+								"reroute":      pointer.From(config.Reroute),
+							})
+						}
+					}
+					ruleOutput["request_header_configuration"] = requestConfigs
+					ruleOutput["response_header_configuration"] = responseConfigs
+					ruleOutput["url"] = urlConfigs
+
+					rules = append(rules, ruleOutput)
+				}
+				output["rewrite_rule"] = rules
+			}
+			results = append(results, output)
+		}
+	}
+
+	return results
+}

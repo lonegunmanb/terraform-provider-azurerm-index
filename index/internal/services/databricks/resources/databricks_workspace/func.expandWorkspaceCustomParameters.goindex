@@ -1,0 +1,120 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/resources/databricks_workspace
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/databricks/2026-01-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/databricks/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandWorkspaceCustomParameters(input []any, customerManagedKeyEnabled, infrastructureEncryptionEnabled bool, backendAddressPoolName, loadBalancerId string) (workspaceCustomParameters *workspaces.WorkspaceCustomParameters, publicSubnetAssociation, privateSubnetAssociation *string) {
+	if len(input) == 0 || input[0] == nil {
+		// This will be hit when there are no custom params set but we still
+		// need to pass the customerManagedKeyEnabled and infrastructureEncryptionEnabled
+		// flags anyway...
+		parameters := workspaces.WorkspaceCustomParameters{}
+
+		parameters.PrepareEncryption = &workspaces.WorkspaceCustomBooleanParameter{
+			Value: customerManagedKeyEnabled,
+		}
+
+		parameters.RequireInfrastructureEncryption = &workspaces.WorkspaceCustomBooleanParameter{
+			Value: infrastructureEncryptionEnabled,
+		}
+
+		return &parameters, nil, nil
+	}
+
+	config := input[0].(map[string]any)
+	var pubSubnetAssoc, priSubnetAssoc *string
+	parameters := workspaces.WorkspaceCustomParameters{}
+
+	if v, ok := config["public_subnet_network_security_group_association_id"].(string); ok && v != "" {
+		pubSubnetAssoc = &v
+	}
+
+	if v, ok := config["private_subnet_network_security_group_association_id"].(string); ok && v != "" {
+		priSubnetAssoc = &v
+	}
+
+	if backendAddressPoolName != "" {
+		parameters.LoadBalancerBackendPoolName = &workspaces.WorkspaceCustomStringParameter{
+			Value: backendAddressPoolName,
+		}
+	}
+
+	if loadBalancerId != "" {
+		parameters.LoadBalancerId = &workspaces.WorkspaceCustomStringParameter{
+			Value: loadBalancerId,
+		}
+	}
+
+	if v, ok := config["nat_gateway_name"].(string); ok && v != "" {
+		parameters.NatGatewayName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["public_ip_name"].(string); ok && v != "" {
+		parameters.PublicIPName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["storage_account_name"].(string); ok && v != "" {
+		parameters.StorageAccountName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["storage_account_sku_name"].(string); ok && v != "" {
+		parameters.StorageAccountSkuName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["vnet_address_prefix"].(string); ok && v != "" {
+		parameters.VnetAddressPrefix = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["machine_learning_workspace_id"].(string); ok && v != "" {
+		parameters.AmlWorkspaceId = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["no_public_ip"].(bool); ok {
+		parameters.EnableNoPublicIP = &workspaces.WorkspaceNoPublicIPBooleanParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["public_subnet_name"].(string); ok && v != "" {
+		parameters.CustomPublicSubnetName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	parameters.PrepareEncryption = &workspaces.WorkspaceCustomBooleanParameter{
+		Value: customerManagedKeyEnabled,
+	}
+
+	parameters.RequireInfrastructureEncryption = &workspaces.WorkspaceCustomBooleanParameter{
+		Value: infrastructureEncryptionEnabled,
+	}
+
+	if v, ok := config["private_subnet_name"].(string); ok && v != "" {
+		parameters.CustomPrivateSubnetName = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	if v, ok := config["virtual_network_id"].(string); ok && v != "" {
+		parameters.CustomVirtualNetworkId = &workspaces.WorkspaceCustomStringParameter{
+			Value: v,
+		}
+	}
+
+	return &parameters, pubSubnetAssoc, priSubnetAssoc
+}

@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/resources/cdn_frontdoor_firewall_policy
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandCdnFrontDoorFirewallCustomRules(input []any) *webapplicationfirewallpolicies.CustomRuleList {
+	if len(input) == 0 {
+		return nil
+	}
+
+	output := make([]webapplicationfirewallpolicies.CustomRule, 0)
+
+	for _, cr := range input {
+		custom := cr.(map[string]any)
+
+		enabled := webapplicationfirewallpolicies.CustomRuleEnabledStateDisabled
+		if custom["enabled"].(bool) {
+			enabled = webapplicationfirewallpolicies.CustomRuleEnabledStateEnabled
+		}
+
+		name := custom["name"].(string)
+		priority := int64(custom["priority"].(int))
+		ruleType := custom["type"].(string)
+		rateLimitDurationInMinutes := int64(custom["rate_limit_duration_in_minutes"].(int))
+		rateLimitThreshold := int64(custom["rate_limit_threshold"].(int))
+		matchConditions := expandCdnFrontDoorFirewallMatchConditions(custom["match_condition"].([]any))
+		action := custom["action"].(string)
+
+		output = append(output, webapplicationfirewallpolicies.CustomRule{
+			Name:                       pointer.To(name),
+			Priority:                   priority,
+			EnabledState:               pointer.To(enabled),
+			RuleType:                   webapplicationfirewallpolicies.RuleType(ruleType),
+			RateLimitDurationInMinutes: pointer.To(rateLimitDurationInMinutes),
+			RateLimitThreshold:         pointer.To(rateLimitThreshold),
+			MatchConditions:            matchConditions,
+			Action:                     webapplicationfirewallpolicies.ActionType(action),
+		})
+	}
+
+	return &webapplicationfirewallpolicies.CustomRuleList{
+		Rules: &output,
+	}
+}

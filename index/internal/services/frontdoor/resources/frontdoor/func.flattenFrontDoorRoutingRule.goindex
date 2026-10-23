@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+)
+func flattenFrontDoorRoutingRule(input *[]frontdoors.RoutingRule, oldBlocks any, frontDoorId frontdoors.FrontDoorId, explicitOrder []any) (*[]any, error) {
+	if input == nil {
+		return &[]any{}, nil
+	}
+
+	output := make([]any, 0)
+
+	if len(explicitOrder) > 0 {
+		orderedRule := explicitOrder[0].(map[string]any)
+		orderedRoutingRuleIds := orderedRule["routing_rule_ids"].([]any)
+		combinedRoutingRules, err := combineRoutingRules(*input, oldBlocks, orderedRoutingRuleIds, frontDoorId)
+		if err != nil {
+			return nil, err
+		}
+		output = combinedRoutingRules
+	} else {
+		for _, v := range *input {
+			routingRule, err := flattenSingleFrontDoorRoutingRule(v, oldBlocks, frontDoorId)
+			if err == nil {
+				output = append(output, routingRule)
+			} else {
+				return nil, err
+			}
+		}
+	}
+
+	return &output, nil
+}

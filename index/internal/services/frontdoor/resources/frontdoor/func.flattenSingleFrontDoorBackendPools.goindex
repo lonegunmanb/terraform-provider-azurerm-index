@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+)
+func flattenSingleFrontDoorBackendPools(input *frontdoors.BackendPool, frontDoorId frontdoors.FrontDoorId) (map[string]any, error) {
+	if input == nil {
+		return make(map[string]any), nil
+	}
+
+	id := ""
+	name := ""
+	if input.Name != nil {
+		name = *input.Name
+		// rewrite the ID to ensure it's consistent
+		id = parse.NewBackendPoolID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, name).ID()
+	}
+
+	backend := make([]any, 0)
+	healthProbeName := ""
+	loadBalancingName := ""
+	if props := input.Properties; props != nil {
+		backend = flattenFrontDoorBackend(props.Backends)
+		if props.HealthProbeSettings != nil && props.HealthProbeSettings.Id != nil {
+			name, err := parse.HealthProbeIDInsensitively(*props.HealthProbeSettings.Id)
+			if err != nil {
+				return nil, err
+			}
+			healthProbeName = name.HealthProbeSettingName
+		}
+
+		if props.LoadBalancingSettings != nil && props.LoadBalancingSettings.Id != nil {
+			name, err := parse.LoadBalancingIDInsensitively(*props.LoadBalancingSettings.Id)
+			if err != nil {
+				return nil, err
+			}
+			loadBalancingName = name.LoadBalancingSettingName
+		}
+	}
+
+	output := map[string]any{
+		"backend":             backend,
+		"health_probe_name":   healthProbeName,
+		"id":                  id,
+		"load_balancing_name": loadBalancingName,
+		"name":                name,
+	}
+
+	return output, nil
+}

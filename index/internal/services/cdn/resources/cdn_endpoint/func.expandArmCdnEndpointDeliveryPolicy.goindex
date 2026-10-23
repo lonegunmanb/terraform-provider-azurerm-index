@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/resources/cdn_endpoint
+import (
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" //nolint:staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandArmCdnEndpointDeliveryPolicy(globalRulesRaw []any, deliveryRulesRaw []any) (*cdn.EndpointPropertiesUpdateParametersDeliveryPolicy, error) {
+	deliveryRules := make([]cdn.DeliveryRule, 0)
+	deliveryPolicy := cdn.EndpointPropertiesUpdateParametersDeliveryPolicy{
+		Description: pointer.To(""),
+		Rules:       &deliveryRules,
+	}
+
+	if len(globalRulesRaw) > 0 && globalRulesRaw[0] != nil {
+		ruleRaw := globalRulesRaw[0].(map[string]any)
+		rule, err := expandArmCdnEndpointGlobalDeliveryRule(ruleRaw)
+		if err != nil {
+			return nil, err
+		}
+		deliveryRules = append(deliveryRules, *rule)
+	}
+
+	for _, ruleV := range deliveryRulesRaw {
+		ruleRaw := ruleV.(map[string]any)
+		rule, err := helpers.ExpandArmCdnEndpointDeliveryRule(ruleRaw)
+		if err != nil {
+			return nil, err
+		}
+		deliveryRules = append(deliveryRules, *rule)
+	}
+
+	return &deliveryPolicy, nil
+}

@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection/resources/data_protection_backup_policy_cosmosdb_account
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2026-06-01/basebackuppolicyresources"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandBackupPolicyCosmosdbAccountBackupRules(fullBackupSchedule string, incrementalBackupEnabled bool, taggingCriteria []basebackuppolicyresources.TaggingCriteria) ([]basebackuppolicyresources.BasePolicyRule, error) {
+	results := []basebackuppolicyresources.BasePolicyRule{
+		basebackuppolicyresources.AzureBackupRule{
+			Name: "BackupWeekly",
+			DataStore: basebackuppolicyresources.DataStoreInfoBase{
+				DataStoreType: basebackuppolicyresources.DataStoreTypesVaultStore,
+				ObjectType:    "DataStoreInfoBase",
+			},
+			BackupParameters: basebackuppolicyresources.AzureBackupParams{
+				BackupType: "Full",
+			},
+			Trigger: basebackuppolicyresources.ScheduleBasedTriggerContext{
+				Schedule: basebackuppolicyresources.BackupSchedule{
+					RepeatingTimeIntervals: []string{fullBackupSchedule},
+				},
+				TaggingCriteria: taggingCriteria,
+			},
+		},
+	}
+
+	if !incrementalBackupEnabled {
+		return results, nil
+	}
+
+	incrementalBackupSchedule, err := generateBackupPolicyCosmosdbAccountIncrementalSchedules(fullBackupSchedule)
+	if err != nil {
+		return nil, err
+	}
+
+	results = append(results, basebackuppolicyresources.AzureBackupRule{
+		Name: "BackupWeeklyIncremental",
+		DataStore: basebackuppolicyresources.DataStoreInfoBase{
+			DataStoreType: basebackuppolicyresources.DataStoreTypesVaultStore,
+			ObjectType:    "DataStoreInfoBase",
+		},
+		BackupParameters: basebackuppolicyresources.AzureBackupParams{
+			BackupType: "Incremental",
+		},
+		Trigger: basebackuppolicyresources.ScheduleBasedTriggerContext{
+			Schedule: basebackuppolicyresources.BackupSchedule{
+				RepeatingTimeIntervals: incrementalBackupSchedule,
+			},
+			TaggingCriteria: []basebackuppolicyresources.TaggingCriteria{
+				expandBackupPolicyCosmosdbAccountDefaultTaggingCriteria(),
+			},
+		},
+	})
+
+	return results, nil
+}

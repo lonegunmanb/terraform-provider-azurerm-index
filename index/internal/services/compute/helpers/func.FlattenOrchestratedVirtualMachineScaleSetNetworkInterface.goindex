@@ -1,0 +1,83 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/helpers
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2025-04-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/publicipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func FlattenOrchestratedVirtualMachineScaleSetNetworkInterface(input *[]virtualmachinescalesets.VirtualMachineScaleSetNetworkConfiguration) []any {
+	if input == nil {
+		return []any{}
+	}
+
+	results := make([]any, 0)
+	for _, v := range *input {
+		var auxiliaryMode, auxiliarySku, networkSecurityGroupId string
+		var enableAcceleratedNetworking, enableIPForwarding, primary bool
+		var dnsServers []any
+		var ipConfigurations []any
+		if props := v.Properties; props != nil {
+			if props.AuxiliaryMode != nil && *props.AuxiliaryMode != virtualmachinescalesets.NetworkInterfaceAuxiliaryModeNone {
+				auxiliaryMode = pointer.FromEnum(props.AuxiliaryMode)
+			}
+
+			if props.AuxiliarySku != nil && *props.AuxiliarySku != virtualmachinescalesets.NetworkInterfaceAuxiliarySkuNone {
+				auxiliarySku = pointer.FromEnum(props.AuxiliarySku)
+			}
+
+			if props.NetworkSecurityGroup != nil && props.NetworkSecurityGroup.Id != nil {
+				networkSecurityGroupId = *props.NetworkSecurityGroup.Id
+			}
+
+			if props.EnableAcceleratedNetworking != nil {
+				enableAcceleratedNetworking = *props.EnableAcceleratedNetworking
+			}
+			if props.EnableIPForwarding != nil {
+				enableIPForwarding = *props.EnableIPForwarding
+			}
+			if props.Primary != nil {
+				primary = *props.Primary
+			}
+
+			if settings := props.DnsSettings; settings != nil {
+				dnsServers = pluginsdk.FlattenSlice(props.DnsSettings.DnsServers)
+			}
+
+			if len(props.IPConfigurations) != 0 {
+				for _, configRaw := range props.IPConfigurations {
+					config := FlattenOrchestratedVirtualMachineScaleSetIPConfiguration(configRaw)
+					ipConfigurations = append(ipConfigurations, config)
+				}
+			}
+		}
+
+		results = append(results, map[string]any{
+			"name":                           v.Name,
+			"auxiliary_mode":                 auxiliaryMode,
+			"auxiliary_sku":                  auxiliarySku,
+			"dns_servers":                    dnsServers,
+			"accelerated_networking_enabled": enableAcceleratedNetworking,
+			"ip_forwarding_enabled":          enableIPForwarding,
+			"ip_configuration":               ipConfigurations,
+			"network_security_group_id":      networkSecurityGroupId,
+			"primary":                        primary,
+			"tags":                           tags.Flatten(v.Tags),
+		})
+	}
+
+	return results
+}

@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func retrieveFrontEndEndpointInformation(ctx context.Context, client *frontdoors.FrontDoorsClient, frontDoorId frontdoors.FrontDoorId, endpoints *[]frontdoors.FrontendEndpoint) (*[]frontdoors.FrontendEndpoint, error) {
+	output := make([]frontdoors.FrontendEndpoint, 0)
+	if endpoints == nil {
+		return &output, nil
+	}
+
+	for _, endpoint := range *endpoints {
+		if endpoint.Name == nil {
+			continue
+		}
+
+		name := *endpoint.Name
+		endpointID := frontdoors.NewFrontendEndpointID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, name)
+		resp, err := client.FrontendEndpointsGet(ctx, endpointID)
+		if err != nil {
+			return nil, fmt.Errorf("retrieving Custom HTTPS Configuration for Frontend Endpoint %q (FrontDoor %q / Resource Group %q): %+v", name, frontDoorId.FrontDoorName, frontDoorId.ResourceGroupName, err)
+		}
+		if resp.Model != nil {
+			output = append(output, *resp.Model)
+		}
+	}
+
+	return &output, nil
+}

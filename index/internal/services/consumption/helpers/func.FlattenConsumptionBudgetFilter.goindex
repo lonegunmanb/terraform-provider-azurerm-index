@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption/helpers
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/consumption/2019-10-01/budgets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func FlattenConsumptionBudgetFilter(input *budgets.BudgetFilter) []any {
+	filter := make([]any, 0)
+
+	if input == nil {
+		return filter
+	}
+
+	dimensions := make([]any, 0)
+	tags := make([]any, 0)
+
+	filterBlock := make(map[string]any)
+
+	if input.And != nil {
+		for _, v := range *input.And {
+			if v.Dimensions != nil {
+				dimensions = append(dimensions, FlattenConsumptionBudgetComparisonExpression(v.Dimensions))
+			} else {
+				tags = append(tags, FlattenConsumptionBudgetComparisonExpression(v.Tags))
+			}
+		}
+
+		if len(dimensions) != 0 {
+			filterBlock["dimension"] = dimensions
+		}
+
+		if len(tags) != 0 {
+			filterBlock["tag"] = tags
+		}
+	} else {
+		if input.Tags != nil {
+			filterBlock["tag"] = append(tags, FlattenConsumptionBudgetComparisonExpression(input.Tags))
+		}
+
+		if input.Dimensions != nil {
+			filterBlock["dimension"] = append(dimensions, FlattenConsumptionBudgetComparisonExpression(input.Dimensions))
+		}
+	}
+
+	if len(filterBlock) != 0 {
+		filter = append(filter, filterBlock)
+	}
+
+	return filter
+}

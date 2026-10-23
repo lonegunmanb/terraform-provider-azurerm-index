@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/resources/firewall_application_rule_collection
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/azurefirewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandFirewallApplicationRules(inputs []any) (*[]azurefirewalls.AzureFirewallApplicationRule, error) {
+	outputs := make([]azurefirewalls.AzureFirewallApplicationRule, 0)
+
+	for _, input := range inputs {
+		rule := input.(map[string]any)
+
+		ruleName := rule["name"].(string)
+		ruleDescription := rule["description"].(string)
+		ruleSourceAddresses := rule["source_addresses"].([]any)
+		ruleSourceIpGroups := rule["source_ip_groups"].([]any)
+		ruleFqdnTags := rule["fqdn_tags"].([]any)
+		ruleTargetFqdns := rule["target_fqdns"].([]any)
+
+		output := azurefirewalls.AzureFirewallApplicationRule{
+			Name:            pointer.To(ruleName),
+			Description:     pointer.To(ruleDescription),
+			SourceAddresses: pluginsdk.ExpandStringSlice(ruleSourceAddresses),
+			SourceIPGroups:  pluginsdk.ExpandStringSlice(ruleSourceIpGroups),
+			FqdnTags:        pluginsdk.ExpandStringSlice(ruleFqdnTags),
+			TargetFqdns:     pluginsdk.ExpandStringSlice(ruleTargetFqdns),
+		}
+
+		ruleProtocols := make([]azurefirewalls.AzureFirewallApplicationRuleProtocol, 0)
+		for _, v := range rule["protocol"].([]any) {
+			protocol := v.(map[string]any)
+			port := protocol["port"].(int)
+			ruleProtocol := azurefirewalls.AzureFirewallApplicationRuleProtocol{
+				Port:         pointer.To(int64(port)),
+				ProtocolType: pointer.ToEnum[azurefirewalls.AzureFirewallApplicationRuleProtocolType](protocol["type"].(string)),
+			}
+			ruleProtocols = append(ruleProtocols, ruleProtocol)
+		}
+		output.Protocols = &ruleProtocols
+		if len(*output.FqdnTags) > 0 {
+			if len(*output.TargetFqdns) > 0 || len(*output.Protocols) > 0 {
+				return nil, fmt.Errorf("`fqdn_tags` cannot be used with `target_fqdns` or `protocol`")
+			}
+		}
+
+		if len(*output.SourceAddresses) == 0 && len(*output.SourceIPGroups) == 0 {
+			return nil, fmt.Errorf("at least one of %q and %q must be specified for each rule", "source_addresses", "source_ip_groups")
+		}
+		outputs = append(outputs, output)
+	}
+
+	return &outputs, nil
+}

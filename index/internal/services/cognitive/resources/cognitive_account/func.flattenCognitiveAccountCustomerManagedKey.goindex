@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/resources/cognitive_account
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2026-03-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenCognitiveAccountCustomerManagedKey(input *cognitiveservicesaccounts.Encryption) ([]any, error) {
+	if input == nil || pointer.From(input.KeySource) == cognitiveservicesaccounts.KeySourceMicrosoftPointCognitiveServices {
+		return []any{}, nil
+	}
+
+	var keyId string
+	var identityClientId string
+	if props := input.KeyVaultProperties; props != nil {
+		keyVaultKeyId, err := keyvault.NewNestedItemID(pointer.From(props.KeyVaultUri), keyvault.NestedItemTypeKey, pointer.From(props.KeyName), pointer.From(props.KeyVersion))
+		if err != nil {
+			return nil, err
+		}
+		keyId = keyVaultKeyId.ID()
+		if props.IdentityClientId != nil {
+			identityClientId = *props.IdentityClientId
+		}
+	}
+
+	return []any{
+		map[string]any{
+			"key_vault_key_id":   keyId,
+			"identity_client_id": identityClientId,
+		},
+	}, nil
+}

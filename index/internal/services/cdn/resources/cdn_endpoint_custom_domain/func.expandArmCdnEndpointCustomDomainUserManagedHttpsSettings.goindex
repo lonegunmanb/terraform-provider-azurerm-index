@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/resources/cdn_endpoint_custom_domain
+import (
+	"context"
+	"fmt"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" //nolint:staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/customdomains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/endpoints"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandArmCdnEndpointCustomDomainUserManagedHttpsSettings(ctx context.Context, input []any, clients *clients.Client) (cdn.BasicCustomDomainHTTPSParameters, error) {
+	if len(input) == 0 || input[0] == nil {
+		return nil, nil
+	}
+
+	raw := input[0].(map[string]any)
+
+	idLiteral := raw["key_vault_secret_id"].(string)
+
+	keyVaultSecretId, err := keyvault.ParseNestedItemID(idLiteral, keyvault.VersionTypeAny, keyvault.NestedItemTypeAny)
+	if err != nil {
+		return nil, err
+	}
+
+	subscriptionId := commonids.NewSubscriptionID(clients.Account.SubscriptionId)
+	keyVaultIdRaw, err := clients.KeyVault.KeyVaultIDFromBaseUrl(ctx, subscriptionId, keyVaultSecretId.KeyVaultBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving the Resource ID the Key Vault at URL %q: %s", keyVaultSecretId.KeyVaultBaseURL, err)
+	}
+	if keyVaultIdRaw == nil {
+		return nil, fmt.Errorf("unable to find the Resource Manager ID for the Key Vault URI %q in %s", keyVaultSecretId.KeyVaultBaseURL, subscriptionId)
+	}
+	keyVaultId, err := commonids.ParseKeyVaultID(*keyVaultIdRaw)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fix for issue #20772
+	var SecretVersion *string
+	if keyVaultSecretId.Version != "" {
+		SecretVersion = pointer.To(keyVaultSecretId.Version)
+	}
+
+	output := &cdn.UserManagedHTTPSParameters{
+		CertificateSourceParameters: &cdn.KeyVaultCertificateSourceParameters{
+			OdataType:         pointer.To("#Microsoft.Azure.Cdn.Models.KeyVaultCertificateSourceParameters"),
+			SubscriptionID:    pointer.To(keyVaultId.SubscriptionId),
+			ResourceGroupName: pointer.To(keyVaultId.ResourceGroupName),
+			VaultName:         pointer.To(keyVaultId.VaultName),
+			SecretName:        pointer.To(keyVaultSecretId.Name),
+			SecretVersion:     SecretVersion,
+			UpdateRule:        pointer.To("NoAction"),
+			DeleteRule:        pointer.To("NoAction"),
+		},
+		CertificateSource: cdn.CertificateSourceAzureKeyVault,
+		ProtocolType:      cdn.ProtocolTypeServerNameIndication,
+		MinimumTLSVersion: cdn.MinimumTLSVersion(raw["tls_version"].(string)),
+	}
+
+	return output, nil
+}

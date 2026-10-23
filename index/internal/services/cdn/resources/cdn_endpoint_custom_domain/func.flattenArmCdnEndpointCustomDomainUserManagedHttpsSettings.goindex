@@ -1,0 +1,76 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/resources/cdn_endpoint_custom_domain
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/Azure/azure-sdk-for-go/services/cdn/mgmt/2020-09-01/cdn" //nolint:staticcheck
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/customdomains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/endpoints"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	keyvaultClient "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenArmCdnEndpointCustomDomainUserManagedHttpsSettings(ctx context.Context, input cdn.UserManagedHTTPSParameters, keyVaultsClient *keyvaultClient.Client, isVersioned bool) ([]any, error) {
+	params := input.CertificateSourceParameters
+	if params == nil {
+		return nil, fmt.Errorf("unexpected nil Certificate Source Parameters from API")
+	}
+
+	if params.SubscriptionID == nil {
+		return nil, fmt.Errorf("unexpected nil `subscriptionId` in the Certificate Source Parameters from API")
+	}
+	subscriptionId := *params.SubscriptionID
+
+	if params.ResourceGroupName == nil {
+		return nil, fmt.Errorf("unexpected nil `resourceGroupName` in the Certificate Source Parameters from API")
+	}
+	resourceGroupName := *params.ResourceGroupName
+
+	if params.VaultName == nil {
+		return nil, fmt.Errorf("unexpected nil `vaultName` in the Certificate Source Parameters from API")
+	}
+	vaultName := *params.VaultName
+
+	if params.SecretName == nil {
+		return nil, fmt.Errorf("unexpected nil `secretName` in the Certificate Source Parameters from API")
+	}
+	secretName := *params.SecretName
+
+	secretVersion := pointer.From(params.SecretVersion)
+
+	keyVaultId := commonids.NewKeyVaultID(subscriptionId, resourceGroupName, vaultName)
+	keyVaultBaseUrl, err := keyVaultsClient.BaseUriForKeyVault(ctx, keyVaultId)
+	if err != nil {
+		return nil, fmt.Errorf("looking up Key Vault Secret %q vault url from id %q: %+v", vaultName, keyVaultId, err)
+	}
+
+	secret, err := keyVaultsClient.ManagementClient.GetSecret(ctx, *keyVaultBaseUrl, secretName, secretVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	if secret.ID == nil {
+		return nil, fmt.Errorf("unexpected null Key Vault Secret retrieved for Key Vault %s / Secret Name %s / Secret Version %s", keyVaultId, secretName, secretVersion)
+	}
+
+	secretId, err := keyvault.ParseNestedItemID(*secret.ID, keyvault.VersionTypeAny, keyvault.NestedItemTypeAny)
+	if err != nil {
+		return nil, err
+	}
+
+	secretIdLiteral := secretId.ID()
+	if !isVersioned {
+		secretIdLiteral = secretId.VersionlessID()
+	}
+
+	return []any{map[string]any{
+		"key_vault_secret_id": secretIdLiteral,
+		"tls_version":         string(input.MinimumTLSVersion),
+	}}, nil
+}

@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/elastic/resources/elastic_cloud_elasticsearch
+import (
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/elastic/2023-06-01/monitorsresource"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/elastic/2023-06-01/rules"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenTagRule(input *rules.MonitoringTagRules) []any {
+	if input == nil || input.Properties == nil || input.Properties.LogRules == nil {
+		return []any{}
+	}
+
+	rules := input.Properties.LogRules
+
+	filteringTags := make([]any, 0)
+	if rules.FilteringTags != nil {
+		for _, v := range *rules.FilteringTags {
+			action := ""
+			if v.Action != nil {
+				action = string(*v.Action)
+			}
+			filteringTags = append(filteringTags, map[string]any{
+				"action": action,
+				"name":   pointer.From(v.Name),
+				"value":  pointer.From(v.Value),
+			})
+		}
+	}
+
+	return []any{
+		map[string]any{
+			"filtering_tag":          filteringTags,
+			"send_activity_logs":     pointer.From(rules.SendActivityLogs),
+			"send_azuread_logs":      pointer.From(rules.SendAadLogs),
+			"send_subscription_logs": pointer.From(rules.SendSubscriptionLogs),
+		},
+	}
+}

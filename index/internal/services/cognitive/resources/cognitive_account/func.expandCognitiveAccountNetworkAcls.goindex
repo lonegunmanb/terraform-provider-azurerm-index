@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/resources/cognitive_account
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2026-03-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandCognitiveAccountNetworkAcls(d *pluginsdk.ResourceData) (*cognitiveservicesaccounts.NetworkRuleSet, []string) {
+	input := d.Get("network_acls").([]any)
+	subnetIds := make([]string, 0)
+	if len(input) == 0 || input[0] == nil {
+		return nil, subnetIds
+	}
+
+	v := input[0].(map[string]any)
+
+	ipRulesRaw := v["ip_rules"].(*pluginsdk.Set)
+	ipRules := make([]cognitiveservicesaccounts.IPRule, 0)
+
+	for _, v := range ipRulesRaw.List() {
+		rule := cognitiveservicesaccounts.IPRule{
+			Value: v.(string),
+		}
+		ipRules = append(ipRules, rule)
+	}
+
+	networkRules := make([]cognitiveservicesaccounts.VirtualNetworkRule, 0)
+	networkRulesRaw := v["virtual_network_rules"]
+	for _, v := range networkRulesRaw.(*pluginsdk.Set).List() {
+		value := v.(map[string]any)
+		subnetId := value["subnet_id"].(string)
+		subnetIds = append(subnetIds, subnetId)
+		rule := cognitiveservicesaccounts.VirtualNetworkRule{
+			Id:                               subnetId,
+			IgnoreMissingVnetServiceEndpoint: pointer.To(value["ignore_missing_vnet_service_endpoint"].(bool)),
+		}
+		networkRules = append(networkRules, rule)
+	}
+
+	ruleSet := cognitiveservicesaccounts.NetworkRuleSet{
+		DefaultAction:       pointer.ToEnum[cognitiveservicesaccounts.NetworkRuleAction](v["default_action"].(string)),
+		IPRules:             &ipRules,
+		VirtualNetworkRules: &networkRules,
+	}
+
+	if b, ok := d.GetOk("network_acls.0.bypass"); ok && b != "" {
+		ruleSet.Bypass = pointer.ToEnum[cognitiveservicesaccounts.ByPassSelection](v["bypass"].(string))
+	}
+
+	return &ruleSet, subnetIds
+}

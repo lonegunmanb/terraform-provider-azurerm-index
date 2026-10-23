@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_automatic_cluster
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandKubernetesAutomaticClusterWebAppRoutingIngress(input []WebAppRoutingIngressModel) *managedclusters.ManagedClusterIngressProfile {
+	if len(input) == 0 {
+		return nil
+	}
+
+	config := input[0]
+
+	istioEnabled := managedclusters.GatewayAPIIstioEnabledDisabled
+	if config.IstioEnabled {
+		istioEnabled = managedclusters.GatewayAPIIstioEnabledEnabled
+	}
+
+	nginxControllerType := managedclusters.NginxIngressControllerTypeNone
+	if config.DefaultNginxController != "" {
+		nginxControllerType = managedclusters.NginxIngressControllerType(config.DefaultNginxController)
+	}
+
+	ingress := managedclusters.ManagedClusterIngressProfile{
+		WebAppRouting: &managedclusters.ManagedClusterIngressProfileWebAppRouting{
+			Enabled: pointer.To(true),
+			Nginx: &managedclusters.ManagedClusterIngressProfileNginx{
+				DefaultIngressControllerType: pointer.To(nginxControllerType),
+			},
+			GatewayAPIImplementations: &managedclusters.ManagedClusterWebAppRoutingGatewayAPIImplementations{
+				AppRoutingIstio: &managedclusters.ManagedClusterAppRoutingIstio{
+					Mode: &istioEnabled,
+				},
+			},
+		},
+	}
+
+	if len(config.DNSZoneIDs) > 0 {
+		ingress.WebAppRouting.DnsZoneResourceIds = pointer.To(config.DNSZoneIDs)
+	}
+
+	return &ingress
+}

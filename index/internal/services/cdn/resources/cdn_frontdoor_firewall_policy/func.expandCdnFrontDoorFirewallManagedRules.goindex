@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/resources/cdn_frontdoor_firewall_policy
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandCdnFrontDoorFirewallManagedRules(input []any) (*webapplicationfirewallpolicies.ManagedRuleSetList, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	result := make([]webapplicationfirewallpolicies.ManagedRuleSet, 0)
+	for _, mr := range input {
+		managedRule := mr.(map[string]any)
+
+		ruleType := managedRule["type"].(string)
+		version := managedRule["version"].(string)
+		action := managedRule["action"].(string)
+		overrides := managedRule["override"].([]any)
+		exclusions := expandCdnFrontDoorFirewallManagedRuleGroupExclusion(managedRule["exclusion"].([]any))
+
+		fVersion := 1.0
+		if v, err := strconv.ParseFloat(version, 64); err == nil {
+			fVersion = v
+		}
+
+		// NOTE: The API is deferring the version range from the rule type name
+		// 'DefaultRuleSet' is < 1.1 and 'Microsoft_DefaultRuleSet' >= 1.1
+		// 'AnomalyScoring' action only valid on 2.0 and above
+		if ruleType == "DefaultRuleSet" && fVersion > 1.0 {
+			return nil, fmt.Errorf("the managed rule set type %q and version %q is not supported. If you wish to use the 'DefaultRuleSet' type please update your 'version' field to be '1.0' or 'preview-0.1', got %q", ruleType, version, version)
+		} else if ruleType == "Microsoft_DefaultRuleSet" && fVersion < 1.1 {
+			return nil, fmt.Errorf("the managed rule set type %q and version %q is not supported. If you wish to use the 'Microsoft_DefaultRuleSet' type please update your 'version' field to be '1.1', '2.0' or '2.1', got %q", ruleType, version, version)
+		}
+
+		ruleGroupOverrides, err := expandCdnFrontDoorFirewallManagedRuleGroupOverride(overrides, version, fVersion, ruleType)
+		if err != nil {
+			return nil, err
+		}
+
+		managedRuleSet := webapplicationfirewallpolicies.ManagedRuleSet{
+			Exclusions:         exclusions,
+			RuleSetVersion:     version,
+			RuleGroupOverrides: ruleGroupOverrides,
+			RuleSetType:        ruleType,
+		}
+
+		if action != "" {
+			managedRuleSet.RuleSetAction = pointer.ToEnum[webapplicationfirewallpolicies.ManagedRuleSetActionType](action)
+		}
+
+		result = append(result, managedRuleSet)
+	}
+
+	return &webapplicationfirewallpolicies.ManagedRuleSetList{
+		ManagedRuleSets: &result,
+	}, nil
+}

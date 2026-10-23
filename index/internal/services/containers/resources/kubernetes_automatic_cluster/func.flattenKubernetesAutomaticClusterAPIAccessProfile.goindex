@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_automatic_cluster
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenKubernetesAutomaticClusterAPIAccessProfile(profile *managedclusters.ManagedClusterAPIServerAccessProfile) ([]APIServerAccessProfileModel, []PrivateClusterModel, error) {
+	apiServerAccessProfile := make([]APIServerAccessProfileModel, 0, 1)
+
+	if profile == nil {
+		return apiServerAccessProfile, []PrivateClusterModel{}, nil
+	}
+
+	privateCluster, err := flattenKubernetesAutomaticClusterPrivateCluster(pointer.From(profile.EnablePrivateCluster), pointer.From(profile.EnablePrivateClusterPublicFQDN), pointer.From(profile.PrivateDNSZone))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// API access profile can be managed by other properties, only return it if one of the properties has been set
+	hasAuthorizedIPRanges := profile.AuthorizedIPRanges != nil && len(*profile.AuthorizedIPRanges) > 0
+	hasSubnetId := profile.SubnetId != nil && *profile.SubnetId != ""
+
+	if !hasAuthorizedIPRanges && !hasSubnetId {
+		return apiServerAccessProfile, privateCluster, nil
+	}
+
+	subnetId := ""
+	if hasSubnetId {
+		parsedSubnetId, err := parse.SubnetID(pointer.From(profile.SubnetId))
+		if err != nil {
+			return nil, nil, fmt.Errorf("parsing `api_server_access.0.subnet_id`: %+v", err)
+		}
+		subnetId = parsedSubnetId.ID()
+	}
+
+	apiServerAccessProfile = append(apiServerAccessProfile, APIServerAccessProfileModel{
+		AuthorizedIPRanges: pointer.From(profile.AuthorizedIPRanges),
+		SubnetID:           subnetId,
+	})
+
+	return apiServerAccessProfile, privateCluster, nil
+}

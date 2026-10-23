@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandKubernetesClusterAdvancedNetworking(input []any, d *pluginsdk.ResourceData) *managedclusters.AdvancedNetworking {
+	if len(input) == 0 || input[0] == nil {
+		o, n := d.GetChange("network_profile.0.advanced_networking")
+		if o != nil && len(o.([]any)) == 1 && n == nil || len(n.([]any)) == 0 {
+			return &managedclusters.AdvancedNetworking{
+				Enabled: pointer.To(false),
+				Observability: &managedclusters.AdvancedNetworkingObservability{
+					Enabled: pointer.To(false),
+				},
+				Security: &managedclusters.AdvancedNetworkingSecurity{
+					Enabled: pointer.To(false),
+				},
+			}
+		}
+		return nil
+	}
+
+	config := input[0].(map[string]any)
+	observabilityEnabled := config["observability_enabled"].(bool)
+	securityEnabled := config["security_enabled"].(bool)
+
+	return &managedclusters.AdvancedNetworking{
+		Enabled: pointer.To(true),
+		Observability: &managedclusters.AdvancedNetworkingObservability{
+			Enabled: pointer.To(observabilityEnabled),
+		},
+		Security: &managedclusters.AdvancedNetworkingSecurity{
+			Enabled: pointer.To(securityEnabled),
+		},
+	}
+}

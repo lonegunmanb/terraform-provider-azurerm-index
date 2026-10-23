@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection/resources/data_protection_backup_policy_cosmosdb_account
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2026-06-01/basebackuppolicyresources"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func generateBackupPolicyCosmosdbAccountIncrementalSchedules(fullBackupSchedule string) ([]string, error) {
+	const (
+		recurrencePrefix = "R/"
+		recurrenceSuffix = "/P1W"
+		timeFormat       = "2006-01-02T15:04:05-07:00"
+	)
+
+	timestamp := strings.TrimSuffix(strings.TrimPrefix(fullBackupSchedule, recurrencePrefix), recurrenceSuffix)
+	fullBackupTime, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return nil, fmt.Errorf("parsing timestamp in `backup_schedule` value `%s`: %+v", fullBackupSchedule, err)
+	}
+
+	results := make([]string, 0, 6)
+	for day := 1; day <= 6; day++ {
+		incrementalBackupTime := fullBackupTime.Add(time.Duration(day) * 24 * time.Hour)
+		results = append(results, fmt.Sprintf("%s%s%s", recurrencePrefix, incrementalBackupTime.Format(timeFormat), recurrenceSuffix))
+	}
+
+	return results, nil
+}

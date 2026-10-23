@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/helpers
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afddomains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/routes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func RouteDelta(oldRoutes *[]routes.RouteId, newRoutes *[]routes.RouteId) (*[]routes.RouteId, *[]routes.RouteId) {
+	remove := make([]routes.RouteId, 0)
+	shared := make([]routes.RouteId, 0)
+	if newRoutes == nil || len(*newRoutes) == 0 {
+		return oldRoutes, &shared
+	}
+
+	if oldRoutes == nil || len(*oldRoutes) == 0 {
+		return &remove, &shared
+	}
+
+	// just find what old routes are not in the new route list...
+	for _, oldRoute := range *oldRoutes {
+		if !RouteSliceContains(newRoutes, oldRoute.ID()) {
+			remove = append(remove, oldRoute)
+		} else {
+			shared = append(shared, oldRoute)
+		}
+	}
+
+	return &remove, &shared
+}

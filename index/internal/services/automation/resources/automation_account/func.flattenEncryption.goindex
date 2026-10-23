@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/automation/resources/automation_account
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2019-06-01/agentregistrationinformation"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2024-10-23/automationaccount"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenEncryption(encryption *automationaccount.EncryptionProperties) []any {
+	if encryption == nil || encryption.KeySource == nil || *encryption.KeySource != automationaccount.EncryptionKeySourceTypeMicrosoftPointKeyvault {
+		return []any{}
+	}
+
+	keyVaultKeyId := ""
+	userAssignedIdentityId := ""
+
+	if keyProp := encryption.KeyVaultProperties; keyProp != nil {
+		keyId, err := keyvault.NewNestedItemID(pointer.From(keyProp.KeyvaultUri), keyvault.NestedItemTypeKey, pointer.From(keyProp.KeyName), pointer.From(keyProp.KeyVersion))
+		if err == nil {
+			keyVaultKeyId = keyId.ID()
+		}
+	}
+
+	if encryption.Identity != nil && encryption.Identity.UserAssignedIdentity != nil {
+		userAssignedIdentityIdRaw := (*encryption.Identity.UserAssignedIdentity).(string)
+		if userAssignedIdentityIdRaw != "" {
+			uaiId, err := commonids.ParseUserAssignedIdentityIDInsensitively(userAssignedIdentityIdRaw)
+			if err == nil {
+				userAssignedIdentityId = uaiId.ID()
+			}
+		}
+	}
+	return []any{
+		map[string]any{
+			"key_vault_key_id":          keyVaultKeyId,
+			"user_assigned_identity_id": userAssignedIdentityId,
+		},
+	}
+}

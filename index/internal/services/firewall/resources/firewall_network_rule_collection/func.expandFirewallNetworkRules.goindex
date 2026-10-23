@@ -1,0 +1,81 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/resources/firewall_network_rule_collection
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/azurefirewalls"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandFirewallNetworkRules(input []any) (*[]azurefirewalls.AzureFirewallNetworkRule, error) {
+	rules := make([]azurefirewalls.AzureFirewallNetworkRule, 0)
+
+	for _, nwRule := range input {
+		rule := nwRule.(map[string]any)
+
+		name := rule["name"].(string)
+		description := rule["description"].(string)
+
+		sourceAddresses := make([]string, 0)
+		for _, v := range rule["source_addresses"].([]any) {
+			sourceAddresses = append(sourceAddresses, v.(string))
+		}
+
+		sourceIpGroups := make([]string, 0)
+		for _, v := range rule["source_ip_groups"].([]any) {
+			sourceIpGroups = append(sourceIpGroups, v.(string))
+		}
+
+		if len(sourceAddresses) == 0 && len(sourceIpGroups) == 0 {
+			return nil, fmt.Errorf("at least one of %q and %q must be specified for each rule", "source_addresses", "source_ip_groups")
+		}
+
+		destinationAddresses := make([]string, 0)
+		for _, v := range rule["destination_addresses"].([]any) {
+			destinationAddresses = append(destinationAddresses, v.(string))
+		}
+
+		destinationIpGroups := make([]string, 0)
+		for _, v := range rule["destination_ip_groups"].([]any) {
+			destinationIpGroups = append(destinationIpGroups, v.(string))
+		}
+
+		destinationFqdns := make([]string, 0)
+		for _, v := range rule["destination_fqdns"].([]any) {
+			destinationFqdns = append(destinationFqdns, v.(string))
+		}
+
+		if len(destinationAddresses) == 0 && len(destinationIpGroups) == 0 && len(destinationFqdns) == 0 {
+			return nil, fmt.Errorf("at least one of %q, %q and %q must be specified for each rule", "destination_addresses", "destination_ip_groups", "destination_fqdns")
+		}
+
+		destinationPorts := make([]string, 0)
+		for _, v := range rule["destination_ports"].([]any) {
+			destinationPorts = append(destinationPorts, v.(string))
+		}
+
+		ruleToAdd := azurefirewalls.AzureFirewallNetworkRule{
+			Name:                 pointer.To(name),
+			Description:          pointer.To(description),
+			SourceAddresses:      &sourceAddresses,
+			SourceIPGroups:       &sourceIpGroups,
+			DestinationAddresses: &destinationAddresses,
+			DestinationIPGroups:  &destinationIpGroups,
+			DestinationPorts:     &destinationPorts,
+			DestinationFqdns:     &destinationFqdns,
+		}
+
+		nrProtocols := make([]azurefirewalls.AzureFirewallNetworkRuleProtocol, 0)
+		for _, v := range rule["protocols"].([]any) {
+			s := azurefirewalls.AzureFirewallNetworkRuleProtocol(v.(string))
+			nrProtocols = append(nrProtocols, s)
+		}
+		ruleToAdd.Protocols = &nrProtocols
+		rules = append(rules, ruleToAdd)
+	}
+
+	return &rules, nil
+}

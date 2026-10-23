@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+)
+func flattenFrontEndEndpoints(input *[]frontdoors.FrontendEndpoint, frontDoorId frontdoors.FrontDoorId, explicitOrder []any) (*[]any, error) {
+	output := make([]any, 0)
+	if input == nil {
+		return &output, nil
+	}
+
+	if len(explicitOrder) > 0 {
+		orderedFrontEnd := explicitOrder[0].(map[string]any)
+		orderedFrontEndIds := orderedFrontEnd["frontend_endpoint_ids"].([]any)
+		combinedFrontEndEndpoints, err := combineFrontEndEndpoints(*input, orderedFrontEndIds, frontDoorId)
+		if err == nil {
+			output = combinedFrontEndEndpoints
+		} else {
+			return nil, err
+		}
+	} else {
+		for _, v := range *input {
+			frontendEndpoint, err := flattenSingleFrontEndEndpoints(v, frontDoorId)
+			if err == nil {
+				output = append(output, frontendEndpoint)
+			} else {
+				return nil, err
+			}
+		}
+	}
+
+	return &output, nil
+}

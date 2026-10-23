@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster
+import (
+	"maps"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2025-11-01/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenKubernetesClusterAzureServiceMeshProfile(input *managedclusters.ServiceMeshProfile) []any {
+	if input == nil || input.Mode != managedclusters.ServiceMeshModeIstio {
+		return []any{}
+	}
+
+	returnMap := map[string]any{
+		"mode": string(managedclusters.ServiceMeshModeIstio),
+	}
+
+	if (input.Istio.Components.IngressGateways != nil) && len(*input.Istio.Components.IngressGateways) > 0 {
+		for _, value := range *input.Istio.Components.IngressGateways {
+			mode := value.Mode
+
+			var currentIngressKey string
+
+			if mode == managedclusters.IstioIngressGatewayModeExternal {
+				currentIngressKey = "external_ingress_gateway_enabled"
+			} else {
+				currentIngressKey = "internal_ingress_gateway_enabled"
+			}
+
+			returnMap[currentIngressKey] = value.Enabled
+		}
+	}
+
+	if input.Istio.CertificateAuthority != nil {
+		returnMap["certificate_authority"] = flattenKubernetesClusterServiceMeshProfileCertificateAuthority(input.Istio.CertificateAuthority)
+	}
+
+	if input.Istio.Revisions != nil {
+		returnMap["revisions"] = pluginsdk.FlattenSlice(input.Istio.Revisions)
+	}
+
+	return []any{returnMap}
+}

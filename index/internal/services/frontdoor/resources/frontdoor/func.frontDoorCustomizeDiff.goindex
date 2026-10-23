@@ -1,0 +1,27 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func frontDoorCustomizeDiff(ctx context.Context, d *pluginsdk.ResourceDiff, v any) error {
+	if helpers.IsFrontDoorFullyRetired() {
+		return fmt.Errorf("%s", helpers.FullyRetiredMessage)
+	}
+
+	// New resources are not supported, and since these fields are 'ForceNew' we also need to block changing them as
+	// the re-create would fail with the create error from the service API...
+	if helpers.IsFrontDoorDeprecatedForCreation() && d.HasChanges("name", "resource_group_name") {
+		return fmt.Errorf("%s", helpers.CreateDeprecationMessage)
+	}
+
+	if err := frontDoorSettings(d); err != nil {
+		return fmt.Errorf("validating Front Door %q (Resource Group %q): %+v", d.Get("name").(string), d.Get("resource_group_name").(string), err)
+	}
+
+	return nil
+}

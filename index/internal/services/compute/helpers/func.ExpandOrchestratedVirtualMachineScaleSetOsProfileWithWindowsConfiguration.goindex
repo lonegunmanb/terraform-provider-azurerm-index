@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/helpers
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2025-04-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/publicipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandOrchestratedVirtualMachineScaleSetOsProfileWithWindowsConfiguration(input map[string]any, customData string) *virtualmachinescalesets.VirtualMachineScaleSetOSProfile {
+	osProfile := virtualmachinescalesets.VirtualMachineScaleSetOSProfile{}
+	winConfig := virtualmachinescalesets.WindowsConfiguration{}
+	patchSettings := virtualmachinescalesets.PatchSettings{}
+
+	if len(input) > 0 {
+		osProfile.CustomData = pointer.To(customData)
+		osProfile.AdminUsername = pointer.To(input["admin_username"].(string))
+		osProfile.AdminPassword = pointer.To(input["admin_password"].(string))
+
+		if computerPrefix := input["computer_name_prefix"].(string); computerPrefix != "" {
+			osProfile.ComputerNamePrefix = pointer.To(computerPrefix)
+		}
+
+		if secrets := input["secret"].([]any); len(secrets) > 0 {
+			osProfile.Secrets = ExpandWindowsSecretsVMSS(secrets)
+		}
+
+		if additionalUnattendContents := input["additional_unattend_content"].([]any); len(additionalUnattendContents) > 0 {
+			winConfig.AdditionalUnattendContent = ExpandWindowsConfigurationAdditionalUnattendContent(input["additional_unattend_content"].([]any))
+		}
+		winConfig.EnableAutomaticUpdates = pointer.To(input["automatic_updates_enabled"].(bool))
+		winConfig.ProvisionVMAgent = pointer.To(input["provision_vm_agent"].(bool))
+		winRmListenersRaw := input["winrm_listener"].(*pluginsdk.Set).List()
+		winConfig.WinRM = ExpandWinRMListenerVMSS(winRmListenersRaw)
+
+		// Automatic VM Guest Patching and Hotpatching settings
+		patchSettings.AssessmentMode = pointer.ToEnum[virtualmachinescalesets.WindowsPatchAssessmentMode](input["patch_assessment_mode"].(string))
+		patchSettings.PatchMode = pointer.ToEnum[virtualmachinescalesets.WindowsVMGuestPatchMode](input["patch_mode"].(string))
+		patchSettings.EnableHotpatching = pointer.To(input["hotpatching_enabled"].(bool))
+		winConfig.PatchSettings = &patchSettings
+
+		// due to a change in RP behaviour, it will now throw and error if we pass an empty
+		// string add check to only include it if it is actually defined in the config file
+		timeZone := input["timezone"].(string)
+		if timeZone != "" {
+			winConfig.TimeZone = pointer.To(timeZone)
+		}
+	}
+
+	osProfile.WindowsConfiguration = &winConfig
+
+	return &osProfile
+}

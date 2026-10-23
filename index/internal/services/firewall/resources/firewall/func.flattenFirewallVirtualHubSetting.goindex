@@ -1,0 +1,50 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/resources/firewall
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/azurefirewalls"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/firewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenFirewallVirtualHubSetting(props *azurefirewalls.AzureFirewallPropertiesFormat) []any {
+	if props.VirtualHub == nil {
+		return []any{}
+	}
+
+	var (
+		publicIpCount int
+		publicIps     []string
+		privateIp     string
+	)
+	if hubIP := props.HubIPAddresses; hubIP != nil {
+		if hubIP.PrivateIPAddress != nil {
+			privateIp = *hubIP.PrivateIPAddress
+		}
+		if pubIPs := hubIP.PublicIPs; pubIPs != nil {
+			if pubIPs.Count != nil {
+				publicIpCount = int(*pubIPs.Count)
+			}
+			if pubIPs.Addresses != nil {
+				for _, addr := range *pubIPs.Addresses {
+					if addr.Address != nil {
+						publicIps = append(publicIps, *addr.Address)
+					}
+				}
+			}
+		}
+	}
+
+	return []any{
+		map[string]any{
+			"virtual_hub_id":      pointer.From(props.VirtualHub.Id),
+			"public_ip_count":     publicIpCount,
+			"public_ip_addresses": publicIps,
+			"private_ip_address":  privateIp,
+		},
+	}
+}

@@ -1,0 +1,64 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandLoadBalancerProfile(d []any) *managedclusters.ManagedClusterLoadBalancerProfile {
+	if d[0] == nil {
+		return nil
+	}
+
+	config := d[0].(map[string]any)
+
+	profile := &managedclusters.ManagedClusterLoadBalancerProfile{}
+
+	if mins, ok := config["idle_timeout_in_minutes"]; ok && mins.(int) != 0 {
+		profile.IdleTimeoutInMinutes = pointer.To(int64(mins.(int)))
+	}
+
+	if port, ok := config["outbound_ports_allocated"].(int); ok {
+		profile.AllocatedOutboundPorts = pointer.To(int64(port))
+	}
+
+	if ipCount := config["managed_outbound_ip_count"]; ipCount != nil {
+		if c := int64(ipCount.(int)); c > 0 {
+			profile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{Count: &c}
+		}
+	}
+
+	if ipv6Count := config["managed_outbound_ipv6_count"]; ipv6Count != nil {
+		if c := int64(ipv6Count.(int)); c > 0 {
+			if profile.ManagedOutboundIPs == nil {
+				profile.ManagedOutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileManagedOutboundIPs{}
+			}
+			profile.ManagedOutboundIPs.CountIPv6 = &c
+		}
+	}
+
+	if ipPrefixes := idsToResourceReferences(config["outbound_ip_prefix_ids"]); ipPrefixes != nil {
+		profile.OutboundIPPrefixes = &managedclusters.ManagedClusterLoadBalancerProfileOutboundIPPrefixes{PublicIPPrefixes: ipPrefixes}
+	}
+
+	if outIps := idsToResourceReferences(config["outbound_ip_address_ids"]); outIps != nil {
+		profile.OutboundIPs = &managedclusters.ManagedClusterLoadBalancerProfileOutboundIPs{PublicIPs: outIps}
+	}
+
+	if backendPoolType, ok := config["backend_pool_type"].(string); ok {
+		profile.BackendPoolType = pointer.ToEnum[managedclusters.BackendPoolType](backendPoolType)
+	}
+
+	return profile
+}

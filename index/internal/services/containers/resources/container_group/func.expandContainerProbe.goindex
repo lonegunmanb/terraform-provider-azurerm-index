@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/container_group
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerinstance/2025-09-01/containerinstance"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandContainerProbe(input any) *containerinstance.ContainerProbe {
+	probe := containerinstance.ContainerProbe{}
+	probeRaw := input.([]any)
+
+	if len(probeRaw) == 0 {
+		return nil
+	}
+
+	for _, p := range probeRaw {
+		if p == nil {
+			continue
+		}
+		probeConfig := p.(map[string]any)
+
+		if v := probeConfig["initial_delay_seconds"].(int); v > 0 {
+			probe.InitialDelaySeconds = pointer.To(int64(v))
+		}
+
+		if v := probeConfig["period_seconds"].(int); v > 0 {
+			probe.PeriodSeconds = pointer.To(int64(v))
+		}
+
+		if v := probeConfig["failure_threshold"].(int); v > 0 {
+			probe.FailureThreshold = pointer.To(int64(v))
+		}
+
+		if v := probeConfig["success_threshold"].(int); v > 0 {
+			probe.SuccessThreshold = pointer.To(int64(v))
+		}
+
+		if v := probeConfig["timeout_seconds"].(int); v > 0 {
+			probe.TimeoutSeconds = pointer.To(int64(v))
+		}
+
+		commands := probeConfig["exec"].([]any)
+		if len(commands) > 0 {
+			exec := containerinstance.ContainerExec{
+				Command: pluginsdk.ExpandStringSlice(commands),
+			}
+			probe.Exec = &exec
+		}
+
+		httpRaw := probeConfig["http_get"].([]any)
+		if len(httpRaw) > 0 {
+			for _, httpget := range httpRaw {
+				if httpget == nil {
+					continue
+				}
+				x := httpget.(map[string]any)
+
+				path := x["path"].(string)
+				port := x["port"].(int)
+				scheme := x["scheme"].(string)
+
+				probe.HTTPGet = &containerinstance.ContainerHTTPGet{
+					Path:        pointer.To(path),
+					Port:        int64(port),
+					Scheme:      pointer.ToEnum[containerinstance.Scheme](scheme),
+					HTTPHeaders: expandContainerProbeHttpHeaders(x["http_headers"].(map[string]any)),
+				}
+			}
+		}
+	}
+	return &probe
+}

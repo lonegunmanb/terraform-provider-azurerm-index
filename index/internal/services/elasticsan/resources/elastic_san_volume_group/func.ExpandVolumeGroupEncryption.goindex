@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/elasticsan/resources/elastic_san_volume_group
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/elasticsan/2023-01-01/volumegroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func ExpandVolumeGroupEncryption(input []ElasticSANVolumeGroupResourceEncryptionModel) (*volumegroups.EncryptionProperties, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	nestedItemId, err := keyvault.ParseNestedItemID(input[0].KeyVaultKeyId, keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
+	if err != nil {
+		return nil, err
+	}
+
+	result := volumegroups.EncryptionProperties{
+		KeyVaultProperties: &volumegroups.KeyVaultProperties{
+			KeyName:     pointer.To(nestedItemId.Name),
+			KeyVersion:  pointer.To(nestedItemId.Version),
+			KeyVaultUri: pointer.To(nestedItemId.KeyVaultBaseURL),
+		},
+	}
+
+	if input[0].UserAssignedIdentityId != "" {
+		result.Identity = &volumegroups.EncryptionIdentity{
+			UserAssignedIdentity: pointer.To(input[0].UserAssignedIdentityId),
+		}
+	}
+
+	return &result, nil
+}

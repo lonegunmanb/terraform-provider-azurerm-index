@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/resources/cdn_frontdoor_firewall_policy
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandCdnFrontDoorFirewallMatchConditions(input []any) []webapplicationfirewallpolicies.MatchCondition {
+	result := make([]webapplicationfirewallpolicies.MatchCondition, 0)
+	if len(input) == 0 {
+		return nil
+	}
+
+	for _, v := range input {
+		match := v.(map[string]any)
+
+		matchVariable := match["match_variable"].(string)
+		selector := match["selector"].(string)
+		operator := match["operator"].(string)
+		matchValues := pluginsdk.ExpandStringSlice(match["match_values"].([]any))
+		transforms := match["transforms"].([]any)
+
+		matchCondition := webapplicationfirewallpolicies.MatchCondition{
+			Operator:        webapplicationfirewallpolicies.Operator(operator),
+			NegateCondition: pointer.To(match["negation_condition"].(bool)),
+			MatchValue:      *matchValues,
+			Transforms:      expandCdnFrontDoorFirewallTransforms(transforms),
+		}
+
+		if matchVariable != "" {
+			matchCondition.MatchVariable = webapplicationfirewallpolicies.MatchVariable(matchVariable)
+		}
+		if selector != "" {
+			matchCondition.Selector = pointer.To(selector)
+		}
+
+		result = append(result, matchCondition)
+	}
+
+	return result
+}

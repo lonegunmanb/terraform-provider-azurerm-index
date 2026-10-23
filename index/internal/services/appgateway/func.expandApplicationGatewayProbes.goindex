@@ -1,0 +1,92 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationgateways"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandApplicationGatewayProbes(input []any) *[]applicationgateways.ApplicationGatewayProbe {
+	results := make([]applicationgateways.ApplicationGatewayProbe, 0)
+
+	for _, raw := range input {
+		v := raw.(map[string]any)
+
+		host := v["host"].(string)
+		interval := int64(v["interval"].(int))
+		minServers := int64(v["minimum_servers"].(int))
+		name := v["name"].(string)
+		probePath := v["path"].(string)
+		protocol := v["protocol"].(string)
+		port := int64(v["port"].(int))
+		timeout := int64(v["timeout"].(int))
+		unhealthyThreshold := int64(v["unhealthy_threshold"].(int))
+		pickHostNameFromBackendHTTPSettings := v["pick_host_name_from_backend_http_settings"].(bool)
+
+		output := applicationgateways.ApplicationGatewayProbe{
+			Name: pointer.To(name),
+			Properties: &applicationgateways.ApplicationGatewayProbePropertiesFormat{
+				Host:                                pointer.To(host),
+				Interval:                            pointer.To(interval),
+				MinServers:                          pointer.To(minServers),
+				Path:                                pointer.To(probePath),
+				Protocol:                            pointer.ToEnum[applicationgateways.ApplicationGatewayProtocol](protocol),
+				Timeout:                             pointer.To(timeout),
+				UnhealthyThreshold:                  pointer.To(unhealthyThreshold),
+				PickHostNameFromBackendHTTPSettings: pointer.To(pickHostNameFromBackendHTTPSettings),
+				EnableProbeProxyProtocolHeader:      pointer.To(v["proxy_protocol_header_enabled"].(bool)),
+			},
+		}
+
+		matchConfigs := v["match"].([]any)
+		if len(matchConfigs) > 0 {
+			matchBody := ""
+			outputMatch := &applicationgateways.ApplicationGatewayProbeHealthResponseMatch{}
+			if matchConfigs[0] != nil {
+				match := matchConfigs[0].(map[string]any)
+				matchBody = match["body"].(string)
+
+				statusCodes := make([]string, 0)
+				for _, statusCode := range match["status_code"].([]any) {
+					statusCodes = append(statusCodes, statusCode.(string))
+				}
+				outputMatch.StatusCodes = &statusCodes
+			}
+			outputMatch.Body = pointer.To(matchBody)
+			output.Properties.Match = outputMatch
+		}
+
+		if port != 0 {
+			output.Properties.Port = pointer.To(port)
+		}
+
+		results = append(results, output)
+	}
+
+	return &results
+}

@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/container_group
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerinstance/2025-09-01/containerinstance"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandContainerGroupDiagnostics(input []any) *containerinstance.ContainerGroupDiagnostics {
+	if len(input) == 0 {
+		return nil
+	}
+
+	vs := input[0].(map[string]any)
+
+	analyticsVs := vs["log_analytics"].([]any)
+	analyticsV := analyticsVs[0].(map[string]any)
+
+	workspaceId := analyticsV["workspace_id"].(string)
+	workspaceKey := analyticsV["workspace_key"].(string)
+
+	logAnalytics := containerinstance.LogAnalytics{
+		WorkspaceId:  workspaceId,
+		WorkspaceKey: workspaceKey,
+	}
+
+	if logType := analyticsV["log_type"].(string); logType != "" {
+		logAnalytics.LogType = pointer.ToEnum[containerinstance.LogAnalyticsLogType](logType)
+
+		metadataMap := analyticsV["metadata"].(map[string]any)
+		metadata := make(map[string]string)
+		for k, v := range metadataMap {
+			metadata[k] = v.(string)
+		}
+
+		logAnalytics.Metadata = &metadata
+	}
+
+	return &containerinstance.ContainerGroupDiagnostics{LogAnalytics: &logAnalytics}
+}

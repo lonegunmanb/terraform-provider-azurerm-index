@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption/helpers
+import (
+	"context"
+	"fmt"
+	"maps"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/consumption/2019-10-01/budgets"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/consumption/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandConsumptionBudgetFilterFromModel(input []ConsumptionBudgetFilterModel) *budgets.BudgetFilter {
+	if len(input) == 0 {
+		return nil
+	}
+
+	f := input[0]
+	filter := budgets.BudgetFilter{}
+
+	dimensions := make([]budgets.BudgetFilterProperties, 0)
+	for _, d := range f.Dimension {
+		dimensions = append(dimensions, budgets.BudgetFilterProperties{
+			Dimensions: &budgets.BudgetComparisonExpression{
+				Name:     d.Name,
+				Operator: budgets.BudgetOperatorType(d.Operator),
+				Values:   d.Values,
+			},
+		})
+	}
+
+	tags := make([]budgets.BudgetFilterProperties, 0)
+	for _, t := range f.Tag {
+		tags = append(tags, budgets.BudgetFilterProperties{
+			Tags: &budgets.BudgetComparisonExpression{
+				Name:     t.Name,
+				Operator: budgets.BudgetOperatorType(t.Operator),
+				Values:   t.Values,
+			},
+		})
+	}
+
+	dimensionsSet := len(dimensions) > 0
+	tagsSet := len(tags) > 0
+
+	if dimensionsSet && tagsSet {
+		dimensions = append(dimensions, tags...)
+		filter.And = &dimensions
+	} else {
+		if dimensionsSet {
+			if len(dimensions) > 1 {
+				filter.And = &dimensions
+			} else {
+				filter.Dimensions = dimensions[0].Dimensions
+			}
+		} else if tagsSet {
+			if len(tags) > 1 {
+				filter.And = &tags
+			} else {
+				filter.Tags = tags[0].Tags
+			}
+		}
+	}
+
+	return &filter
+}

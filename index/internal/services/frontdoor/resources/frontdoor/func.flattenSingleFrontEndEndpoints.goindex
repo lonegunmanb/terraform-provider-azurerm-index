@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+)
+func flattenSingleFrontEndEndpoints(input frontdoors.FrontendEndpoint, frontDoorId frontdoors.FrontDoorId) (map[string]any, error) {
+	id := ""
+	name := ""
+	if input.Name != nil {
+		// rewrite the ID to ensure it's consistent
+		id = frontdoors.NewFrontendEndpointID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, *input.Name).ID()
+		name = *input.Name
+	}
+	hostName := ""
+	sessionAffinityEnabled := false
+	sessionAffinityTlsSeconds := 0
+	webApplicationFirewallPolicyLinkId := ""
+	if props := input.Properties; props != nil {
+		if props.HostName != nil {
+			hostName = *props.HostName
+		}
+		if props.SessionAffinityEnabledState != nil && *props.SessionAffinityEnabledState != "" {
+			sessionAffinityEnabled = *props.SessionAffinityEnabledState == frontdoors.SessionAffinityEnabledStateEnabled
+		}
+		if props.SessionAffinityTtlSeconds != nil {
+			sessionAffinityTlsSeconds = int(*props.SessionAffinityTtlSeconds)
+		}
+		if waf := props.WebApplicationFirewallPolicyLink; waf != nil && waf.Id != nil {
+			// rewrite the ID to ensure it's consistent
+			parsed, err := webapplicationfirewallpolicies.ParseFrontDoorWebApplicationFirewallPolicyIDInsensitively(*waf.Id)
+			if err != nil {
+				return nil, err
+			}
+			webApplicationFirewallPolicyLinkId = parsed.ID()
+		}
+		// flattenedHttpsConfig := flattenCustomHttpsConfiguration(props)
+		// customHTTPSConfiguration = flattenedHttpsConfig.CustomHTTPSConfiguration
+		// customHttpsProvisioningEnabled = flattenedHttpsConfig.CustomHTTPSProvisioningEnabled
+	}
+
+	output := map[string]any{
+		// "custom_https_configuration":        customHTTPSConfiguration,
+		// "custom_https_provisioning_enabled": customHttpsProvisioningEnabled,
+		"host_name":                    hostName,
+		"id":                           id,
+		"name":                         name,
+		"session_affinity_enabled":     sessionAffinityEnabled,
+		"session_affinity_ttl_seconds": sessionAffinityTlsSeconds,
+		"web_application_firewall_policy_link_id": webApplicationFirewallPolicyLinkId,
+	}
+
+	return output, nil
+}

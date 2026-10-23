@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/firewall/resources/firewall_policy_rule_collection_group
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/firewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/firewallpolicyrulecollectiongroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenFirewallPolicyRuleNat(input *[]firewallpolicyrulecollectiongroups.FirewallPolicyRule) ([]any, error) {
+	if input == nil {
+		return []any{}, nil
+	}
+	output := make([]any, 0)
+	for _, e := range *input {
+		rule, ok := e.(firewallpolicyrulecollectiongroups.NatRule)
+		if !ok {
+			return nil, fmt.Errorf("unexpected non-nat rule: %+v", e)
+		}
+
+		protocols := make([]any, 0)
+		if rule.IPProtocols != nil {
+			for _, protocol := range *rule.IPProtocols {
+				protocols = append(protocols, string(protocol))
+			}
+		}
+		destinationAddr := ""
+		if rule.DestinationAddresses != nil && len(*rule.DestinationAddresses) != 0 {
+			destinationAddr = (*rule.DestinationAddresses)[0]
+		}
+
+		translatedPort := 0
+		if rule.TranslatedPort != nil {
+			port, err := strconv.Atoi(*rule.TranslatedPort)
+			if err != nil {
+				return nil, fmt.Errorf(`the "translatedPort" property is not a valid integer (%s)`, *rule.TranslatedPort)
+			}
+			translatedPort = port
+		}
+
+		output = append(output, map[string]any{
+			"name":                pointer.From(rule.Name),
+			"protocols":           protocols,
+			"source_addresses":    pluginsdk.FlattenSlice(rule.SourceAddresses),
+			"source_ip_groups":    pluginsdk.FlattenSlice(rule.SourceIPGroups),
+			"destination_address": destinationAddr,
+			"destination_ports":   pluginsdk.FlattenSlice(rule.DestinationPorts),
+			"translated_address":  pointer.From(rule.TranslatedAddress),
+			"translated_port":     translatedPort,
+			"translated_fqdn":     pointer.From(rule.TranslatedFqdn),
+			"description":         pointer.From(rule.Description),
+		})
+	}
+	return output, nil
+}

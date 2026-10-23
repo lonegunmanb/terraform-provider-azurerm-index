@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/networkmanager
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/networkmanagers"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/networkmanager/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/networkmanager/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/networkmanager/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func resourceManagerDeploymentWaitForFinished(ctx context.Context, client *networkmanagers.NetworkManagersClient, managerDeploymentId *parse.ManagerDeploymentId, d time.Duration) error {
+	state := &pluginsdk.StateChangeConf{
+		MinTimeout:     30 * time.Second,
+		Delay:          10 * time.Second,
+		Pending:        []string{"NotStarted", "Deploying"},
+		Target:         []string{"Deployed"},
+		NotFoundChecks: 20,
+		Timeout:        d,
+		Refresh: func() (any, string, error) {
+			result, state, err := resourceManagerDeploymentResultRefreshFunc(ctx, client, managerDeploymentId)()
+			if state == "NotFound" {
+				// the deployment might not found after initial commit, https://github.com/Azure/azure-rest-api-specs/issues/27327
+				// to serve NotFoundChecks, return nil result
+				return nil, state, err
+			}
+			return result, state, err
+		},
+	}
+
+	if _, err := state.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for the %s: %+v", *managerDeploymentId, err)
+	}
+
+	return nil
+}

@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor
+import (
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+)
+func expandFrontDoorBackendPools(input []any, frontDoorId frontdoors.FrontDoorId) *[]frontdoors.BackendPool {
+	if len(input) == 0 {
+		return &[]frontdoors.BackendPool{}
+	}
+
+	output := make([]frontdoors.BackendPool, 0)
+
+	for _, bp := range input {
+		backendPool := bp.(map[string]any)
+		backendPoolName := backendPool["name"].(string)
+		backendPoolLoadBalancingName := backendPool["load_balancing_name"].(string)
+		backendPoolHealthProbeName := backendPool["health_probe_name"].(string)
+		backends := backendPool["backend"].([]any)
+
+		backendPoolId := parse.NewBackendPoolID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, backendPoolName).ID()
+		healthProbeId := parse.NewHealthProbeID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, backendPoolHealthProbeName).ID()
+		loadBalancingId := parse.NewLoadBalancingID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, backendPoolLoadBalancingName).ID()
+
+		result := frontdoors.BackendPool{
+			Id:   pointer.To(backendPoolId),
+			Name: pointer.To(backendPoolName),
+			Properties: &frontdoors.BackendPoolProperties{
+				Backends: expandFrontDoorBackend(backends),
+				HealthProbeSettings: &frontdoors.SubResource{
+					Id: pointer.To(healthProbeId),
+				},
+				LoadBalancingSettings: &frontdoors.SubResource{
+					Id: pointer.To(loadBalancingId),
+				},
+			},
+		}
+		output = append(output, result)
+	}
+
+	return &output
+}

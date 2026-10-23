@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventgrid/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2025-02-15/eventsubscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func ExpandEventSubscriptionFilter(d *pluginsdk.ResourceData) (*eventsubscriptions.EventSubscriptionFilter, error) {
+	filter := &eventsubscriptions.EventSubscriptionFilter{}
+
+	if includedEvents, ok := d.GetOk("included_event_types"); ok {
+		filter.IncludedEventTypes = pluginsdk.ExpandStringSlice(includedEvents.([]any))
+	}
+
+	if v, ok := d.GetOk("subject_filter"); ok {
+		if v.([]any)[0] != nil {
+			config := v.([]any)[0].(map[string]any)
+
+			filter.SubjectBeginsWith = pointer.To(config["subject_begins_with"].(string))
+			filter.SubjectEndsWith = pointer.To(config["subject_ends_with"].(string))
+			filter.IsSubjectCaseSensitive = pointer.To(config["case_sensitive"].(bool))
+		}
+	}
+
+	if advancedFilter, ok := d.GetOk("advanced_filter"); ok {
+		advancedFilters := make([]eventsubscriptions.AdvancedFilter, 0)
+		for filterKey, filterSchema := range advancedFilter.([]any)[0].(map[string]any) {
+			for _, options := range filterSchema.([]any) {
+				if filter, err := ExpandEventSubscriptionAdvancedFilter(filterKey, options.(map[string]any)); err == nil {
+					advancedFilters = append(advancedFilters, filter)
+				} else {
+					return nil, err
+				}
+			}
+		}
+		filter.AdvancedFilters = &advancedFilters
+	}
+
+	if v, ok := d.GetOk("advanced_filtering_on_arrays_enabled"); ok {
+		filter.EnableAdvancedFilteringOnArrays = pointer.To(v.(bool))
+	}
+
+	return filter, nil
+}

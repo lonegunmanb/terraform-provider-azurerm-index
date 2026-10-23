@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/helpers
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2025-04-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/publicipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandOrchestratedVirtualMachineScaleSetIPConfiguration(raw map[string]any) (*virtualmachinescalesets.VirtualMachineScaleSetIPConfiguration, error) {
+	applicationGatewayBackendAddressPoolIdsRaw := raw["application_gateway_backend_address_pool_ids"].(*pluginsdk.Set).List()
+	applicationGatewayBackendAddressPoolIds := ExpandIDsToSubResources(applicationGatewayBackendAddressPoolIdsRaw)
+
+	applicationSecurityGroupIdsRaw := raw["application_security_group_ids"].(*pluginsdk.Set).List()
+	applicationSecurityGroupIds := ExpandIDsToSubResources(applicationSecurityGroupIdsRaw)
+
+	loadBalancerBackendAddressPoolIdsRaw := raw["load_balancer_backend_address_pool_ids"].(*pluginsdk.Set).List()
+	loadBalancerBackendAddressPoolIds := ExpandIDsToSubResources(loadBalancerBackendAddressPoolIdsRaw)
+
+	primary := raw["primary"].(bool)
+	version := virtualmachinescalesets.IPVersion(raw["version"].(string))
+	if primary && version == virtualmachinescalesets.IPVersionIPvSix {
+		return nil, fmt.Errorf("an IPv6 Primary IP Configuration is unsupported - instead add a IPv4 IP Configuration as the Primary and make the IPv6 IP Configuration the secondary")
+	}
+
+	ipConfiguration := virtualmachinescalesets.VirtualMachineScaleSetIPConfiguration{
+		Name: raw["name"].(string),
+		Properties: &virtualmachinescalesets.VirtualMachineScaleSetIPConfigurationProperties{
+			Primary:                               pointer.To(primary),
+			PrivateIPAddressVersion:               pointer.To(version),
+			ApplicationGatewayBackendAddressPools: applicationGatewayBackendAddressPoolIds,
+			ApplicationSecurityGroups:             applicationSecurityGroupIds,
+			LoadBalancerBackendAddressPools:       loadBalancerBackendAddressPoolIds,
+			// LoadBalancerInboundNatPools removed per service team this attribute will never be used in VMSS Flex
+		},
+	}
+
+	if subnetId := raw["subnet_id"].(string); subnetId != "" {
+		ipConfiguration.Properties.Subnet = &virtualmachinescalesets.ApiEntityReference{
+			Id: pointer.To(subnetId),
+		}
+	}
+
+	publicIPConfigsRaw := raw["public_ip_address"].([]any)
+	if len(publicIPConfigsRaw) > 0 && publicIPConfigsRaw[0] != nil {
+		publicIPConfigRaw := publicIPConfigsRaw[0].(map[string]any)
+		ipConfiguration.Properties.PublicIPAddressConfiguration = ExpandOrchestratedVirtualMachineScaleSetPublicIPAddress(publicIPConfigRaw)
+	}
+
+	return &ipConfiguration, nil
+}

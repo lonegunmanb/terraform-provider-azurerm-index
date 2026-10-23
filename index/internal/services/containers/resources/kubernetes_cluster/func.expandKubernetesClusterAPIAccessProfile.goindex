@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandKubernetesClusterAPIAccessProfile(d *pluginsdk.ResourceData) *managedclusters.ManagedClusterAPIServerAccessProfile {
+	enablePrivateCluster := false
+	if v, ok := d.GetOk("private_cluster_enabled"); ok {
+		enablePrivateCluster = v.(bool)
+	}
+
+	apiAccessProfile := &managedclusters.ManagedClusterAPIServerAccessProfile{
+		EnablePrivateCluster:           &enablePrivateCluster,
+		EnablePrivateClusterPublicFQDN: pointer.To(d.Get("private_cluster_public_fqdn_enabled").(bool)),
+		DisableRunCommand:              pointer.To(!d.Get("run_command_enabled").(bool)),
+	}
+
+	apiServerAccessProfileRaw := d.Get("api_server_access_profile").([]any)
+	if len(apiServerAccessProfileRaw) == 0 || apiServerAccessProfileRaw[0] == nil {
+		return apiAccessProfile
+	}
+
+	config := apiServerAccessProfileRaw[0].(map[string]any)
+	if v := config["authorized_ip_ranges"]; v != nil {
+		if apiServerAuthorizedIPRanges := pluginsdk.ExpandStringSlice(v.(*pluginsdk.Set).List()); len(*apiServerAuthorizedIPRanges) > 0 {
+			apiAccessProfile.AuthorizedIPRanges = apiServerAuthorizedIPRanges
+		}
+	}
+
+	apiAccessProfile.EnableVnetIntegration = pointer.To(config["virtual_network_integration_enabled"].(bool))
+
+	if v, ok := config["subnet_id"]; ok {
+		if s := v.(string); s != "" {
+			apiAccessProfile.SubnetId = pointer.To(s)
+		}
+	}
+
+	return apiAccessProfile
+}

@@ -1,0 +1,51 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/helpers
+import (
+	"fmt"
+	"maps"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/publicipprefixes"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandClusterNodePoolLinuxOSConfig(input []any) (*managedclusters.LinuxOSConfig, error) {
+	if len(input) == 0 || input[0] == nil {
+		return nil, nil
+	}
+	raw := input[0].(map[string]any)
+	sysctlConfig, err := ExpandClusterNodePoolSysctlConfig(raw["sysctl_config"].([]any))
+	if err != nil {
+		return nil, err
+	}
+
+	result := &managedclusters.LinuxOSConfig{
+		Sysctls: sysctlConfig,
+	}
+
+	if v := raw["transparent_huge_page"].(string); v != "" {
+		result.TransparentHugePageEnabled = pointer.To(v)
+	}
+
+	if v := raw["transparent_huge_page_defrag"].(string); v != "" {
+		result.TransparentHugePageDefrag = pointer.To(v)
+	}
+	if v, ok := raw["swap_file_size_mb"]; ok && v.(int) != 0 {
+		result.SwapFileSizeMB = pointer.To(int64(v.(int)))
+	}
+	return result, nil
+}

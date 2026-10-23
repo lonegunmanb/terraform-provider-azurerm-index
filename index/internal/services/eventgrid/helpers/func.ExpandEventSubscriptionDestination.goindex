@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/eventgrid/helpers
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/eventgrid/2025-02-15/eventsubscriptions"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func ExpandEventSubscriptionDestination(d *pluginsdk.ResourceData) eventsubscriptions.EventSubscriptionDestination {
+	deliveryMappings := ExpandEventSubscriptionDeliveryAttributeMappings(d.Get("delivery_property").([]any))
+
+	if val, ok := d.GetOk("azure_function_endpoint"); ok && len(val.([]any)) == 1 {
+		return ExpandEventSubscriptionDestinationAzureFunction(d.Get("azure_function_endpoint").([]any), deliveryMappings)
+	}
+
+	eventhubEndpointId, ok := d.GetOk("eventhub_id")
+	if ok {
+		return ExpandEventSubscriptionDestinationEventHub(eventhubEndpointId.(string), deliveryMappings)
+	}
+
+	hybridConnectionEndpointId, ok := d.GetOk("hybrid_connection_id")
+	if ok {
+		return ExpandEventSubscriptionDestinationHybridConnection(hybridConnectionEndpointId.(string), deliveryMappings)
+	}
+
+	if val, ok := d.GetOk("service_bus_queue_id"); ok {
+		return ExpandEventSubscriptionDestinationServiceBusQueueEndpoint(val.(string), deliveryMappings)
+	}
+
+	if val, ok := d.GetOk("service_bus_topic_id"); ok {
+		return ExpandEventSubscriptionDestinationServiceBusTopicEndpoint(val.(string), deliveryMappings)
+	}
+
+	if val, ok := d.GetOk("storage_queue_endpoint"); ok {
+		return ExpandEventSubscriptionStorageQueueEndpoint(val.([]any))
+	}
+
+	if val, ok := d.GetOk("webhook_endpoint"); ok {
+		return ExpandEventGridEventSubscriptionWebhookEndpoint(val.([]any), deliveryMappings)
+	}
+
+	return nil
+}

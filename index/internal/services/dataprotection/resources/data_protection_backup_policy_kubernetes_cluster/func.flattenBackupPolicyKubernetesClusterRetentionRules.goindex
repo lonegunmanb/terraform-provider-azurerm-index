@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection/resources/data_protection_backup_policy_kubernetes_cluster
+import (
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2025-07-01/basebackuppolicyresources"
+)
+func flattenBackupPolicyKubernetesClusterRetentionRules(input *[]basebackuppolicyresources.BasePolicyRule) []RetentionRule {
+	results := make([]RetentionRule, 0)
+	if input == nil {
+		return results
+	}
+
+	var taggingCriteriaList []basebackuppolicyresources.TaggingCriteria
+	for _, item := range *input {
+		if backupRule, ok := item.(basebackuppolicyresources.AzureBackupRule); ok {
+			if trigger, ok := backupRule.Trigger.(basebackuppolicyresources.ScheduleBasedTriggerContext); ok {
+				taggingCriteriaList = trigger.TaggingCriteria
+			}
+		}
+	}
+
+	for _, item := range *input {
+		if retentionRule, ok := item.(basebackuppolicyresources.AzureRetentionRule); ok {
+			var name string
+			var taggingPriority int64
+			var taggingCriteria []Criteria
+			if retentionRule.IsDefault == nil || !*retentionRule.IsDefault {
+				name = retentionRule.Name
+				for _, criteria := range taggingCriteriaList {
+					if strings.EqualFold(criteria.TagInfo.TagName, name) {
+						taggingPriority = criteria.TaggingPriority
+						taggingCriteria = flattenBackupPolicyKubernetesClusterBackupCriteriaArray(criteria.Criteria)
+						break
+					}
+				}
+
+				var lifeCycle []LifeCycle
+				if v := retentionRule.Lifecycles; len(v) > 0 {
+					lifeCycle = flattenBackupPolicyKubernetesClusterBackupLifeCycleArray(v)
+				}
+				results = append(results, RetentionRule{
+					Name:      name,
+					Priority:  taggingPriority,
+					Criteria:  taggingCriteria,
+					LifeCycle: lifeCycle,
+				})
+			}
+		}
+	}
+	return results
+}

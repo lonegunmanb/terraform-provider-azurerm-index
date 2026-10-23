@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/resources/cdn_frontdoor_firewall_policy
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandCdnFrontDoorFirewallScrubbingRules(input []any) (*[]webapplicationfirewallpolicies.WebApplicationFirewallScrubbingRules, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	scrubbingRules := make([]webapplicationfirewallpolicies.WebApplicationFirewallScrubbingRules, 0)
+
+	for _, rule := range input {
+		v := rule.(map[string]any)
+		var item webapplicationfirewallpolicies.WebApplicationFirewallScrubbingRules
+
+		enabled := webapplicationfirewallpolicies.ScrubbingRuleEntryStateDisabled
+		if value := v["enabled"].(bool); value {
+			enabled = webapplicationfirewallpolicies.ScrubbingRuleEntryStateEnabled
+		}
+
+		item.State = pointer.To(enabled)
+		item.MatchVariable = webapplicationfirewallpolicies.ScrubbingRuleEntryMatchVariable(v["match_variable"].(string))
+		item.SelectorMatchOperator = webapplicationfirewallpolicies.ScrubbingRuleEntryMatchOperator(v["operator"].(string))
+
+		if selector, ok := v["selector"]; ok {
+			item.Selector = pointer.To(selector.(string))
+		}
+
+		// NOTE: Validate the rules configuration...
+		switch {
+		case item.MatchVariable == webapplicationfirewallpolicies.ScrubbingRuleEntryMatchVariableRequestIPAddress || item.MatchVariable == webapplicationfirewallpolicies.ScrubbingRuleEntryMatchVariableRequestUri:
+			// NOTE: 'RequestIPAddress' and 'RequestUri' 'match_variable's can only use the 'EqualsAny' 'operator'...
+			if item.SelectorMatchOperator != webapplicationfirewallpolicies.ScrubbingRuleEntryMatchOperatorEqualsAny {
+				return nil, fmt.Errorf("the %q 'match_variable' must use the %q 'operator', got %q", item.MatchVariable, webapplicationfirewallpolicies.ScrubbingRuleEntryMatchOperatorEqualsAny, item.SelectorMatchOperator)
+			}
+
+		case item.SelectorMatchOperator == webapplicationfirewallpolicies.ScrubbingRuleEntryMatchOperatorEquals:
+			// NOTE: If the 'operator' is set to 'Equals' the 'selector' cannot be 'nil'...
+			if pointer.From(item.Selector) == "" {
+				return nil, fmt.Errorf("the 'selector' field must be set when the %q 'operator' is used, got %q", webapplicationfirewallpolicies.ScrubbingRuleEntryMatchOperatorEquals, "nil")
+			}
+
+		case item.SelectorMatchOperator == webapplicationfirewallpolicies.ScrubbingRuleEntryMatchOperatorEqualsAny:
+			// NOTE: If the 'operator' is set to 'EqualsAny' the 'selector' must be 'nil'...
+			if pointer.From(item.Selector) != "" {
+				return nil, fmt.Errorf("the 'selector' field cannot be set when the %q 'operator' is used, got %q", webapplicationfirewallpolicies.ScrubbingRuleEntryMatchOperatorEqualsAny, pointer.From(item.Selector))
+			}
+		}
+
+		scrubbingRules = append(scrubbingRules, item)
+	}
+
+	return pointer.To(scrubbingRules), nil
+}

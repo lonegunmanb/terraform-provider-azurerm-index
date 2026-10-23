@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/datafactory/resources/data_factory_integration_runtime_azure_ssis
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/datafactory/2018-06-01/integrationruntimes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenDataFactoryIntegrationRuntimeAzureSsisCatalogInfo(ssisProperties *integrationruntimes.IntegrationRuntimeSsisCatalogInfo, d *pluginsdk.ResourceData) []any {
+	if ssisProperties == nil {
+		return []any{}
+	}
+
+	var administratorPassword string
+
+	var pricingTier, elasticPoolName string
+	elasticPoolName, elasticPoolNameMatched := parseDataFactoryIntegrationRuntimeElasticPool(pointer.FromEnum(ssisProperties.CatalogPricingTier))
+	if !elasticPoolNameMatched {
+		pricingTier = pointer.FromEnum(ssisProperties.CatalogPricingTier)
+	}
+
+	// read back
+	if adminPassword, ok := d.GetOk("catalog_info.0.administrator_password"); ok {
+		administratorPassword = adminPassword.(string)
+	}
+
+	return []any{
+		map[string]any{
+			"server_endpoint":        pointer.From(ssisProperties.CatalogServerEndpoint),
+			"pricing_tier":           pricingTier,
+			"elastic_pool_name":      elasticPoolName,
+			"administrator_login":    pointer.From(ssisProperties.CatalogAdminUserName),
+			"administrator_password": administratorPassword,
+			"dual_standby_pair_name": pointer.From(ssisProperties.DualStandbyPairName),
+		},
+	}
+}

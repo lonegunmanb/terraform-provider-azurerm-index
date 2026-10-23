@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_cluster
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/edgezones"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/maintenanceconfigurations"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/client"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandKubernetesClusterIngressProfile(d *pluginsdk.ResourceData, input []any) *managedclusters.ManagedClusterIngressProfile {
+	if len(input) == 0 && d.HasChange("web_app_routing") {
+		return &managedclusters.ManagedClusterIngressProfile{
+			WebAppRouting: &managedclusters.ManagedClusterIngressProfileWebAppRouting{
+				Enabled: pointer.To(false),
+			},
+		}
+	} else if len(input) == 0 {
+		return nil
+	}
+
+	out := managedclusters.ManagedClusterIngressProfile{
+		WebAppRouting: &managedclusters.ManagedClusterIngressProfileWebAppRouting{
+			Enabled: pointer.To(true),
+		},
+	}
+	if input[0] != nil {
+		config := input[0].(map[string]any)
+		if v := config["dns_zone_ids"]; v != nil {
+			if dnsZoneResourceIds, ok := v.([]any); ok && len(dnsZoneResourceIds) > 0 {
+				out.WebAppRouting.DnsZoneResourceIds = pluginsdk.ExpandStringSlice(dnsZoneResourceIds)
+			}
+		}
+		if v := config["default_nginx_controller"]; v != nil {
+			out.WebAppRouting.Nginx = &managedclusters.ManagedClusterIngressProfileNginx{
+				DefaultIngressControllerType: pointer.ToEnum[managedclusters.NginxIngressControllerType](v.(string)),
+			}
+		}
+	}
+	return &out
+}

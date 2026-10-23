@@ -1,0 +1,77 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection/resources/data_protection_backup_policy_cosmosdb_account
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2026-06-01/basebackuppolicyresources"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenBackupPolicyCosmosdbAccountPolicyRules(input []basebackuppolicyresources.BasePolicyRule) (string, []BackupPolicyCosmosdbAccountRetentionRule, string, []string, string) {
+	var taggingCriteria []basebackuppolicyresources.TaggingCriteria
+	var nonDefaultRetentionRules []basebackuppolicyresources.AzureRetentionRule
+	backupFrequency := backupPolicyCosmosdbAccountFrequencyWeekly
+	var fullBackupSchedule string
+	var defaultRetentionDuration string
+
+	incrementalBackupSchedule := make([]string, 0)
+	retentionRules := make([]BackupPolicyCosmosdbAccountRetentionRule, 0)
+
+	for _, item := range input {
+		switch rule := item.(type) {
+		case basebackuppolicyresources.AzureBackupRule:
+			if trigger, ok := rule.Trigger.(basebackuppolicyresources.ScheduleBasedTriggerContext); ok {
+				if parameters, ok := rule.BackupParameters.(basebackuppolicyresources.AzureBackupParams); ok {
+					switch {
+					case strings.EqualFold(parameters.BackupType, "Full"):
+						if len(trigger.Schedule.RepeatingTimeIntervals) > 0 {
+							fullBackupSchedule = trigger.Schedule.RepeatingTimeIntervals[0]
+						}
+						taggingCriteria = trigger.TaggingCriteria
+					case strings.EqualFold(parameters.BackupType, "Incremental"):
+						backupFrequency = backupPolicyCosmosdbAccountFrequencyDaily
+						incrementalBackupSchedule = append(incrementalBackupSchedule, trigger.Schedule.RepeatingTimeIntervals...)
+					}
+				}
+			}
+		case basebackuppolicyresources.AzureRetentionRule:
+			if pointer.From(rule.IsDefault) {
+				if v := rule.Lifecycles; len(v) > 0 {
+					if deleteOption, ok := v[0].DeleteAfter.(basebackuppolicyresources.AbsoluteDeleteOption); ok {
+						defaultRetentionDuration = deleteOption.Duration
+					}
+				}
+			} else {
+				nonDefaultRetentionRules = append(nonDefaultRetentionRules, rule)
+			}
+		}
+	}
+
+	for _, rule := range nonDefaultRetentionRules {
+		result := BackupPolicyCosmosdbAccountRetentionRule{
+			Name: rule.Name,
+		}
+
+		for _, criteria := range taggingCriteria {
+			if strings.EqualFold(criteria.TagInfo.TagName, rule.Name) {
+				flattenBackupPolicyCosmosdbAccountCriteriaIntoRule(criteria.Criteria, &result)
+				break
+			}
+		}
+
+		if v := rule.Lifecycles; len(v) > 0 {
+			if deleteOption, ok := v[0].DeleteAfter.(basebackuppolicyresources.AbsoluteDeleteOption); ok {
+				result.Duration = deleteOption.Duration
+			}
+		}
+
+		retentionRules = append(retentionRules, result)
+	}
+
+	return defaultRetentionDuration, retentionRules, fullBackupSchedule, incrementalBackupSchedule, backupFrequency
+}

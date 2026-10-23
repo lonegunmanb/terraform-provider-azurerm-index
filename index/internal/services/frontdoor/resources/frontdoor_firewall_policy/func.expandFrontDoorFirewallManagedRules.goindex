@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor_firewall_policy
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandFrontDoorFirewallManagedRules(input []any) *webapplicationfirewallpolicies.ManagedRuleSetList {
+	if len(input) == 0 {
+		return nil
+	}
+
+	managedRules := make([]webapplicationfirewallpolicies.ManagedRuleSet, 0)
+
+	for _, mr := range input {
+		managedRule := mr.(map[string]any)
+
+		ruleType := managedRule["type"].(string)
+		version := managedRule["version"].(string)
+
+		managedRuleSet := webapplicationfirewallpolicies.ManagedRuleSet{
+			RuleSetType:    ruleType,
+			RuleSetVersion: version,
+		}
+
+		if exclusions := expandFrontDoorFirewallManagedRuleGroupExclusion(managedRule["exclusion"].([]any)); exclusions != nil {
+			managedRuleSet.Exclusions = exclusions
+		}
+
+		if ruleGroupOverrides := expandFrontDoorFirewallManagedRuleGroupOverride(managedRule["override"].([]any)); ruleGroupOverrides != nil {
+			managedRuleSet.RuleGroupOverrides = ruleGroupOverrides
+		}
+
+		managedRules = append(managedRules, managedRuleSet)
+	}
+
+	return &webapplicationfirewallpolicies.ManagedRuleSetList{
+		ManagedRuleSets: &managedRules,
+	}
+}

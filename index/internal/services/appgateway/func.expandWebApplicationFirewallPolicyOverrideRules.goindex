@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandWebApplicationFirewallPolicyOverrideRules(input []any) *[]webapplicationfirewallpolicies.ManagedRuleOverride {
+	results := make([]webapplicationfirewallpolicies.ManagedRuleOverride, 0)
+	for _, item := range input {
+		v := item.(map[string]any)
+		state := webapplicationfirewallpolicies.ManagedRuleEnabledStateDisabled
+		if v["enabled"].(bool) {
+			state = webapplicationfirewallpolicies.ManagedRuleEnabledStateEnabled
+		}
+
+		result := webapplicationfirewallpolicies.ManagedRuleOverride{
+			RuleId: v["id"].(string),
+			State:  pointer.To(state),
+		}
+
+		action := v["action"].(string)
+		if action != "" {
+			result.Action = pointer.ToEnum[webapplicationfirewallpolicies.ActionType](action)
+		}
+
+		results = append(results, result)
+	}
+
+	return &results
+}

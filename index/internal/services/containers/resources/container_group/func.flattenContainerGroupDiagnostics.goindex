@@ -1,0 +1,58 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/container_group
+import (
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerinstance/2025-09-01/containerinstance"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenContainerGroupDiagnostics(d *pluginsdk.ResourceData, input *containerinstance.ContainerGroupDiagnostics) []any {
+	if input == nil {
+		return []any{}
+	}
+
+	logAnalytics := make([]any, 0)
+
+	if la := input.LogAnalytics; la != nil {
+		output := make(map[string]any)
+
+		logType := ""
+		if la.LogType != nil {
+			logType = string(*la.LogType)
+		}
+		output["log_type"] = logType
+
+		metadata := make(map[string]any)
+		if la.Metadata != nil {
+			for k, v := range *la.Metadata {
+				metadata[k] = v
+			}
+		}
+		output["metadata"] = metadata
+		output["workspace_id"] = la.WorkspaceId
+
+		// the existing config may not exist at Import time, protect against it.
+		workspaceKey := ""
+		if existingDiags := d.Get("diagnostics").([]any); len(existingDiags) > 0 {
+			existingDiag := existingDiags[0].(map[string]any)
+			if existingLA := existingDiag["log_analytics"].([]any); len(existingLA) > 0 {
+				vs := existingLA[0].(map[string]any)
+				if key := vs["workspace_key"]; key != nil && key.(string) != "" {
+					workspaceKey = key.(string)
+				}
+			}
+		}
+		output["workspace_key"] = workspaceKey
+
+		logAnalytics = append(logAnalytics, output)
+	}
+
+	return []any{
+		map[string]any{
+			"log_analytics": logAnalytics,
+		},
+	}
+}

@@ -1,0 +1,48 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/dataprotection/resources/data_protection_backup_policy_cosmosdb_account
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/dataprotection/2026-06-01/basebackuppolicyresources"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenBackupPolicyCosmosdbAccountRetentionRules(input []BackupPolicyCosmosdbAccountRetentionRule, state *BackupPolicyCosmosdbAccountModel) error {
+	for _, rule := range input {
+		switch {
+		case rule.BackupOccurrence == string(basebackuppolicyresources.AbsoluteMarkerFirstOfYear) || len(rule.MonthsOfYear) > 0:
+			if len(state.YearlyRetentionRule) > 0 {
+				return errors.New("multiple yearly retention rules cannot be represented by `yearly_retention_rule`")
+			}
+			state.YearlyRetentionRule = []BackupPolicyCosmosdbAccountYearlyRetentionRule{{
+				Duration:     rule.Duration,
+				DaysOfWeek:   rule.DaysOfWeek,
+				WeeksOfMonth: rule.WeeksOfMonth,
+				MonthsOfYear: rule.MonthsOfYear,
+			}}
+		case rule.BackupOccurrence == string(basebackuppolicyresources.AbsoluteMarkerFirstOfMonth) || len(rule.WeeksOfMonth) > 0:
+			if len(state.MonthlyRetentionRule) > 0 {
+				return errors.New("multiple monthly retention rules cannot be represented by `monthly_retention_rule`")
+			}
+			state.MonthlyRetentionRule = []BackupPolicyCosmosdbAccountMonthlyRetentionRule{{
+				Duration:     rule.Duration,
+				DaysOfWeek:   rule.DaysOfWeek,
+				WeeksOfMonth: rule.WeeksOfMonth,
+			}}
+		default:
+			if len(state.WeeklyRetentionRule) > 0 {
+				return errors.New("multiple weekly retention rules cannot be represented by `weekly_retention_rule`")
+			}
+			state.WeeklyRetentionRule = []BackupPolicyCosmosdbAccountWeeklyRetentionRule{{
+				Duration:   rule.Duration,
+				DaysOfWeek: rule.DaysOfWeek,
+			}}
+		}
+	}
+	return nil
+}

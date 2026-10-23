@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/kubernetes_automatic_cluster
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-05-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/privatedns/2024-06-01/privatezones"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/kubernetes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/network/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenKubernetesAutomaticClusterServiceMeshProfile(profile *managedclusters.ServiceMeshProfile) []ServiceMeshProfileModel {
+	if profile == nil || profile.Mode != managedclusters.ServiceMeshModeIstio || profile.Istio == nil {
+		return []ServiceMeshProfileModel{}
+	}
+
+	revisions := make([]string, 0)
+	if profile.Istio.Revisions != nil {
+		revisions = pointer.From(profile.Istio.Revisions)
+	}
+
+	internalIngressGatewayEnabled := false
+	externalIngressGatewayEnabled := false
+	proxyRedirectMechanism := ""
+
+	if profile.Istio.Components != nil {
+		if profile.Istio.Components.IngressGateways != nil {
+			for _, gateway := range pointer.From(profile.Istio.Components.IngressGateways) {
+				if gateway.Mode == managedclusters.IstioIngressGatewayModeInternal {
+					internalIngressGatewayEnabled = gateway.Enabled
+				}
+				if gateway.Mode == managedclusters.IstioIngressGatewayModeExternal {
+					externalIngressGatewayEnabled = gateway.Enabled
+				}
+			}
+		}
+		proxyRedirectMechanism = pointer.FromEnum(profile.Istio.Components.ProxyRedirectionMechanism)
+	}
+
+	certificateAuthority := flattenKubernetesAutomaticClusterServiceMeshProfileCertificateAuthority(profile.Istio.CertificateAuthority)
+
+	return []ServiceMeshProfileModel{{
+		Revisions:                     revisions,
+		InternalIngressGatewayEnabled: internalIngressGatewayEnabled,
+		ExternalIngressGatewayEnabled: externalIngressGatewayEnabled,
+		ProxyRedirectMechanism:        proxyRedirectMechanism,
+		CertificateAuthority:          certificateAuthority,
+	}}
+}

@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cdn/helpers
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/afddomains"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cdn/2025-12-01/routes"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2025-03-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func GetRouteProperties(ctx context.Context, meta any, id *routes.RouteId, resourceName string) ([]any, *routes.RouteProperties, error) {
+	client := meta.(*clients.Client).Cdn.FrontDoorRoutesClient
+
+	resp, err := client.Get(ctx, *id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: retrieving %s: %+v", resourceName, id, err)
+	}
+
+	if resp.Model == nil {
+		return nil, nil, fmt.Errorf("%s: retrieving %s: model was nil", resourceName, id)
+	}
+
+	if resp.Model.Properties == nil {
+		return nil, nil, fmt.Errorf("%s: retrieving %s: properties was nil", resourceName, id)
+	}
+	props := resp.Model.Properties
+
+	customDomains, err := FlattenCdnFrontDoorRouteCustomDomainActivatedResourceArray(props.CustomDomains)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return customDomains, props, nil
+}

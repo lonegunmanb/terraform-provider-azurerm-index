@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/cognitive/resources/cognitive_account
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/cognitive/2026-03-01/cognitiveservicesaccounts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandCognitiveAccountCustomerManagedKey(input []any) *cognitiveservicesaccounts.Encryption {
+	if len(input) == 0 || input[0] == nil {
+		return nil
+	}
+
+	v := input[0].(map[string]any)
+	keyId, _ := keyvault.ParseNestedItemID(v["key_vault_key_id"].(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
+	if keyId == nil {
+		return nil
+	}
+
+	var identity string
+	if value := v["identity_client_id"]; value != nil && value != "" {
+		identity = value.(string)
+	}
+
+	return &cognitiveservicesaccounts.Encryption{
+		KeySource: pointer.To(cognitiveservicesaccounts.KeySourceMicrosoftPointKeyVault),
+		KeyVaultProperties: &cognitiveservicesaccounts.KeyVaultProperties{
+			KeyName:          pointer.To(keyId.Name),
+			KeyVersion:       pointer.To(keyId.Version),
+			KeyVaultUri:      pointer.To(keyId.KeyVaultBaseURL),
+			IdentityClientId: pointer.To(identity),
+		},
+	}
+}

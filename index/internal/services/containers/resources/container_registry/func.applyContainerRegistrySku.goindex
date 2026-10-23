@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/resources/container_registry
+import (
+	"fmt"
+	"log"
+	"sort"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2025-11-01/registries"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerregistry/2025-11-01/replications"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func applyContainerRegistrySku(d *pluginsdk.ResourceData, meta any, sku string, id registries.RegistryId) error {
+	client := meta.(*clients.Client).Containers.ContainerRegistryClient.Registries
+	ctx, cancel := timeouts.ForUpdate(meta.(*clients.Client).StopContext, d)
+	defer cancel()
+
+	parameters := registries.RegistryUpdateParameters{
+		Sku: &registries.Sku{
+			Name: registries.SkuName(sku),
+			Tier: pointer.ToEnum[registries.SkuTier](sku),
+		},
+	}
+
+	if err := client.UpdateThenPoll(ctx, id, parameters); err != nil {
+		return fmt.Errorf("updating %s: %+v", id, err)
+	}
+
+	return nil
+}

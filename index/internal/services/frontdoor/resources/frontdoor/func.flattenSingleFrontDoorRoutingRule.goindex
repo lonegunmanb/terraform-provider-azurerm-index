@@ -1,0 +1,62 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/resources/frontdoor
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-04-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/frontdoor/2020-05-01/frontdoors"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/frontdoor/parse"
+)
+func flattenSingleFrontDoorRoutingRule(input frontdoors.RoutingRule, oldBlocks any, frontDoorId frontdoors.FrontDoorId) (map[string]any, error) {
+	id := ""
+	name := ""
+	if input.Name != nil {
+		// rewrite the ID to ensure it's consistent
+		id = parse.NewRoutingRuleID(frontDoorId.SubscriptionId, frontDoorId.ResourceGroupName, frontDoorId.FrontDoorName, *input.Name).ID()
+		name = *input.Name
+	}
+
+	acceptedProtocols := make([]string, 0)
+	enabled := false
+	forwardingConfiguration := make([]any, 0)
+	frontEndEndpoints := make([]string, 0)
+	patternsToMatch := make([]string, 0)
+	redirectConfiguration := make([]any, 0)
+
+	if props := input.Properties; props != nil {
+		acceptedProtocols = flattenFrontDoorAcceptedProtocol(props.AcceptedProtocols)
+		if props.EnabledState != nil {
+			enabled = *props.EnabledState == frontdoors.RoutingRuleEnabledStateEnabled
+		}
+		forwardConfiguration, err := flattenRoutingRuleForwardingConfiguration(props.RouteConfiguration, oldBlocks)
+		if err != nil {
+			return nil, fmt.Errorf("flattening `forward_configuration`: %+v", err)
+		}
+
+		forwardingConfiguration = *forwardConfiguration
+		frontendEndpoints, err := flattenFrontDoorFrontendEndpointsSubResources(props.FrontendEndpoints)
+		if err != nil {
+			return nil, fmt.Errorf("flattening `frontend_endpoints`: %+v", err)
+		}
+
+		frontEndEndpoints = *frontendEndpoints
+		if props.PatternsToMatch != nil {
+			patternsToMatch = *props.PatternsToMatch
+		}
+		redirectConfiguration = flattenRoutingRuleRedirectConfiguration(props.RouteConfiguration)
+	}
+
+	output := map[string]any{
+		"accepted_protocols":       acceptedProtocols,
+		"enabled":                  enabled,
+		"forwarding_configuration": forwardingConfiguration,
+		"frontend_endpoints":       frontEndEndpoints,
+		"id":                       id,
+		"name":                     name,
+		"patterns_to_match":        patternsToMatch,
+		"redirect_configuration":   redirectConfiguration,
+	}
+
+	return output, nil
+}

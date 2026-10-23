@@ -1,0 +1,75 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/helpers
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2025-04-01/virtualmachinescalesets"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/networksecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/publicipprefixes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/compute/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/base64"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func ExpandOrchestratedVirtualMachineScaleSetNetworkInterfaceUpdate(input []any) (*[]virtualmachinescalesets.VirtualMachineScaleSetUpdateNetworkConfiguration, error) {
+	output := make([]virtualmachinescalesets.VirtualMachineScaleSetUpdateNetworkConfiguration, 0)
+
+	for _, v := range input {
+		raw := v.(map[string]any)
+
+		dnsServers := pluginsdk.ExpandStringSlice(raw["dns_servers"].([]any))
+
+		ipConfigurations := make([]virtualmachinescalesets.VirtualMachineScaleSetUpdateIPConfiguration, 0)
+		ipConfigurationsRaw := raw["ip_configuration"].([]any)
+		for _, configV := range ipConfigurationsRaw {
+			configRaw := configV.(map[string]any)
+			ipConfiguration, err := ExpandOrchestratedVirtualMachineScaleSetIPConfigurationUpdate(configRaw)
+			if err != nil {
+				return nil, err
+			}
+
+			ipConfigurations = append(ipConfigurations, *ipConfiguration)
+		}
+
+		config := virtualmachinescalesets.VirtualMachineScaleSetUpdateNetworkConfiguration{
+			Name: pointer.To(raw["name"].(string)),
+			Properties: &virtualmachinescalesets.VirtualMachineScaleSetUpdateNetworkConfigurationProperties{
+				DnsSettings: &virtualmachinescalesets.VirtualMachineScaleSetNetworkConfigurationDnsSettings{
+					DnsServers: dnsServers,
+				},
+				EnableAcceleratedNetworking: pointer.To(raw["accelerated_networking_enabled"].(bool)),
+				EnableIPForwarding:          pointer.To(raw["ip_forwarding_enabled"].(bool)),
+				IPConfigurations:            &ipConfigurations,
+				Primary:                     pointer.To(raw["primary"].(bool)),
+			},
+		}
+
+		if auxiliaryMode := raw["auxiliary_mode"].(string); auxiliaryMode != "" {
+			config.Properties.AuxiliaryMode = pointer.ToEnum[virtualmachinescalesets.NetworkInterfaceAuxiliaryMode](auxiliaryMode)
+		}
+
+		if auxiliarySku := raw["auxiliary_sku"].(string); auxiliarySku != "" {
+			config.Properties.AuxiliarySku = pointer.ToEnum[virtualmachinescalesets.NetworkInterfaceAuxiliarySku](auxiliarySku)
+		}
+
+		if nsgId := raw["network_security_group_id"].(string); nsgId != "" {
+			config.Properties.NetworkSecurityGroup = &virtualmachinescalesets.SubResource{
+				Id: pointer.To(nsgId),
+			}
+		}
+
+		config.Tags = tags.Expand(raw["tags"].(map[string]any))
+
+		output = append(output, config)
+	}
+
+	return &output, nil
+}
