@@ -1,0 +1,99 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/resources/logic_app_standard
+import (
+	"context"
+	"fmt"
+	"maps"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-01-01/resourceproviders"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+)
+func mergeAppSettings(existing []webapps.NameValuePair, old, new map[string]any, metadata sdk.ResourceMetaData) *[]webapps.NameValuePair {
+	f := func(input map[string]any) (result map[string]string) {
+		result = make(map[string]string)
+		for k, v := range input {
+			result[k] = v.(string)
+		}
+
+		return
+	}
+
+	eMap := make(map[string]string)
+	for _, i := range existing {
+		n, v := pointer.From(i.Name), pointer.From(i.Value)
+		eMap[n] = v
+	}
+
+	oMap := f(old)
+	cMap := f(new)
+
+	if metadata.ResourceData.HasChange("storage_key_vault_secret_id") && metadata.ResourceData.Get("storage_key_vault_secret_id").(string) != "" {
+		kvRef := fmt.Sprintf(helpers.StorageStringFmtKV, metadata.ResourceData.Get("storage_key_vault_secret_id").(string))
+		eMap[storageAppSettingName] = kvRef
+		eMap[contentFileConnStringAppSettingName] = kvRef
+	} else if metadata.ResourceData.HasChanges("storage_account_name", "storage_account_access_key") {
+		accountName := metadata.ResourceData.Get("storage_account_name").(string)
+		accountAccessKey := metadata.ResourceData.Get("storage_account_access_key").(string)
+		suffix, _ := metadata.Client.Account.Environment.Storage.DomainSuffix()
+
+		conn := fmt.Sprintf(helpers.StorageStringFmt, accountName, accountAccessKey, *suffix)
+		eMap[storageAppSettingName] = conn
+		eMap[contentFileConnStringAppSettingName] = conn
+	}
+
+	if metadata.ResourceData.HasChange("storage_account_share_name") {
+		n := metadata.ResourceData.Get("storage_account_share_name").(string)
+
+		if n != "" {
+			eMap[contentShareAppSettingName] = n
+		} else {
+			name := metadata.ResourceData.Get("name").(string)
+			eMap[contentShareAppSettingName] = strings.ToLower(name) + "-content"
+		}
+	}
+
+	if metadata.ResourceData.HasChange("version") {
+		eMap[functionVersionAppSettingName] = metadata.ResourceData.Get("version").(string)
+	}
+
+	if metadata.ResourceData.HasChanges("bundle_version", "use_extension_bundle") {
+		if bundleVersion := metadata.ResourceData.Get("bundle_version").(string); bundleVersion != "" {
+			eMap[extensionBundleAppSettingName] = extensionBundleAppSettingValue
+			eMap[extensionBundleVersionAppSettingName] = bundleVersion
+		} else {
+			delete(eMap, extensionBundleAppSettingName)
+		}
+	}
+
+	remove := map[string]string{}
+	addOrUpdate := map[string]string{}
+
+	for k, v := range oMap {
+		if _, ok := cMap[k]; !ok {
+			remove[k] = v
+			continue
+		}
+
+		addOrUpdate[k] = v
+	}
+
+	maps.Copy(addOrUpdate, cMap)
+
+	for k := range remove {
+		delete(eMap, k)
+	}
+
+	maps.Copy(eMap, addOrUpdate)
+
+	return pointer.To(expandAppSettings(eMap))
+}

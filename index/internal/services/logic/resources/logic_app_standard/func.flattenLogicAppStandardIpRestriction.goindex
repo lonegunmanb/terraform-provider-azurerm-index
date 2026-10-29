@@ -1,0 +1,60 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/resources/logic_app_standard
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+)
+func flattenLogicAppStandardIpRestriction(input *[]webapps.IPSecurityRestriction) []any {
+	restrictions := make([]any, 0)
+
+	if input == nil {
+		return []any{}
+	}
+
+	for _, v := range *input {
+		restriction := make(map[string]any)
+		if ip := v.IPAddress; ip != nil {
+			if *ip == "Any" {
+				continue
+			} else {
+				switch pointer.From(v.Tag) {
+				case webapps.IPFilterTagServiceTag:
+					restriction["service_tag"] = *ip
+				default:
+					restriction["ip_address"] = *ip
+				}
+			}
+		}
+
+		restriction["virtual_network_subnet_id"] = pointer.From(v.VnetSubnetResourceId)
+
+		restriction["name"] = pointer.From(v.Name)
+
+		priority := 0
+		if priorityRaw := v.Priority; priorityRaw != nil {
+			priority = int(*priorityRaw)
+		}
+		restriction["priority"] = priority
+
+		restriction["action"] = pointer.From(v.Action)
+
+		if headers := v.Headers; headers != nil {
+			restriction["headers"] = flattenHeaders(*headers)
+		}
+
+		restrictions = append(restrictions, restriction)
+	}
+
+	return restrictions
+}

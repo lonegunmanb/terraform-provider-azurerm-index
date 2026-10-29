@@ -1,0 +1,165 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/resources/logic_app_standard
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+)
+func (r Resource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.AppService.WebAppsClient
+
+			var state LogicAppResourceModel
+
+			id, err := commonids.ParseLogicAppId(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("reading Linux %s: %+v", id, err)
+			}
+
+			state.Name = id.SiteName
+			state.ResourceGroupName = id.ResourceGroupName
+
+			if model := resp.Model; model != nil {
+				state.Kind = pointer.From(model.Kind)
+				state.Location = location.Normalize(model.Location)
+				ident, err := identity.FlattenSystemAndUserAssignedMapToModel(model.Identity)
+				if err != nil {
+					return err
+				}
+				state.Identity = pointer.From(ident)
+				state.Tags = pointer.From(model.Tags)
+				if props := model.Properties; props != nil {
+					servicePlanId, err := commonids.ParseAppServicePlanIDInsensitively(*props.ServerFarmId)
+					if err != nil {
+						return err
+					}
+
+					state.AppServicePlanId = servicePlanId.ID()
+					state.Enabled = pointer.From(props.Enabled)
+					state.DefaultHostname = pointer.From(props.DefaultHostName)
+					state.HTTPSOnly = pointer.From(props.HTTPSOnly)
+					state.OutboundIpAddresses = pointer.From(props.OutboundIPAddresses)
+					state.PossibleOutboundIpAddresses = pointer.From(props.PossibleOutboundIPAddresses)
+					state.ClientAffinityEnabled = pointer.From(props.ClientAffinityEnabled)
+					state.CustomDomainVerificationId = pointer.From(props.CustomDomainVerificationId)
+					state.VirtualNetworkSubnetId = pointer.From(props.VirtualNetworkSubnetId)
+					state.VNETContentShareEnabled = pointer.From(props.VnetContentShareEnabled)
+					state.PublicNetworkAccess = pointer.From(props.PublicNetworkAccess)
+					if kvRefId := pointer.From(props.KeyVaultReferenceIdentity); !strings.EqualFold(kvRefId, "SystemAssigned") {
+						state.KeyvaultReferenceIdentityId = kvRefId
+					}
+					state.ClientCertificateMode = pointer.FromEnum(props.ClientCertMode)
+				}
+			}
+
+			appSettingsResp, err := client.ListApplicationSettings(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("listing application settings for %s: %+v", *id, err)
+			}
+
+			if model := appSettingsResp.Model; model != nil {
+				appSettings := pointer.From(model.Properties)
+
+				connectionString := appSettings[storageAppSettingName]
+
+				if strings.HasPrefix(connectionString, "@Microsoft.KeyVault") {
+					state.StorageKeyVaultSecretID = strings.TrimPrefix(strings.TrimSuffix(connectionString, ")"), "@Microsoft.KeyVault(SecretUri=")
+				} else {
+					state.StorageAccountName, state.StorageAccountAccessKey = helpers.ParseWebJobsStorageString(connectionString)
+				}
+
+				if v, ok := appSettings[functionVersionAppSettingName]; ok {
+					state.Version = v
+				}
+
+				if _, ok := appSettings["AzureFunctionsJobHost__extensionBundle__id"]; ok {
+					state.UseExtensionBundle = true
+
+					if val, ok := appSettings["AzureFunctionsJobHost__extensionBundle__version"]; ok {
+						state.BundleVersion = val
+					}
+				} else {
+					state.UseExtensionBundle = false
+					state.BundleVersion = "[1.*, 2.0.0)"
+				}
+
+				state.StorageAccountShareName = appSettings[contentShareAppSettingName]
+				delete(appSettings, contentFileConnStringAppSettingName)
+				delete(appSettings, "APP_KIND")
+				delete(appSettings, "AzureFunctionsJobHost__extensionBundle__id")
+				delete(appSettings, "AzureFunctionsJobHost__extensionBundle__version")
+				delete(appSettings, "AzureWebJobsDashboard")
+				delete(appSettings, storageAppSettingName)
+				delete(appSettings, functionVersionAppSettingName)
+				delete(appSettings, contentShareAppSettingName)
+
+				state.AppSettings = appSettings
+			}
+
+			connectionStringsResp, err := client.ListConnectionStrings(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("listing connection strings for %s: %+v", *id, err)
+			}
+
+			if model := connectionStringsResp.Model; model != nil {
+				state.ConnectionStrings = helpers.FlattenConnectionStrings(model)
+			}
+
+			ftpBasicAuth, err := client.GetFtpAllowed(ctx, *id)
+			if err != nil || ftpBasicAuth.Model == nil {
+				return fmt.Errorf("retrieving FTP publish basic authentication policy for %s: %+v", id, err)
+			}
+
+			if props := ftpBasicAuth.Model.Properties; props != nil {
+				state.FtpPublishBasicAuthEnabled = props.Allow
+			}
+
+			scmBasicAuth, err := client.GetScmAllowed(ctx, *id)
+			if err != nil || scmBasicAuth.Model == nil {
+				return fmt.Errorf("retrieving SCM publish basic authentication policy for %s: %+v", id, err)
+			}
+
+			if props := scmBasicAuth.Model.Properties; props != nil {
+				state.SCMPublishBasicAuthEnabled = props.Allow
+			}
+
+			siteCredentials, err := helpers.ListPublishingCredentials(ctx, client, *id)
+			if err != nil {
+				return fmt.Errorf("listing publishing credentials for %s: %+v", *id, err)
+			}
+
+			state.SiteCredential = helpers.FlattenSiteCredentialsLogicApp(siteCredentials)
+
+			configResp, err := client.GetConfiguration(ctx, *id)
+			if err != nil {
+				return fmt.Errorf("retrieving the configuration for %s: %+v", *id, err)
+			}
+
+			if model := configResp.Model; model != nil {
+				state.SiteConfig = flattenLogicAppStandardSiteConfig(model.Properties)
+			}
+
+			return metadata.Encode(&state)
+		},
+	}
+}

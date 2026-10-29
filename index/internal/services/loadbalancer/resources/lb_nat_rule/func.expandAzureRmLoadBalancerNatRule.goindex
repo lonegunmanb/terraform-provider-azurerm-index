@@ -1,0 +1,69 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/resources/lb_nat_rule
+import (
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/loadbalancers"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loadbalancer/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandAzureRmLoadBalancerNatRule(d *pluginsdk.ResourceData, lb *loadbalancers.LoadBalancer, loadBalancerId loadbalancers.LoadBalancerId) (*loadbalancers.InboundNatRule, error) {
+	properties := loadbalancers.InboundNatRulePropertiesFormat{
+		Protocol:         pointer.ToEnum[loadbalancers.TransportProtocol](d.Get("protocol").(string)),
+		BackendPort:      pointer.To(int64(d.Get("backend_port").(int))),
+		EnableFloatingIP: pointer.To(d.Get("floating_ip_enabled").(bool)),
+		EnableTcpReset:   pointer.To(d.Get("tcp_reset_enabled").(bool)),
+	}
+
+	backendAddressPoolSet, frontendPort := false, false
+	if port := d.Get("frontend_port"); port != "" {
+		frontendPort = true
+	}
+	if _, ok := d.GetOk("backend_address_pool_id"); ok {
+		backendAddressPoolSet = true
+	}
+
+	if backendAddressPoolSet {
+		properties.FrontendPortRangeStart = pointer.To(int64(d.Get("frontend_port_start").(int)))
+		properties.FrontendPortRangeEnd = pointer.To(int64(d.Get("frontend_port_end").(int)))
+		properties.BackendAddressPool = &loadbalancers.SubResource{
+			Id: pointer.To(d.Get("backend_address_pool_id").(string)),
+		}
+	} else {
+		if frontendPort {
+			properties.FrontendPort = pointer.To(int64(d.Get("frontend_port").(int)))
+		} else {
+			properties.FrontendPortRangeStart = pointer.To(int64(d.Get("frontend_port_start").(int)))
+			properties.FrontendPortRangeEnd = pointer.To(int64(d.Get("frontend_port_end").(int)))
+		}
+	}
+
+	if v, ok := d.GetOk("idle_timeout_in_minutes"); ok {
+		properties.IdleTimeoutInMinutes = pointer.To(int64(v.(int)))
+	}
+
+	if v := d.Get("frontend_ip_configuration_name").(string); v != "" {
+		if _, exists := helpers.FindLoadBalancerFrontEndIpConfigurationByName(lb, v); !exists {
+			return nil, fmt.Errorf("[ERROR] Cannot find FrontEnd IP Configuration with the name %s", v)
+		}
+
+		id := loadbalancers.NewFrontendIPConfigurationID(loadBalancerId.SubscriptionId, loadBalancerId.ResourceGroupName, loadBalancerId.LoadBalancerName, v).ID()
+		properties.FrontendIPConfiguration = &loadbalancers.SubResource{
+			Id: pointer.To(id),
+		}
+	}
+
+	natRule := loadbalancers.InboundNatRule{
+		Name:       pointer.To(d.Get("name").(string)),
+		Properties: &properties,
+	}
+
+	return &natRule, nil
+}

@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/loadtestservice/resources/load_test
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/loadtestservice/2022-12-01/loadtests"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func (r Resource) mapLoadTestPropertiesToLoadTestResourceSchema(input loadtests.LoadTestProperties, output *LoadTestResourceSchema) error {
+	output.DataPlaneURI = pointer.From(input.DataPlaneURI)
+	output.Description = pointer.From(input.Description)
+
+	if encryption := input.Encryption; encryption != nil {
+		output.Encryption = []LoadTestEncryption{{
+			KeyURL:   pointer.From(encryption.KeyURL),
+			Identity: make([]LoadTestEncryptionIdentity, 0),
+		}}
+		if encryptionIdentity := encryption.Identity; encryptionIdentity != nil {
+			output.Encryption[0].Identity = append(output.Encryption[0].Identity, LoadTestEncryptionIdentity{
+				IdentityID: pointer.From(encryptionIdentity.ResourceId),
+			})
+
+			if encryptionIdentity.Type != nil {
+				output.Encryption[0].Identity[0].Type = pointer.FromEnum(encryptionIdentity.Type)
+			}
+		}
+	}
+	return nil
+}

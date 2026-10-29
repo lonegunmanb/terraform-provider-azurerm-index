@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/devcenter/resources/dev_center
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/devcenter/2025-02-01/devcenters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func (r Resource) mapDevCenterToDevCenterResourceSchema(input devcenters.DevCenter, output *DevCenterResourceSchema) error {
+	identity, err := identity.FlattenSystemAndUserAssignedMapToModel(input.Identity)
+	if err != nil {
+		return fmt.Errorf("flattening SystemAndUserAssigned Identity: %+v", err)
+	}
+	output.Identity = *identity
+
+	output.Location = location.Normalize(input.Location)
+	output.Tags = tags.Flatten(input.Tags)
+
+	if input.Properties == nil {
+		input.Properties = &devcenters.DevCenterProperties{}
+	}
+
+	output.DevCenterUri = pointer.From(input.Properties.DevCenterUri)
+
+	if v := input.Properties.ProjectCatalogSettings; v != nil {
+		output.ProjectCatalogItemSyncEnabled = pointer.From(v.CatalogItemSyncEnableStatus) == devcenters.CatalogItemSyncEnableStatusEnabled
+	}
+
+	return nil
+}

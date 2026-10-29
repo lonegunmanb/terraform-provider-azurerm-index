@@ -1,0 +1,47 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/resources/container_app
+import (
+	"context"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2025-07-01/containerapps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2025-07-01/managedenvironments"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r Resource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			if metadata.ResourceDiff == nil {
+				return nil
+			}
+			var app ContainerAppModel
+			if err := metadata.DecodeDiff(&app); err != nil {
+				return err
+			}
+			// Ingress traffic weight validations
+			if len(app.Ingress) != 0 {
+				ingress := app.Ingress[0]
+
+				for i, tw := range ingress.TrafficWeights {
+					if !tw.LatestRevision && tw.RevisionSuffix == "" {
+						return fmt.Errorf("`either ingress.0.traffic_weight.%[1]d.revision_suffix` or `ingress.0.traffic_weight.%[1]d.latest_revision` should be specified", i)
+					}
+				}
+			}
+
+			for _, s := range app.Secrets {
+				if s.KeyVaultSecretId != "" && s.Identity == "" {
+					return fmt.Errorf("secret %s must supply identity for key vault secret id", s.Name)
+				}
+				if s.KeyVaultSecretId == "" && s.Identity != "" {
+					return fmt.Errorf("secret %s must supply key vault secret id when specifying identity", s.Name)
+				}
+			}
+			return nil
+		},
+	}
+}

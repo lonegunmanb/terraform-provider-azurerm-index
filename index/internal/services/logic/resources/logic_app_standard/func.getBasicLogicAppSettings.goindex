@@ -1,0 +1,57 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/logic/resources/logic_app_standard
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/web/2023-12-01/webapps"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers"
+)
+func getBasicLogicAppSettings(d LogicAppResourceModel, endpointSuffix string) ([]webapps.NameValuePair, error) {
+	var storageConnection string
+	if d.StorageKeyVaultSecretID != "" {
+		storageConnection = fmt.Sprintf(helpers.StorageStringFmtKV, d.StorageKeyVaultSecretID)
+	} else {
+		storageConnection = fmt.Sprintf(helpers.StorageStringFmt, d.StorageAccountName, d.StorageAccountAccessKey, endpointSuffix)
+	}
+
+	contentShare := strings.ToLower(d.Name) + "-content"
+	if d.StorageAccountShareName != "" {
+		contentShare = d.StorageAccountShareName
+	}
+
+	basicSettings := []webapps.NameValuePair{
+		{Name: &storageAppSettingName, Value: &storageConnection},
+		{Name: &functionVersionAppSettingName, Value: pointer.To(d.Version)},
+		{Name: pointer.To("APP_KIND"), Value: pointer.To("workflowApp")},
+		{Name: &contentShareAppSettingName, Value: &contentShare},
+		{Name: &contentFileConnStringAppSettingName, Value: &storageConnection},
+	}
+
+	if d.UseExtensionBundle {
+		extensionBundleVersion := d.BundleVersion
+
+		if extensionBundleVersion == "" {
+			return nil, fmt.Errorf(
+				"when `use_extension_bundle` is true, `bundle_version` must be specified",
+			)
+		}
+
+		bundleSettings := []webapps.NameValuePair{
+			{Name: pointer.To("AzureFunctionsJobHost__extensionBundle__id"), Value: pointer.To("Microsoft.Azure.Functions.ExtensionBundle.Workflows")},
+			{Name: pointer.To("AzureFunctionsJobHost__extensionBundle__version"), Value: &extensionBundleVersion},
+		}
+
+		return append(basicSettings, bundleSettings...), nil
+	}
+
+	return basicSettings, nil
+}

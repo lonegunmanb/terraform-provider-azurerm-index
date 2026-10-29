@@ -1,0 +1,110 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containerapps/resources/container_app_environment
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerapps/2025-07-01/managedenvironments"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2020-08-01/workspaces"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func (r Resource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.ContainerApps.ManagedEnvironmentClient
+			id, err := managedenvironments.ParseManagedEnvironmentID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			var existingState ContainerAppEnvironmentModel
+			if err := metadata.Decode(&existingState); err != nil {
+				return err
+			}
+
+			existing, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(existing.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+				return fmt.Errorf("reading %s: %+v", *id, err)
+			}
+
+			var state ContainerAppEnvironmentModel
+
+			if model := existing.Model; model != nil {
+				state.Name = id.ManagedEnvironmentName
+				state.ResourceGroup = id.ResourceGroupName
+				state.Location = location.Normalize(model.Location)
+				state.Tags = tags.Flatten(model.Tags)
+				if model.Identity != nil {
+					ident, err := identity.FlattenLegacySystemAndUserAssignedMapToModel(model.Identity)
+					if err != nil {
+						return fmt.Errorf("flattening identity: %+v", err)
+					}
+					state.Identity = ident
+				}
+
+				if props := model.Properties; props != nil {
+					if vnet := props.VnetConfiguration; vnet != nil {
+						state.InfrastructureSubnetId = pointer.From(vnet.InfrastructureSubnetId)
+						state.InternalLoadBalancerEnabled = pointer.From(vnet.Internal)
+						state.DockerBridgeCidr = pointer.From(vnet.DockerBridgeCidr)
+						state.PlatformReservedCidr = pointer.From(vnet.PlatformReservedCidr)
+						state.PlatformReservedDnsIP = pointer.From(vnet.PlatformReservedDnsIP)
+					}
+
+					if appLogsConfig := props.AppLogsConfiguration; appLogsConfig != nil {
+						state.LogsDestination = pointer.From(appLogsConfig.Destination)
+						if appLogsConfig.LogAnalyticsConfiguration != nil && appLogsConfig.LogAnalyticsConfiguration.CustomerId != nil {
+							workspaceId, err := findWorkspaceResourceIDFromCustomerID(ctx, metadata, *appLogsConfig.LogAnalyticsConfiguration.CustomerId)
+							// During refreshing stage, `GetRawConfig()` may return null value.
+
+							if err == nil {
+								if workspaceId != nil {
+									state.LogAnalyticsWorkspaceId = workspaceId.ID()
+								} else {
+									state.LogAnalyticsWorkspaceId = existingState.LogAnalyticsWorkspaceId
+								}
+							}
+						}
+					}
+
+					state.PublicNetworkAccess = pointer.FromEnum(props.PublicNetworkAccess)
+					state.ZoneRedundant = pointer.From(props.ZoneRedundant)
+					state.StaticIP = pointer.From(props.StaticIP)
+					state.DefaultDomain = pointer.From(props.DefaultDomain)
+					state.WorkloadProfiles = FlattenWorkloadProfiles(props.WorkloadProfiles)
+					state.InfrastructureResourceGroup = pointer.From(props.InfrastructureResourceGroup)
+
+					if props.CustomDomainConfiguration != nil {
+						state.CustomDomainVerificationId = pointer.From(props.CustomDomainConfiguration.CustomDomainVerificationId)
+					}
+
+					if props.PeerAuthentication != nil && props.PeerAuthentication.Mtls != nil {
+						state.Mtls = pointer.From(props.PeerAuthentication.Mtls.Enabled)
+					}
+				}
+			}
+
+			// `dapr_application_insights_connection_string` is sensitive and not returned by API
+			if v := metadata.ResourceData.Get("dapr_application_insights_connection_string").(string); v != "" {
+				state.DaprApplicationInsightsConnectionString = v
+			}
+
+			if err = metadata.Encode(&state); err != nil {
+				return fmt.Errorf("encoding: %+v", err)
+			}
+
+			return nil
+		},
+	}
+}
