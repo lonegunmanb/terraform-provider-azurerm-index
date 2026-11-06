@@ -124,8 +124,10 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta any) error {
 	if v := d.Get("allowed_copy_scope").(string); v != "" {
 		payload.Properties.AllowedCopyScope = pointer.ToEnum[storageaccounts.AllowedCopyScope](v)
 	}
-	if v, ok := d.GetOk("azure_files_authentication"); ok {
-		expandAADFilesAuthentication, err := expandAccountAzureFilesAuthentication(v.([]any))
+	azureFilesAuthenticationRaw := d.Get("azure_files_authentication").([]any)
+	smbOAuthEnabled := d.Get("smb_oauth_enabled").(bool)
+	if len(azureFilesAuthenticationRaw) > 0 || smbOAuthEnabled {
+		expandAADFilesAuthentication, err := expandAccountAzureFilesAuthentication(azureFilesAuthenticationRaw, smbOAuthEnabled)
 		if err != nil {
 			return fmt.Errorf("parsing `azure_files_authentication`: %v", err)
 		}
@@ -201,7 +203,7 @@ func resourceStorageAccountCreate(d *pluginsdk.ResourceData, meta any) error {
 	queueEncryptionKeyType := storageaccounts.KeyType(d.Get("queue_encryption_key_type").(string))
 	tableEncryptionKeyType := storageaccounts.KeyType(d.Get("table_encryption_key_type").(string))
 	encryptionRaw := d.Get("customer_managed_key").([]any)
-	encryption, err := expandAccountCustomerManagedKey(ctx, keyVaultClient, id.SubscriptionId, encryptionRaw, accountTier, accountKind, *expandedIdentity, queueEncryptionKeyType, tableEncryptionKeyType)
+	encryption, err := expandAccountCustomerManagedKey(ctx, keyVaultClient, id.SubscriptionId, encryptionRaw, accountTier, accountKind, *expandedIdentity, queueEncryptionKeyType, tableEncryptionKeyType, provisionedBillingModelVersion)
 	if err != nil {
 		return fmt.Errorf("expanding `customer_managed_key`: %+v", err)
 	}

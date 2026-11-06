@@ -137,7 +137,7 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta any) error {
 		queueEncryptionKeyType := storageaccounts.KeyType(d.Get("queue_encryption_key_type").(string))
 		tableEncryptionKeyType := storageaccounts.KeyType(d.Get("table_encryption_key_type").(string))
 		encryptionRaw := d.Get("customer_managed_key").([]any)
-		encryption, err := expandAccountCustomerManagedKey(ctx, keyVaultClient, id.SubscriptionId, encryptionRaw, accountTier, accountKind, *expandedIdentity, queueEncryptionKeyType, tableEncryptionKeyType)
+		encryption, err := expandAccountCustomerManagedKey(ctx, keyVaultClient, id.SubscriptionId, encryptionRaw, accountTier, accountKind, *expandedIdentity, queueEncryptionKeyType, tableEncryptionKeyType, provisionedBillingModelVersion)
 		if err != nil {
 			return fmt.Errorf("expanding `customer_managed_key`: %+v", err)
 		}
@@ -275,7 +275,7 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta any) error {
 	}
 
 	// azure_files_authentication must be the last to be updated, cause it'll occupy the storage account for several minutes after receiving the response 200 OK. Issue: https://github.com/Azure/azure-rest-api-specs/issues/11272
-	if d.HasChange("azure_files_authentication") {
+	if d.HasChange("azure_files_authentication") || d.HasChange("smb_oauth_enabled") {
 		// due to service issue: https://github.com/Azure/azure-rest-api-specs/issues/12473, we need to update to None before changing its DirectoryServiceOptions
 		old, new := d.GetChange("azure_files_authentication.0.directory_type")
 		if old != new && new != string(storageaccounts.DirectoryServiceOptionsNone) {
@@ -292,7 +292,7 @@ func resourceStorageAccountUpdate(d *pluginsdk.ResourceData, meta any) error {
 			}
 		}
 
-		expandAADFilesAuthentication, err := expandAccountAzureFilesAuthentication(d.Get("azure_files_authentication").([]any))
+		expandAADFilesAuthentication, err := expandAccountAzureFilesAuthentication(d.Get("azure_files_authentication").([]any), d.Get("smb_oauth_enabled").(bool))
 		if err != nil {
 			return fmt.Errorf("expanding `azure_files_authentication`: %+v", err)
 		}

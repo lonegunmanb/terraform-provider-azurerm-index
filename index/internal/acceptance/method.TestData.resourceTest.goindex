@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/acceptance
+import (
+	"context"
+	"fmt"
+	"os"
+	"regexp"
+	"testing"
+
+	"github.com/hashicorp/go-version"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/hashicorp/terraform-plugin-testing/tfversion"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/testclient"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/acceptance/types"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/provider/framework"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/vcr"
+)
+func (td TestData) resourceTest(t *testing.T, testResource types.TestResource, steps []TestStep, cliOpts *resource.AdditionalCLIOptions) {
+	os.Setenv("TF_ACC_REFRESH_AFTER_APPLY", "true")
+
+	newSteps := make([]TestStep, 0)
+	for _, step := range steps {
+		// This block adds a check to make sure tests aren't recreating a resource
+		if (step.Config != "" || step.ConfigDirectory != nil || step.ConfigFile != nil) && !step.PlanOnly {
+			step.ConfigPlanChecks = resource.ConfigPlanChecks{
+				PreApply: []plancheck.PlanCheck{
+					helpers.IsNotResourceAction(td.ResourceName, plancheck.ResourceActionReplace),
+				},
+			}
+		}
+
+		newSteps = append(newSteps, step)
+	}
+	steps = newSteps
+
+	testCase := resource.TestCase{
+		PreCheck: func() { PreCheck(t) },
+		CheckDestroy: func(s *terraform.State) error {
+			client, err := testclient.BuildWithTestName(t.Name())
+			if err != nil {
+				return fmt.Errorf("building client: %+v", err)
+			}
+			return helpers.CheckDestroyedFunc(client, testResource, td.ResourceType, td.ResourceName)(s)
+		},
+		Steps:                steps,
+		AdditionalCLIOptions: cliOpts,
+	}
+
+	td.runAcceptanceTest(t, testCase)
+}

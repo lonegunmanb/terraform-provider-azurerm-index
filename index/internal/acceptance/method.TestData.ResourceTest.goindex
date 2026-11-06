@@ -18,33 +18,5 @@ import (
 	"github.com/hashicorp/terraform-provider-azurerm/internal/vcr"
 )
 func (td TestData) ResourceTest(t *testing.T, testResource types.TestResource, steps []TestStep) {
-	os.Setenv("TF_ACC_REFRESH_AFTER_APPLY", "true")
-
-	newSteps := make([]TestStep, 0)
-	for _, step := range steps {
-		// This block adds a check to make sure tests aren't recreating a resource
-		if (step.Config != "" || step.ConfigDirectory != nil || step.ConfigFile != nil) && !step.PlanOnly {
-			step.ConfigPlanChecks = resource.ConfigPlanChecks{
-				PreApply: []plancheck.PlanCheck{
-					helpers.IsNotResourceAction(td.ResourceName, plancheck.ResourceActionReplace),
-				},
-			}
-		}
-
-		newSteps = append(newSteps, step)
-	}
-	steps = newSteps
-
-	testCase := resource.TestCase{
-		PreCheck: func() { PreCheck(t) },
-		CheckDestroy: func(s *terraform.State) error {
-			client, err := testclient.BuildWithTestName(t.Name())
-			if err != nil {
-				return fmt.Errorf("building client: %+v", err)
-			}
-			return helpers.CheckDestroyedFunc(client, testResource, td.ResourceType, td.ResourceName)(s)
-		},
-		Steps: steps,
-	}
-	td.runAcceptanceTest(t, testCase)
+	td.resourceTest(t, testResource, steps, nil)
 }
