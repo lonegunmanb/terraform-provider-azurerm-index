@@ -1,0 +1,77 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/networkgateway/resources/virtual_network_gateway
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenVirtualNetworkGatewayDataSourceVpnClientConfig(cfg *virtualnetworkgateways.VpnClientConfiguration) []any {
+	if cfg == nil {
+		return []any{}
+	}
+
+	flat := make(map[string]any)
+
+	if pool := cfg.VpnClientAddressPool; pool != nil {
+		flat["address_space"] = pluginsdk.FlattenSlice(pool.AddressPrefixes)
+	} else {
+		flat["address_space"] = []any{}
+	}
+
+	rootCerts := make([]any, 0)
+	if certs := cfg.VpnClientRootCertificates; certs != nil {
+		for _, cert := range *certs {
+			if cert.Name == nil {
+				continue
+			}
+			v := map[string]any{
+				"name":             *cert.Name,
+				"public_cert_data": cert.Properties.PublicCertData,
+			}
+			rootCerts = append(rootCerts, v)
+		}
+	}
+	flat["root_certificate"] = rootCerts
+
+	revokedCerts := make([]any, 0)
+	if certs := cfg.VpnClientRevokedCertificates; certs != nil {
+		for _, cert := range *certs {
+			if cert.Name == nil || cert.Properties == nil || cert.Properties.Thumbprint == nil {
+				continue
+			}
+			v := map[string]any{
+				"name":       *cert.Name,
+				"thumbprint": *cert.Properties.Thumbprint,
+			}
+			revokedCerts = append(revokedCerts, v)
+		}
+	}
+	flat["revoked_certificate"] = revokedCerts
+
+	vpnClientProtocols := make([]any, 0)
+	if vpnProtocols := cfg.VpnClientProtocols; vpnProtocols != nil {
+		for _, protocol := range *vpnProtocols {
+			vpnClientProtocols = append(vpnClientProtocols, string(protocol))
+		}
+	}
+	flat["vpn_client_protocols"] = vpnClientProtocols
+
+	if v := cfg.RadiusServerAddress; v != nil {
+		flat["radius_server_address"] = *v
+	}
+
+	if v := cfg.RadiusServerSecret; v != nil {
+		flat["radius_server_secret"] = *v
+	}
+
+	return []any{flat}
+}

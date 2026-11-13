@@ -1,0 +1,53 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/helpers
+import (
+	"context"
+	"fmt"
+	"log"
+	"maps"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/applications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/hdinsight/2021-06-01/extensions"
+	"github.com/hashicorp/go-azure-sdk/sdk/client/pollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/hdinsight/custompollers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func CreateHDInsightEdgeNodes(ctx context.Context, client *applications.ApplicationsClient, applicationId applications.ApplicationId, input map[string]any) error {
+	installScriptActions := ExpandHDInsightApplicationEdgeNodeInstallScriptActions(input["install_script_action"].([]any))
+
+	payload := applications.Application{
+		Properties: &applications.ApplicationProperties{
+			ComputeProfile: &applications.ComputeProfile{
+				Roles: &[]applications.Role{{
+					Name: pointer.To("edgenode"),
+					HardwareProfile: &applications.HardwareProfile{
+						VMSize: pointer.To(input["vm_size"].(string)),
+					},
+					TargetInstanceCount: pointer.To(int64(input["target_instance_count"].(int))),
+				}},
+			},
+			InstallScriptActions: installScriptActions,
+			ApplicationType:      pointer.To("CustomApplication"),
+		},
+	}
+
+	if v, ok := input["https_endpoints"]; ok {
+		payload.Properties.HTTPSEndpoints = ExpandHDInsightApplicationEdgeNodeHttpsEndpoints(v.([]any))
+	}
+
+	if v, ok := input["uninstall_script_actions"]; ok {
+		payload.Properties.UninstallScriptActions = ExpandHDInsightApplicationEdgeNodeUninstallScriptActions(v.([]any))
+	}
+
+	if err := client.CreateThenPoll(ctx, applicationId, payload); err != nil {
+		return fmt.Errorf("creating edge nodes for HDInsight Hadoop Cluster %q (Resource Group %q): %+v", applicationId.ClusterName, applicationId.ResourceGroupName, err)
+	}
+
+	return nil
+}

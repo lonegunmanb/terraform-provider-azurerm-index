@@ -1,0 +1,26 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/purview/resources/purview_account
+import (
+	"regexp"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourcegroups"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func resourcePurviewAccountIdentitySchema() *schema.Schema {
+	customSchema := commonschema.SystemAssignedUserAssignedIdentityRequired()
+
+	// remove UserAssigned from type validation, it is not supported in API
+	customSchema.Elem.(*schema.Resource).Schema["type"].ValidateFunc = validation.StringInSlice([]string{
+		string(identity.TypeSystemAssigned),
+		string(identity.TypeSystemAssignedUserAssigned),
+	}, false)
+
+	// API is returning lower-case IDs which cause false diff report if mixed case was used by client.
+	// Change the Set hash function to hash lower case always, which will suppress this invalid diff.
+	customSchema.Elem.(*schema.Resource).Schema["identity_ids"].Set = resourcePurviewAccountIdentityIdsSetHash
+
+	return customSchema
+}

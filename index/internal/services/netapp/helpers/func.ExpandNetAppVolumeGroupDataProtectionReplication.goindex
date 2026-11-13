@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/helpers
+import (
+	"context"
+	"fmt"
+	"log"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/capacitypools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func ExpandNetAppVolumeGroupDataProtectionReplication(input []models.DataProtectionReplication) *volumegroups.VolumePropertiesDataProtection {
+	if len(input) == 0 {
+		return &volumegroups.VolumePropertiesDataProtection{}
+	}
+
+	replicationObject := volumegroups.ReplicationObject{}
+
+	endpointType := volumegroups.EndpointType(input[0].EndpointType)
+	replicationObject.EndpointType = pointer.To(endpointType)
+
+	replicationObject.RemoteVolumeRegion = pointer.To(input[0].RemoteVolumeLocation)
+	replicationObject.RemoteVolumeResourceId = pointer.To(input[0].RemoteVolumeResourceId)
+
+	replicationSchedule := volumegroups.ReplicationSchedule(TranslateTFSchedule(input[0].ReplicationFrequency))
+	replicationObject.ReplicationSchedule = pointer.To(replicationSchedule)
+
+	return pointer.To(volumegroups.VolumePropertiesDataProtection{
+		Replication: pointer.To(replicationObject),
+	})
+}

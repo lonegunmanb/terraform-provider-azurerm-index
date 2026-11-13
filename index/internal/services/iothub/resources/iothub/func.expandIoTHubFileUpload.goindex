@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/resources/iothub
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub" // azignore:AZG010 - package name does not match its path
+)
+func expandIoTHubFileUpload(d *pluginsdk.ResourceData) (map[string]*devices.StorageEndpointProperties, map[string]*devices.MessagingEndpointProperties, bool, error) {
+	fileUploadList := d.Get("file_upload").([]any)
+
+	storageEndpointProperties := make(map[string]*devices.StorageEndpointProperties)
+	messagingEndpointProperties := make(map[string]*devices.MessagingEndpointProperties)
+	notifications := false
+
+	if len(fileUploadList) > 0 {
+		fileUploadMap := fileUploadList[0].(map[string]any)
+
+		authenticationType := devices.AuthenticationType(fileUploadMap["authentication_type"].(string))
+		identityId := fileUploadMap["identity_id"].(string)
+		notifications = fileUploadMap["notifications"].(bool)
+		sasTTL := fileUploadMap["sas_ttl"].(string)
+
+		storageEndpointProperties["$default"] = &devices.StorageEndpointProperties{
+			AuthenticationType: authenticationType,
+			ConnectionString:   pointer.To(fileUploadMap["connection_string"].(string)),
+			ContainerName:      pointer.To(fileUploadMap["container_name"].(string)),
+		}
+
+		if sasTTL != "" {
+			storageEndpointProperties["$default"].SasTTLAsIso8601 = &sasTTL
+		}
+
+		if identityId != "" {
+			if authenticationType != devices.AuthenticationTypeIdentityBased {
+				return nil, nil, false, fmt.Errorf("`identity_id` can only be specified when `authentication_type` is `identityBased`")
+			}
+			storageEndpointProperties["$default"].Identity = &devices.ManagedIdentity{
+				UserAssignedIdentity: &identityId,
+			}
+		}
+
+		messagingEndpointProperties["fileNotifications"] = &devices.MessagingEndpointProperties{
+			LockDurationAsIso8601: pointer.To(fileUploadMap["lock_duration"].(string)),
+			TTLAsIso8601:          pointer.To(fileUploadMap["default_ttl"].(string)),
+			MaxDeliveryCount:      pointer.To(int32(fileUploadMap["max_delivery_count"].(int))),
+		}
+	}
+
+	return storageEndpointProperties, messagingEndpointProperties, notifications, nil
+}

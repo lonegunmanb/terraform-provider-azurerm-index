@@ -99,6 +99,13 @@ func resourcePrivateEndpoint() *pluginsdk.Resource {
 				ForceNew: true,
 			},
 
+			"ip_version_type": {
+				Type:         pluginsdk.TypeString,
+				Optional:     true,
+				Default:      string(privateendpoints.PrivateEndpointIPVersionTypeIPvFour),
+				ValidateFunc: validation.StringInSlice(privateendpoints.PossibleValuesForPrivateEndpointIPVersionType(), false),
+			},
+
 			"private_dns_zone_group": {
 				Type:     pluginsdk.TypeList,
 				Optional: true,
@@ -172,6 +179,18 @@ func resourcePrivateEndpoint() *pluginsdk.Resource {
 							ValidateFunc: validation.StringLenBetween(1, 140),
 						},
 						"private_ip_address": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"action_required": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"description": {
+							Type:     pluginsdk.TypeString,
+							Computed: true,
+						},
+						"status": {
 							Type:     pluginsdk.TypeString,
 							Computed: true,
 						},
@@ -290,6 +309,20 @@ func resourcePrivateEndpoint() *pluginsdk.Resource {
 			"tags": commonschema.Tags(),
 		},
 		CustomizeDiff: func(ctx context.Context, d *schema.ResourceDiff, meta any) error {
+			rawConfig := d.GetRawConfig()
+			if d.Id() != "" && d.HasChange("ip_version_type") && rawConfig.IsKnown() && !rawConfig.IsNull() && rawConfig.GetAttr("ip_version_type").IsKnown() {
+				old, new := d.GetChange("ip_version_type")
+				current := old.(string)
+				if current == "" {
+					current = string(privateendpoints.PrivateEndpointIPVersionTypeIPvFour)
+				}
+				next := new.(string)
+				// Azure only supports updating the IP version type in place from IPv4 to DualStack.
+				if current != next && (current != string(privateendpoints.PrivateEndpointIPVersionTypeIPvFour) || next != string(privateendpoints.PrivateEndpointIPVersionTypeDualStack)) {
+					return d.ForceNew("ip_version_type")
+				}
+			}
+
 			privateServiceConnections := d.Get("private_service_connection").([]any)
 			for _, psc := range privateServiceConnections {
 				privateServiceConnection := psc.(map[string]any)

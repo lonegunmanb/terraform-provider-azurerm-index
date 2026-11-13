@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/iothub/resources/iothub
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	devices "github.com/jackofallops/kermit/sdk/iothub/2022-04-30-preview/iothub" // azignore:AZG010 - package name does not match its path
+)
+func expandIoTHubCloudToDevice(d *pluginsdk.ResourceData) *devices.CloudToDeviceProperties {
+	ctdList := d.Get("cloud_to_device").([]any)
+	if len(ctdList) == 0 {
+		return nil
+	}
+	cloudToDevice := devices.CloudToDeviceProperties{}
+	ctdMap := ctdList[0].(map[string]any)
+
+	cloudToDevice.DefaultTTLAsIso8601 = pointer.To(ctdMap["default_ttl"].(string))
+	cloudToDevice.MaxDeliveryCount = pointer.To(int32(ctdMap["max_delivery_count"].(int)))
+	feedback := ctdMap["feedback"].([]any)
+
+	cloudToDeviceFeedback := devices.FeedbackProperties{}
+	if len(feedback) > 0 {
+		feedbackMap := feedback[0].(map[string]any)
+
+		cloudToDeviceFeedback.TTLAsIso8601 = pointer.To(feedbackMap["time_to_live"].(string))
+		cloudToDeviceFeedback.LockDurationAsIso8601 = pointer.To(feedbackMap["lock_duration"].(string))
+		cloudToDeviceFeedback.MaxDeliveryCount = pointer.To(int32(feedbackMap["max_delivery_count"].(int)))
+	}
+
+	cloudToDevice.Feedback = &cloudToDeviceFeedback
+
+	return &cloudToDevice
+}

@@ -1,0 +1,31 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/postgres/resources/postgresql_flexible_server_virtual_endpoint
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2025-08-01/servers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/postgresql/2025-08-01/virtualendpoints"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func lookupFlexibleServerByName(ctx context.Context, flexibleServerClient *servers.ServersClient, virtualEndpointId virtualendpoints.VirtualEndpointId, replicaServerName string, sourceServerId string) (*servers.Server, error) {
+	postgresServers, err := flexibleServerClient.ListBySubscriptionCompleteMatchingPredicate(ctx, commonids.NewSubscriptionID(virtualEndpointId.SubscriptionId), servers.ServerOperationPredicate{
+		Name: &replicaServerName,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// loop to find the replica server associated with this flexible endpoint
+	for _, server := range postgresServers.Items {
+		if server.Properties != nil && pointer.From(server.Properties.SourceServerResourceId) == sourceServerId {
+			return &server, nil
+		}
+	}
+
+	return nil, nil
+}

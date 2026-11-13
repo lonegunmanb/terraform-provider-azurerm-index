@@ -1,0 +1,32 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/resources/netapp_pool
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/capacitypools"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func netappPoolDeleteStateRefreshFunc(ctx context.Context, client *capacitypools.CapacityPoolsClient, id capacitypools.CapacityPoolId) pluginsdk.StateRefreshFunc {
+	return func() (any, string, error) {
+		res, err := client.PoolsGet(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(res.HttpResponse) {
+				return nil, "", fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+		}
+
+		statusCode := "dropped connection"
+		if res.HttpResponse != nil {
+			statusCode = strconv.Itoa(res.HttpResponse.StatusCode)
+		}
+		return res, statusCode, nil
+	}
+}

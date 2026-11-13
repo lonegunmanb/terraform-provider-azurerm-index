@@ -1,0 +1,30 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/resources/netapp_volume
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func netappVolumeBackupRelationshipStateForDeletionRefreshFunc(ctx context.Context, client *volumes.VolumesClient, id volumes.VolumeId) pluginsdk.StateRefreshFunc {
+	return func() (any, string, error) {
+		res, err := client.BackupsGetLatestStatus(ctx, id)
+		if err != nil {
+			if !response.WasNotFound(res.HttpResponse) {
+				return nil, "", fmt.Errorf("retrieving backup relationship status information from %s: %s", id, err)
+			}
+		}
+
+		response := 200
+		if res.Model != nil && res.Model.RelationshipStatus != nil && *res.Model.RelationshipStatus != volumes.VolumeBackupRelationshipStatusTransferring {
+			// return 204 if state matches desired state
+			response = 204
+		}
+
+		return res, strconv.Itoa(response), nil
+	}
+}

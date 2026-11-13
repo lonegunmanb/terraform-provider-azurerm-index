@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/resources/netapp_backup_policy
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/backuppolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func waitForBackupPolicyDeletion(ctx context.Context, client *backuppolicies.BackupPoliciesClient, id backuppolicies.BackupPolicyId) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return fmt.Errorf("internal-error: context had no deadline")
+	}
+	stateConf := &pluginsdk.StateChangeConf{
+		ContinuousTargetOccurence: 5,
+		Delay:                     5 * time.Second,
+		MinTimeout:                5 * time.Second,
+		Pending:                   []string{"200", "202"},
+		Target:                    []string{"204", "404"},
+		Refresh:                   netappBackupPolicyStateRefreshFunc(ctx, client, id),
+		Timeout:                   time.Until(deadline),
+	}
+
+	if _, err := stateConf.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for %s to be deleted: %+v", id, err)
+	}
+
+	return nil
+}

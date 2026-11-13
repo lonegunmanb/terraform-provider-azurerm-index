@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/helpers
+import (
+	"fmt"
+	"maps"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-07-01/agentpools"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-07-01/managedclusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/containerservice/2026-07-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/applicationsecuritygroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/publicipprefixes"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/containers/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func SchemaNodePoolSecurity(path string) *pluginsdk.Schema {
+	secureBootPath := fmt.Sprintf("%s.0.secure_boot_enabled", path)
+	vtpmPath := fmt.Sprintf("%s.0.vtpm_enabled", path)
+
+	return &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Optional: true,
+		MaxItems: 1,
+		DiffSuppressFunc: func(k, old, new string, d *pluginsdk.ResourceData) bool {
+			if k != fmt.Sprintf("%s.#", path) {
+				return false
+			}
+
+			if old == "1" && new == "0" {
+				oldSecureBoot, _ := d.GetChange(secureBootPath)
+				oldVtpmPath, _ := d.GetChange(vtpmPath)
+				if !oldSecureBoot.(bool) && !oldVtpmPath.(bool) {
+					return true
+				}
+			}
+
+			return false
+		},
+
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"secure_boot_enabled": {
+					Type:         pluginsdk.TypeBool,
+					Optional:     true,
+					Default:      false,
+					AtLeastOneOf: []string{secureBootPath, vtpmPath},
+				},
+
+				"vtpm_enabled": {
+					Type:         pluginsdk.TypeBool,
+					Optional:     true,
+					Default:      false,
+					AtLeastOneOf: []string{secureBootPath, vtpmPath},
+				},
+			},
+		},
+	}
+}

@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/networkgateway/resources/virtual_network_gateway
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/virtualnetworkgateways"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/networkgateway/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenVirtualNetworkGatewayClientConnections(input *[]virtualnetworkgateways.VngClientConnectionConfiguration) ([]any, error) {
+	results := make([]any, 0)
+	if input == nil || len(*input) == 0 {
+		return results, nil
+	}
+
+	for _, item := range *input {
+		var err error
+		addressPrefixes := make([]string, 0)
+		policyGroupNames := make([]string, 0)
+		if props := item.Properties; props != nil {
+			addressPrefixes = pointer.From(props.VpnClientAddressPool.AddressPrefixes)
+			policyGroupNames, err = flattenVirtualNetworkGatewayPolicyGroupNames(props.VirtualNetworkGatewayPolicyGroups)
+			if err != nil {
+				return nil, err
+			}
+		}
+		result := map[string]any{
+			"name":             pointer.From(item.Name),
+			"address_prefixes": addressPrefixes,
+		}
+
+		result["policy_group_names"] = policyGroupNames
+
+		results = append(results, result)
+	}
+
+	return results, nil
+}

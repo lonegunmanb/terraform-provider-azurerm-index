@@ -1,0 +1,88 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/resources/netapp_volume
+import (
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/snapshots"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandNetAppVolumeExportPolicyRulePatch(input []any, overrideProtocols []string) *volumes.VolumePatchPropertiesExportPolicy {
+	results := make([]volumes.ExportPolicyRule, 0)
+	for _, item := range input {
+		if item != nil {
+			v := item.(map[string]any)
+			ruleIndex := int64(v["rule_index"].(int))
+			allowedClients := strings.Join(*pluginsdk.ExpandStringSlice(v["allowed_clients"].(*pluginsdk.Set).List()), ",")
+
+			nfsv3Enabled := false
+			nfsv41Enabled := false
+			cifsEnabled := false
+
+			// If overrideProtocols is provided (during protocol conversion), use those protocols
+			// instead of reading from the export policy rule configuration
+			if len(overrideProtocols) > 0 {
+				for _, protocol := range overrideProtocols {
+					switch strings.ToLower(protocol) {
+					case "cifs":
+						cifsEnabled = true
+					case "nfsv3":
+						nfsv3Enabled = true
+					case "nfsv4.1":
+						nfsv41Enabled = true
+					}
+				}
+			} else {
+				// Use existing logic when no protocol override is provided
+				if vpe := v["protocol"]; vpe != nil {
+					protocolsEnabled := vpe.([]any)
+					if len(protocolsEnabled) != 0 {
+						for _, protocol := range protocolsEnabled {
+							if protocol != nil {
+								switch strings.ToLower(protocol.(string)) {
+								case "cifs":
+									cifsEnabled = true
+								case "nfsv3":
+									nfsv3Enabled = true
+								case "nfsv4.1":
+									nfsv41Enabled = true
+								}
+							}
+						}
+					}
+				}
+			}
+
+			unixReadOnly := v["unix_read_only"].(bool)
+			unixReadWrite := v["unix_read_write"].(bool)
+			rootAccessEnabled := v["root_access_enabled"].(bool)
+
+			result := volumes.ExportPolicyRule{
+				AllowedClients: pointer.To(allowedClients),
+				Cifs:           pointer.To(cifsEnabled),
+				Nfsv3:          pointer.To(nfsv3Enabled),
+				Nfsv41:         pointer.To(nfsv41Enabled),
+				RuleIndex:      pointer.To(ruleIndex),
+				UnixReadOnly:   pointer.To(unixReadOnly),
+				UnixReadWrite:  pointer.To(unixReadWrite),
+				HasRootAccess:  pointer.To(rootAccessEnabled),
+			}
+
+			results = append(results, result)
+		}
+	}
+
+	return &volumes.VolumePatchPropertiesExportPolicy{
+		Rules: &results,
+	}
+}

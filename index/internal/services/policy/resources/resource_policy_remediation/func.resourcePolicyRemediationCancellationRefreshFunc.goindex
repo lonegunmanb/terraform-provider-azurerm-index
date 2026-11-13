@@ -1,0 +1,29 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/resources/resource_policy_remediation
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/policyinsights/2021-10-01/remediations"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/policy/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourcePolicyRemediationCancellationRefreshFunc(ctx context.Context, client *remediations.RemediationsClient, id remediations.ScopedRemediationId) pluginsdk.StateRefreshFunc {
+	return func() (any, string, error) {
+		resp, err := client.GetAtResource(ctx, id)
+		if err != nil {
+			return nil, "", fmt.Errorf("issuing read request for %s: %+v", id.ID(), err)
+		}
+
+		if resp.Model.Properties == nil {
+			return nil, "", fmt.Errorf("`properties` was nil")
+		}
+		if resp.Model.Properties.ProvisioningState == nil {
+			return nil, "", fmt.Errorf("`properties.ProvisioningState` was nil")
+		}
+		return resp, *resp.Model.Properties.ProvisioningState, nil
+	}
+}

@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/resources/netapp_volume_group_sap_hana
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/netapp/2026-05-01/volumes"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/models"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/netapp/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r Resource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			rd := metadata.ResourceDiff
+
+			// Validate NFSv3 usage restrictions for SAP HANA volume groups
+			volumes := rd.Get("volume").([]any)
+			for i, vol := range volumes {
+				volumeMap := vol.(map[string]any)
+				protocols := volumeMap["protocols"].([]any)
+				volumeSpecName := volumeMap["volume_spec_name"].(string)
+
+				// Check if NFSv3 is being used on critical SAP HANA volumes
+				for _, protocolInterface := range protocols {
+					protocol := protocolInterface.(string)
+					if protocol == "NFSv3" {
+						// NFSv3 is not allowed on data, log, and shared volumes for SAP HANA
+						if volumeSpecName == "data" || volumeSpecName == "log" || volumeSpecName == "shared" {
+							return fmt.Errorf("NFSv3 protocol is not supported on '%s' volumes for SAP HANA. Only NFSv4.1 is supported for critical SAP HANA volumes (data, log, shared). NFSv3 can only be used for backup volumes (data-backup, log-backup)", volumeSpecName)
+						}
+					}
+				}
+
+				// Validate NFSv3 to NFSv4.1 protocol conversion restrictions for volume groups
+				protocolsKey := fmt.Sprintf("volume.%d.protocols", i)
+
+				if rd.HasChange(protocolsKey) {
+					old, new := rd.GetChange(protocolsKey)
+					oldProtocols := old.([]any)
+					newProtocols := new.([]any)
+
+					// Convert to string slices for validation
+					oldProtocolsStr := make([]string, len(oldProtocols))
+					newProtocolsStr := make([]string, len(newProtocols))
+
+					for j, v := range oldProtocols {
+						oldProtocolsStr[j] = v.(string)
+					}
+					for j, v := range newProtocols {
+						newProtocolsStr[j] = v.(string)
+					}
+
+					// Get the export policy rules configuration for this volume
+					exportPolicyRulesKey := fmt.Sprintf("volume.%d.export_policy_rule", i)
+					exportPolicyRules := rd.Get(exportPolicyRulesKey).([]any)
+
+					// For volume groups, kerberos and data replication are not directly supported, so we pass empty values
+					var kerberosEnabled bool
+					var dataReplication []any
+
+					validationErrors := validate.ValidateNetAppVolumeProtocolConversion(oldProtocolsStr, newProtocolsStr, kerberosEnabled, dataReplication, exportPolicyRules)
+					for _, err := range validationErrors {
+						return err
+					}
+				}
+			}
+
+			return nil
+		},
+	}
+}

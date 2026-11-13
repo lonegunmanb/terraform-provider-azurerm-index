@@ -1,0 +1,42 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/resources/key_vault
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/keyvault/2026-02-01/deletedvaults"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func keyVaultRefreshFunc(ctx context.Context, vaultUri string) pluginsdk.StateRefreshFunc {
+	return func() (any, string, error) {
+		log.Printf("[DEBUG] Checking to see if KeyVault %q is available..", vaultUri)
+
+		client := &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+			},
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, vaultUri, nil)
+		if err != nil {
+			return nil, "pending", fmt.Errorf("building request to check %q: %s", vaultUri, err)
+		}
+
+		conn, err := client.Do(req)
+		if err != nil {
+			log.Printf("[DEBUG] Didn't find KeyVault at %q", vaultUri)
+			return nil, "pending", fmt.Errorf("connecting to %q: %s", vaultUri, err)
+		}
+
+		defer conn.Body.Close()
+
+		log.Printf("[DEBUG] Found KeyVault at %q", vaultUri)
+		return "available", "available", nil
+	}
+}

@@ -1,0 +1,32 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/kusto/resources/kusto_cluster
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/kusto/2024-04-13/clusters"
+)
+func expandKustoClusterSku(input []any) (*clusters.AzureSku, error) {
+	sku := input[0].(map[string]any)
+	name := sku["name"].(string)
+
+	skuNamePrefixToTier := map[string]string{
+		"Dev(No SLA)": "Basic",
+		"Standard":    "Standard",
+	}
+
+	skuNamePrefix, _, _ := strings.Cut(sku["name"].(string), "_")
+	tier, ok := skuNamePrefixToTier[skuNamePrefix]
+	if !ok {
+		return nil, fmt.Errorf("sku name begins with invalid tier, possible are Dev(No SLA) and Standard but is: %q", skuNamePrefix)
+	}
+	capacity := sku["capacity"].(int)
+
+	azureSku := clusters.AzureSku{
+		Name:     clusters.AzureSkuName(name),
+		Tier:     clusters.AzureSkuTier(tier),
+		Capacity: pointer.To(int64(capacity)),
+	}
+
+	return &azureSku, nil
+}
