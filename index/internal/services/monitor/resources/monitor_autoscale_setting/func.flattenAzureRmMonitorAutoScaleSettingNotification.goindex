@@ -1,0 +1,67 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_autoscale_setting
+import (
+	"fmt"
+	"maps"
+	"strconv"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2022-10-01/autoscalesettings"
+)
+func flattenAzureRmMonitorAutoScaleSettingNotification(notifications *[]autoscalesettings.AutoscaleNotification) []any {
+	results := make([]any, 0)
+
+	if notifications == nil {
+		return results
+	}
+
+	for _, notification := range *notifications {
+		result := make(map[string]any)
+
+		emails := make([]any, 0)
+		if email := notification.Email; email != nil {
+			block := make(map[string]any)
+
+			if send := email.SendToSubscriptionAdministrator; send != nil {
+				block["send_to_subscription_administrator"] = *send
+			}
+
+			if send := email.SendToSubscriptionCoAdministrators; send != nil {
+				block["send_to_subscription_co_administrator"] = *send
+			}
+
+			customEmails := make([]any, 0)
+			if custom := email.CustomEmails; custom != nil {
+				for _, v := range *custom {
+					customEmails = append(customEmails, v)
+				}
+			}
+			block["custom_emails"] = customEmails
+
+			emails = append(emails, block)
+		}
+		result["email"] = emails
+
+		webhooks := make([]any, 0)
+		if hooks := notification.WebHooks; hooks != nil {
+			for _, v := range *hooks {
+				hook := make(map[string]any)
+
+				if v.ServiceUri != nil {
+					hook["service_uri"] = *v.ServiceUri
+				}
+
+				props := make(map[string]string)
+				if webHookProps := v.Properties; webHookProps != nil {
+					maps.Copy(props, *v.Properties)
+					hook["properties"] = props
+					webhooks = append(webhooks, hook)
+				}
+			}
+		}
+
+		result["webhook"] = webhooks
+
+		results = append(results, result)
+	}
+	return results
+}

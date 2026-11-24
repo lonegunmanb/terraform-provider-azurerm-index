@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/resources/api_management_api
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/api"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandApiManagementApiImport(importVs []any, apiType api.ApiType, soapApiType api.SoapApiType, path, serviceUrl, version, versionSetId string) *api.ApiCreateOrUpdateParameter {
+	if len(importVs) == 0 || importVs[0] == nil {
+		return nil
+	}
+
+	importV := importVs[0].(map[string]any)
+	if len(importV) == 0 {
+		return nil
+	}
+
+	contentFormat := importV["content_format"].(string)
+	contentValue := importV["content_value"].(string)
+
+	apiParams := api.ApiCreateOrUpdateParameter{
+		Properties: &api.ApiCreateOrUpdateProperties{
+			Type:    pointer.To(apiType),
+			ApiType: pointer.To(soapApiType),
+			Format:  pointer.ToEnum[api.ContentFormat](contentFormat),
+			Value:   pointer.To(contentValue),
+			Path:    path,
+		},
+	}
+
+	wsdlSelectorVs := importV["wsdl_selector"].([]any)
+	if len(wsdlSelectorVs) > 0 && wsdlSelectorVs[0] != nil {
+		if wsdlSelectorV := wsdlSelectorVs[0].(map[string]any); len(wsdlSelectorV) > 0 {
+			wSvcName := wsdlSelectorV["service_name"].(string)
+			wEndpName := wsdlSelectorV["endpoint_name"].(string)
+
+			apiParams.Properties.WsdlSelector = &api.ApiCreateOrUpdatePropertiesWsdlSelector{
+				WsdlServiceName:  pointer.To(wSvcName),
+				WsdlEndpointName: pointer.To(wEndpName),
+			}
+		}
+	}
+	if serviceUrl != "" {
+		apiParams.Properties.ServiceURL = pointer.To(serviceUrl)
+	}
+
+	if version != "" {
+		apiParams.Properties.ApiVersion = pointer.To(version)
+	}
+
+	if versionSetId != "" {
+		apiParams.Properties.ApiVersionSetId = pointer.To(versionSetId)
+	}
+
+	return &apiParams
+}

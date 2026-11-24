@@ -1,0 +1,145 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/horizondb
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/passwordauthentications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/pools"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (HorizondbClusterResource) Update() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 60 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			id, err := clusters.ParseClusterIDInsensitively(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+			lockId := strings.ToLower(id.ID())
+			locks.ByID(lockId)
+			defer locks.UnlockByID(lockId)
+
+			var state HorizondbClusterResourceModel
+			if err := metadata.Decode(&state); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			if metadata.ResourceData.HasChanges("identity", "tags", "backup_retention_in_days", "public_network_access") {
+				client := metadata.Client.HorizonDB.ClustersClient
+				existing, err := client.Get(ctx, *id)
+				if err != nil {
+					return fmt.Errorf("retrieving %s: %+v", id, err)
+				}
+				if existing.Model == nil {
+					return fmt.Errorf("retrieving %s: `model` was nil", *id)
+				}
+
+				if existing.Model.Properties == nil {
+					return fmt.Errorf("retrieving %s: `properties` was nil", *id)
+				}
+
+				props := existing.Model.Properties
+				payload := clusters.Cluster{
+					Location: existing.Model.Location,
+					Identity: existing.Model.Identity,
+					Tags:     existing.Model.Tags,
+					Properties: &clusters.ClusterProperties{
+						PostgreSqlVersion: props.PostgreSqlVersion,
+						Backup:            props.Backup,
+						Network:           props.Network,
+						DataEncryption:    props.DataEncryption,
+						AiModelManagement: props.AiModelManagement,
+					},
+				}
+
+				// Backup retention is in a separate change group and must be updated independently from other property change groups.
+				if metadata.ResourceData.HasChange("backup_retention_in_days") {
+					if payload.Properties.Backup == nil {
+						payload.Properties.Backup = &clusters.BackupProperties{}
+					}
+					payload.Properties.Backup.RetentionDays = pointer.To(state.BackupRetentionInDays)
+					if err := client.CreateOrReplaceThenPoll(ctx, *id, payload); err != nil {
+						return fmt.Errorf("updating backup retention for %s: %+v", id, err)
+					}
+				}
+
+				// Public network access is in a separate change group and must be updated independently from other property change groups.
+				if metadata.ResourceData.HasChange("public_network_access") {
+					if payload.Properties.Network == nil {
+						payload.Properties.Network = &clusters.Network{}
+					}
+					payload.Properties.Network.PublicAccess = pointer.ToEnum[clusters.PublicNetworkAccessState](state.PublicNetworkAccess)
+					if err := client.CreateOrReplaceThenPoll(ctx, *id, payload); err != nil {
+						return fmt.Errorf("updating public network access for %s: %+v", id, err)
+					}
+				}
+
+				// Tags is in a separate change group and must be updated independently from other property change groups.
+				if metadata.ResourceData.HasChange("tags") {
+					payload.Tags = pointer.To(state.Tags)
+				}
+
+				// Aggregate other changes into a single update for the cluster.
+				// All other changes that are not part of separate change groups are aggregated here.
+				// Service team will fix the mutually exclusive update handling in the future, we can clean this up later.
+				if metadata.ResourceData.HasChange("identity") {
+					expandedIdentity, err := identity.ExpandUserAssignedMapFromModel(state.Identity)
+					if err != nil {
+						return fmt.Errorf("expanding `identity`: %+v", err)
+					}
+					payload.Identity = expandedIdentity
+				}
+
+				if err := client.CreateOrReplaceThenPoll(ctx, *id, payload); err != nil {
+					return fmt.Errorf("updating cluster for %s: %+v", id, err)
+				}
+			}
+
+			if metadata.ResourceData.HasChange("read_write_pool") {
+				if err := updateHorizondbClusterPool(ctx, metadata, *id, state.ReadWritePool[0]); err != nil {
+					return err
+				}
+			}
+
+			if metadata.ResourceData.HasChanges("administrator_password", "administrator_password_wo_version") {
+				password := state.AdministratorPassword
+				if metadata.ResourceData.HasChange("administrator_password_wo_version") {
+					woPassword, err := pluginsdk.GetWriteOnly(metadata.ResourceData, "administrator_password_wo", cty.String)
+					if err != nil {
+						return err
+					}
+					if !woPassword.IsNull() {
+						password = woPassword.AsString()
+					}
+				}
+
+				// Changing password can be only sent by PATCH update with only the new password in the payload
+				authenticationId := passwordauthentications.NewClusterID(id.SubscriptionId, id.ResourceGroupName, id.ClusterName)
+				payload := passwordauthentications.PasswordAuthenticationForPatchUpdate{
+					Properties: &passwordauthentications.PasswordAuthenticationPropertiesForPatchUpdate{
+						AdministratorLoginPassword: pointer.To(password),
+					},
+				}
+				if err := metadata.Client.HorizonDB.PasswordAuthenticationsClient.UpdateThenPoll(ctx, authenticationId, payload); err != nil {
+					return fmt.Errorf("updating password authentication for %s: %+v", id, err)
+				}
+			}
+			return nil
+		},
+	}
+}

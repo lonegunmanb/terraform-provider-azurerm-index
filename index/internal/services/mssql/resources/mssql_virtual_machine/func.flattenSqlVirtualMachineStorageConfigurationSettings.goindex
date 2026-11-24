@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/resources/mssql_virtual_machine
+import (
+	"context"
+	"fmt"
+	"math"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachinegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenSqlVirtualMachineStorageConfigurationSettings(input *sqlvirtualmachines.StorageConfigurationSettings, storageWorkloadType string) []any {
+	if input == nil {
+		return []any{}
+	}
+
+	var diskType string
+	if input.DiskConfigurationType != nil {
+		diskType = string(*input.DiskConfigurationType)
+	}
+
+	output := map[string]any{
+		"storage_workload_type":          storageWorkloadType,
+		"disk_type":                      diskType,
+		"system_db_on_data_disk_enabled": pointer.From(input.SqlSystemDbOnDataDisk),
+		"data_settings":                  flattenSqlVirtualMachineStorageSettings(input.SqlDataSettings),
+		"log_settings":                   flattenSqlVirtualMachineStorageSettings(input.SqlLogSettings),
+		"temp_db_settings":               flattenSqlVirtualMachineTempDbSettings(input.SqlTempDbSettings),
+	}
+
+	if output["storage_workload_type"].(string) == "" && output["disk_type"] == "" &&
+		len(output["data_settings"].([]any)) == 0 &&
+		len(output["log_settings"].([]any)) == 0 &&
+		len(output["temp_db_settings"].([]any)) == 0 {
+		return []any{}
+	}
+
+	return []any{output}
+}

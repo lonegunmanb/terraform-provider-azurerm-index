@@ -1,0 +1,33 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/site_recovery_hyperv_network_mapping
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationnetworkmappings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationnetworks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/helpers"
+)
+func fetchFabricIdByFriendlyName(ctx context.Context, fabricClient *replicationfabrics.ReplicationFabricsClient, vaultId, friendlyName string) (string, error) {
+	parsedVaultId, err := replicationfabrics.ParseVaultID(vaultId)
+	if err != nil {
+		return "", fmt.Errorf("parsing vault id: %+v", err)
+	}
+
+	fabrics, err := fabricClient.ListComplete(ctx, *parsedVaultId)
+	if err != nil {
+		return "", fmt.Errorf("listing fabrics: %+v", err)
+	}
+
+	for _, fabric := range fabrics.Items {
+		if fabric.Properties != nil && fabric.Properties.FriendlyName != nil && *fabric.Properties.FriendlyName == friendlyName && fabric.Id != nil {
+			return helpers.HandleAzureSdkForGoBug2824(*fabric.Id), nil
+		}
+	}
+
+	return "", fmt.Errorf("fabric not found")
+}

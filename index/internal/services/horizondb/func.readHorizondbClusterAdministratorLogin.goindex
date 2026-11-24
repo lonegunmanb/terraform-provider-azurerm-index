@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/horizondb
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/passwordauthentications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/pools"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func readHorizondbClusterAdministratorLogin(ctx context.Context, client *passwordauthentications.PasswordAuthenticationsClient, id clusters.ClusterId) (string, error) {
+	authenticationId := passwordauthentications.NewClusterID(id.SubscriptionId, id.ResourceGroupName, id.ClusterName)
+
+	resp, err := client.Get(ctx, authenticationId)
+	if err != nil {
+		return "", fmt.Errorf("retrieving password authentication for %s: %+v", id, err)
+	}
+
+	if resp.Model.Properties == nil {
+		return "", fmt.Errorf("retrieving password authentication for %s: properties are missing", id)
+	}
+	return pointer.From(resp.Model.Properties.AdministratorLogin), nil
+}

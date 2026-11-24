@@ -1,0 +1,55 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/site_recovery_vmware_replicated_vm
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/runasaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotecteditems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotectioncontainers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func fetchDiscoveryMachineIdBySite(ctx context.Context, machinesClient *machines.MachinesClient, siteId string, machineName string) (string, error) {
+	parsedSiteId, err := machines.ParseVMwareSiteIDInsensitively(siteId)
+	if err != nil {
+		return "", fmt.Errorf("parse %s: %+v", siteId, err)
+	}
+
+	hackedClient := azuresdkhacks.MachinesClient{Client: machinesClient.Client}
+	resp, err := hackedClient.GetAllVMWareMachinesInSite(ctx, *parsedSiteId, machines.DefaultGetAllMachinesInSiteOperationOptions())
+	if err != nil {
+		return "", err
+	}
+
+	if model := resp.Model; model != nil {
+		for _, machine := range *model {
+			if machine.Properties == nil {
+				continue
+			}
+			if machine.Properties.DisplayName == nil {
+				continue
+			}
+			if strings.EqualFold(*machine.Properties.DisplayName, machineName) {
+				parsedMachineId, err := commonids.ParseVMwareSiteMachineIDInsensitively(*machine.Id)
+				if err != nil {
+					return "", fmt.Errorf("parse %s: %+v", *machine.Id, err)
+				}
+				return parsedMachineId.ID(), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("retrieving %q: machine %s not found", siteId, machineName)
+}

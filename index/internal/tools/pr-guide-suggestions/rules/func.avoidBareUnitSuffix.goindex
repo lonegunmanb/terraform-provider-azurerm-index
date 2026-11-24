@@ -1,0 +1,28 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/rules
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree"
+)
+func avoidBareUnitSuffix(n *schematree.Node, report ReportFunc) {
+	for _, unit := range suffixesToCheckForBareUnit {
+		if !strings.HasSuffix(n.Name, "_"+unit) {
+			continue
+		}
+		if strings.HasSuffix(n.Name, "_in_"+unit) {
+			break
+		}
+		prefix := strings.TrimSuffix(n.Name, "_"+unit)
+		if prefix == "" {
+			break
+		}
+		preferred := prefix + "_in_" + unit
+		report(n,
+			fmt.Sprintf("property %q uses a bare unit suffix; prefer the %q naming convention (%q)", n.Path, "_in_"+unit, preferred),
+			&Fix{Suggestion: fmt.Sprintf("rename %q to %q", n.Name, preferred), Rename: preferred},
+		)
+		break
+	}
+}

@@ -1,0 +1,37 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mysql/resources/mysql_flexible_server
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mysql/2023-12-30/servers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandFlexibleServerHighAvailability(inputs []any) *servers.HighAvailability {
+	if len(inputs) == 0 || inputs[0] == nil {
+		return &servers.HighAvailability{
+			Mode: pointer.To(servers.HighAvailabilityModeDisabled),
+		}
+	}
+
+	input := inputs[0].(map[string]any)
+
+	mode := servers.HighAvailabilityMode(input["mode"].(string))
+
+	result := servers.HighAvailability{
+		Mode: &mode,
+	}
+
+	// for updating mode from ZoneRedundant to SameZone, the standby az will be changed
+	// if we keep setting the standby az of ZoneRedundant, ha could not be changed to SameZone
+	if mode == servers.HighAvailabilityModeSameZone {
+		return &result
+	}
+
+	if v, ok := input["standby_availability_zone"]; ok && v.(string) != "" {
+		result.StandbyAvailabilityZone = pointer.To(v.(string))
+	}
+
+	return &result
+}

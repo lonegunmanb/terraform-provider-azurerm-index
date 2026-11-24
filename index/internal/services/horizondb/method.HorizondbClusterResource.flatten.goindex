@@ -1,0 +1,102 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/horizondb
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/passwordauthentications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/pools"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (HorizondbClusterResource) flatten(metadata sdk.ResourceMetaData, id *clusters.ClusterId, model *clusters.Cluster, pool *pools.Pool, administratorLogin string) error {
+	if model == nil || model.Properties == nil {
+		return nil
+	}
+
+	var previous HorizondbClusterResourceModel
+	if err := metadata.Decode(&previous); err != nil {
+		return fmt.Errorf("decoding: %+v", err)
+	}
+
+	props := model.Properties
+	state := HorizondbClusterResourceModel{
+		Name:                           id.ClusterName,
+		ResourceGroupName:              id.ResourceGroupName,
+		Location:                       location.Normalize(model.Location),
+		PostgresqlVersion:              pointer.FromEnum(props.PostgreSqlVersion),
+		AdministratorLogin:             administratorLogin,
+		AdministratorPassword:          previous.AdministratorPassword,
+		AdministratorPasswordWOVersion: int64(metadata.ResourceData.Get("administrator_password_wo_version").(int)),
+		Tags:                           pointer.From(model.Tags),
+	}
+
+	if props.Network != nil && props.Network.PublicAccess != nil {
+		state.PublicNetworkAccess = pointer.FromEnum(props.Network.PublicAccess)
+	}
+
+	if props.Backup != nil {
+		state.BackupRetentionInDays = pointer.From(props.Backup.RetentionDays)
+		state.GeoRedundantBackupEnabled = props.Backup.GeoRedundancy == clusters.GeoRedundancyStateEnabled
+	}
+
+	flattenedIdentity, err := identity.FlattenUserAssignedMapToModel(model.Identity)
+	if err != nil {
+		return fmt.Errorf("flattening `identity`: %+v", err)
+	}
+	state.Identity = pointer.From(flattenedIdentity)
+
+	if pointer.From(props.CreationMode) == clusters.ClusterCreateModePointInTimeRestore {
+		restore := HorizondbClusterPointInTimeRestore{
+			SourceHorizondbClusterId: pointer.From(props.CreationSourceClusterResourceId),
+			SourceLocation:           location.Normalize(pointer.From(props.CreationSourceClusterLocation)),
+			PointInTimeUtc:           pointer.From(props.PointInTimeUtc),
+		}
+
+		// Azure can omit creation-time restore metadata from GET responses.
+		if len(previous.PointInTimeRestore) > 0 {
+			if restore.SourceHorizondbClusterId == "" {
+				restore.SourceHorizondbClusterId = previous.PointInTimeRestore[0].SourceHorizondbClusterId
+			}
+			if restore.SourceLocation == "" {
+				restore.SourceLocation = location.Normalize(previous.PointInTimeRestore[0].SourceLocation)
+			}
+			if restore.PointInTimeUtc == "" {
+				restore.PointInTimeUtc = previous.PointInTimeRestore[0].PointInTimeUtc
+			}
+		}
+
+		if restore.SourceHorizondbClusterId != "" || len(previous.PointInTimeRestore) > 0 {
+			sourceId, err := clusters.ParseClusterIDInsensitively(restore.SourceHorizondbClusterId)
+			if err != nil {
+				return err
+			}
+			restore.SourceHorizondbClusterId = sourceId.ID()
+			state.PointInTimeRestore = []HorizondbClusterPointInTimeRestore{restore}
+		}
+	}
+
+	state.ReadWritePool, err = flattenHorizondbClusterPool(pool)
+	if err != nil {
+		return err
+	}
+
+	if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, id); err != nil {
+		return err
+	}
+
+	return metadata.Encode(&state)
+}

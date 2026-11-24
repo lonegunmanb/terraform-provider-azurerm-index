@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/backup_policy_vm
+import (
+	"errors"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2024-10-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandBackupProtectionPolicyVMRetentionWeekly(d *pluginsdk.ResourceData, times []string) *protectionpolicies.WeeklyRetentionSchedule {
+	if rb, ok := d.Get("retention_weekly").([]any); ok && len(rb) > 0 {
+		block := rb[0].(map[string]any)
+
+		retention := protectionpolicies.WeeklyRetentionSchedule{
+			RetentionTimes: &times,
+			RetentionDuration: &protectionpolicies.RetentionDuration{
+				Count:        pointer.To(int64(block["count"].(int))),
+				DurationType: pointer.To(protectionpolicies.RetentionDurationTypeWeeks),
+			},
+		}
+
+		if v, ok := block["weekdays"].(*pluginsdk.Set); ok {
+			days := make([]protectionpolicies.DayOfWeek, 0)
+			for _, day := range v.List() {
+				days = append(days, protectionpolicies.DayOfWeek(day.(string)))
+			}
+			retention.DaysOfTheWeek = &days
+		}
+
+		return &retention
+	}
+
+	return nil
+}

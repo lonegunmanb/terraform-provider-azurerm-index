@@ -1,0 +1,118 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mongocluster/resources/mongo_cluster
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/mongocluster/2026-06-01/mongoclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r Resource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var state MongoClusterResourceModel
+			if err := metadata.DecodeDiff(&state); err != nil {
+				return fmt.Errorf("DecodeDiff: %+v", err)
+			}
+
+			switch state.CreateMode {
+			case string(mongoclusters.CreateModeDefault):
+				if isNativeAuthRequired(metadata) && state.AdministratorUserName == "" {
+					return errors.New("`administrator_username` is required when `authentication_methods` contains `NativeAuth` or is not configured")
+				}
+
+				if state.ComputeTier == "" {
+					return fmt.Errorf("`compute_tier` is required when `create_mode` is `%s`", string(mongoclusters.CreateModeDefault))
+				}
+
+				if state.StorageSizeInGb == 0 {
+					return fmt.Errorf("`storage_size_in_gb` is required when `create_mode` is `%s`", string(mongoclusters.CreateModeDefault))
+				}
+
+				if state.HighAvailabilityMode == "" {
+					return fmt.Errorf("`high_availability_mode` is required when `create_mode` is `%s`", string(mongoclusters.CreateModeDefault))
+				}
+
+				if state.ShardCount == 0 {
+					return fmt.Errorf("`shard_count` is required when `create_mode` is `%s`", string(mongoclusters.CreateModeDefault))
+				}
+
+				if state.Version == "" {
+					return fmt.Errorf("`version` is required when `create_mode` is `%s`", string(mongoclusters.CreateModeDefault))
+				}
+			case string(mongoclusters.CreateModeGeoReplica):
+				if state.SourceLocation == "" {
+					return fmt.Errorf("`source_location` is required when `create_mode` is `GeoReplica`")
+				}
+			case string(mongoclusters.CreateModePointInTimeRestore):
+				if len(state.Restore) == 0 {
+					return fmt.Errorf("`restore` is required when `create_mode` is `PointInTimeRestore`")
+				}
+			}
+
+			if state.ComputeTier == "Free" || state.ComputeTier == "M25" {
+				if state.HighAvailabilityMode == string(mongoclusters.HighAvailabilityModeZoneRedundantPreferred) {
+					return fmt.Errorf("high Availability is not available with the `Free` or `M25` Compute Tier")
+				}
+
+				if state.ShardCount > 1 {
+					return fmt.Errorf("the value of `shard_count` cannot exceed 1 for the `Free` or `M25` Compute Tier")
+				}
+			}
+
+			if len(state.PreviewFeatures) > 0 {
+				existing := make(map[string]bool)
+				for _, str := range state.PreviewFeatures {
+					if existing[str] {
+						return fmt.Errorf("`preview_features` contains the duplicate value %q", str)
+					}
+					existing[str] = true
+				}
+			}
+
+			// Since the API doesn't return the value of create_mode, when importing `azurerm_mongo_cluster`, it will cause replacement.
+			if oldVal, newVal := metadata.ResourceDiff.GetChange("create_mode"); oldVal.(string) != "" && oldVal.(string) != newVal.(string) {
+				if err := metadata.ResourceDiff.ForceNew("create_mode"); err != nil {
+					return err
+				}
+			}
+
+			if !metadata.ResourceDiff.GetRawConfig().AsValueMap()["data_api_mode_enabled"].IsNull() && state.CreateMode != string(mongoclusters.CreateModeDefault) {
+				return fmt.Errorf("`data_api_mode_enabled` can only be set when `create_mode` is `Default`")
+			}
+
+			if err := validateMongoClusterCosmosDBNetworkBypassEnabled(metadata, state); err != nil {
+				return err
+			}
+
+			// Service team confirmed that `data_api_mode_enabled` can only be updated to `Enabled` after the cluster has been created
+			if oldVal, newVal := metadata.ResourceDiff.GetChange("data_api_mode_enabled"); oldVal.(bool) && !newVal.(bool) && state.CreateMode == string(mongoclusters.CreateModeDefault) {
+				if err := metadata.ResourceDiff.ForceNew("data_api_mode_enabled"); err != nil {
+					return err
+				}
+			}
+
+			// When identity is added or removed from the configuration, it should trigger ForceNew.
+			// 1. When identity type is changed from `UserAssigned` to `None`, go-azure-sdk always sets `identity.userAssignedIdentities` to `nil` in the request payload.
+			// But since service API does not allow explicitly setting `identity.userAssignedIdentities` to `nil` when the identity type is `None`,
+			// otherwise it will throw a schema validation error, Terraform can only dynamically treat this change as forceNew.
+			// 2. Service API will fail when identity type is changed from `None` to `UserAssigned`.
+			if oldVal, newVal := metadata.ResourceDiff.GetChange("identity"); (len(oldVal.([]any)) > 0 && len(newVal.([]any)) == 0) || (len(oldVal.([]any)) == 0 && len(newVal.([]any)) > 0) {
+				if err := metadata.ResourceDiff.ForceNew("identity"); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+	}
+}

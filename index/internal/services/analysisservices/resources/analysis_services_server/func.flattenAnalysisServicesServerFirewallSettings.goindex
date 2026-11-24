@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/analysisservices/resources/analysis_services_server
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/analysisservices/2017-08-01/servers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenAnalysisServicesServerFirewallSettings(serverProperties *servers.AnalysisServicesServerProperties) (*bool, *pluginsdk.Set) {
+	if serverProperties == nil || serverProperties.IPV4FirewallSettings == nil {
+		return pointer.To(false), pluginsdk.NewSet(hashAnalysisServicesServerIPv4FirewallRule, make([]any, 0))
+	}
+
+	firewallSettings := serverProperties.IPV4FirewallSettings
+
+	enablePowerBi := pointer.To(false)
+	if firewallSettings.EnablePowerBIService != nil {
+		enablePowerBi = firewallSettings.EnablePowerBIService
+	}
+
+	fwRules := make([]any, 0)
+	if firewallSettings.FirewallRules != nil {
+		for _, fwRule := range *firewallSettings.FirewallRules {
+			output := make(map[string]any)
+			if fwRule.FirewallRuleName != nil {
+				output["name"] = *fwRule.FirewallRuleName
+			}
+
+			if fwRule.RangeStart != nil {
+				output["range_start"] = *fwRule.RangeStart
+			}
+
+			if fwRule.RangeEnd != nil {
+				output["range_end"] = *fwRule.RangeEnd
+			}
+
+			fwRules = append(fwRules, output)
+		}
+	}
+
+	return enablePowerBi, pluginsdk.NewSet(hashAnalysisServicesServerIPv4FirewallRule, fwRules)
+}

@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/horizondb
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/netip"
+	"regexp"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/firewallrules"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (HorizondbFirewallRuleResource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			diff := metadata.ResourceDiff
+			if !diff.NewValueKnown("start_ip_address") || !diff.NewValueKnown("end_ip_address") {
+				return nil
+			}
+
+			startAddress, _ := netip.ParseAddr(diff.Get("start_ip_address").(string))
+			endAddress, _ := netip.ParseAddr(diff.Get("end_ip_address").(string))
+			if endAddress.Less(startAddress) {
+				return errors.New("`end_ip_address` must be greater than or equal to `start_ip_address`")
+			}
+			return nil
+		},
+	}
+}

@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/recovery_services_vault
+import (
+	"errors"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservices/2025-08-01/vaults"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandEncryption(d *pluginsdk.ResourceData) (*vaults.VaultPropertiesEncryption, error) {
+	encryptionRaw := d.Get("encryption")
+	if encryptionRaw == nil {
+		return nil, nil
+	}
+	settings := encryptionRaw.([]any)
+	if len(settings) == 0 {
+		return nil, nil
+	}
+	encryptionMap := settings[0].(map[string]any)
+	keyUri := encryptionMap["key_id"].(string)
+	enabledInfraEncryption := encryptionMap["infrastructure_encryption_enabled"].(bool)
+	infraEncryptionState := vaults.InfrastructureEncryptionStateEnabled
+	if !enabledInfraEncryption {
+		infraEncryptionState = vaults.InfrastructureEncryptionStateDisabled
+	}
+	encryption := &vaults.VaultPropertiesEncryption{
+		KeyVaultProperties: &vaults.CmkKeyVaultProperties{
+			KeyUri: pointer.To(keyUri),
+		},
+		KekIdentity: &vaults.CmkKekIdentity{
+			UseSystemAssignedIdentity: pointer.To(encryptionMap["use_system_assigned_identity"].(bool)),
+		},
+		InfrastructureEncryption: &infraEncryptionState,
+	}
+	if v, ok := encryptionMap["user_assigned_identity_id"].(string); ok && v != "" {
+		if *encryption.KekIdentity.UseSystemAssignedIdentity {
+			return nil, errors.New("`use_system_assigned_identity` must be disabled when `user_assigned_identity_id` is set")
+		}
+		encryption.KekIdentity.UserAssignedIdentity = pointer.To(v)
+	}
+	return encryption, nil
+}

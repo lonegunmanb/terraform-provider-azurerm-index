@@ -1,0 +1,82 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/resources/mssql_managed_instance
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2025-01-01/managedinstances"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r Resource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			rd := metadata.ResourceDiff
+
+			// dns_zone_partner_id can only be set on init
+			if oldVal, newVal := rd.GetChange("dns_zone_partner_id"); oldVal.(string) == "" && newVal.(string) != "" {
+				if err := rd.ForceNew("dns_zone_partner_id"); err != nil {
+					return err
+				}
+			}
+
+			// system-assigned identity can't be removed due to https://github.com/Azure/azure-rest-api-specs/issues/16838
+			if oldVal, newVal := rd.GetChange("identity.#"); oldVal.(int) == 1 && newVal.(int) == 0 {
+				if err := rd.ForceNew("identity"); err != nil {
+					return err
+				}
+			}
+
+			// Once the `AlwaysUpToDate` is enabled, you can't go back to `SQLServer2022` update policy.
+			if oldVal, newVal := rd.GetChange("database_format"); oldVal.(string) == string(managedinstances.ManagedInstanceDatabaseFormatAlwaysUpToDate) && newVal.(string) == string(managedinstances.ManagedInstanceDatabaseFormatSQLServerTwoZeroTwoTwo) {
+				if err := rd.ForceNew("database_format"); err != nil {
+					return err
+				}
+			}
+
+			_, aadAdminOk := rd.GetOk("azure_active_directory_administrator")
+			authOnlyEnabled := rd.Get("azure_active_directory_administrator.0.azuread_authentication_only_enabled").(bool)
+			rawConfig := rd.GetRawConfig().AsValueMap()
+			adminLogin := rawConfig["administrator_login"]
+			adminPassword := rawConfig["administrator_login_password"]
+
+			if aadAdminOk && !authOnlyEnabled && (adminLogin.IsNull() || adminPassword.IsNull()) {
+				return fmt.Errorf("`administrator_login` and `administrator_login_password` are required when `azuread_authentication_only_enabled` is false")
+			}
+
+			// Unknown values can come from expressions and may later resolve to null, so only
+			// validate `storage_iops` rules when the argument is known to be explicitly configured.
+			// check for non-zero values as a null value is stored in state as `0`, attribute validation prevents a user from explicitly defniing this as `0`
+			if storageIOps, ok := rawConfig["storage_iops"]; ok && storageIOps.IsKnown() && !storageIOps.IsNull() && rd.Get("storage_iops") != 0 {
+				if !rd.Get("general_purpose_v2_enabled").(bool) {
+					return errors.New("`storage_iops` can only be set when `general_purpose_v2_enabled` is `true`")
+				}
+
+				if sku := rd.Get("sku_name").(string); strings.HasPrefix(sku, "BC_") {
+					return fmt.Errorf("`storage_iops` is not supported on Business Critical SKUs, got SKU `%s`", sku)
+				}
+			}
+
+			if sku := rd.Get("sku_name").(string); strings.HasPrefix(sku, "BC_") && rd.Get("general_purpose_v2_enabled").(bool) {
+				return fmt.Errorf("`general_purpose_v2_enabled` cannot be set to `true` on Business Critical SKUs, got SKU `%s`", sku)
+			}
+
+			// Zone redundancy is not available for Next-gen General Purpose instances.
+			// https://learn.microsoft.com/azure/azure-sql/managed-instance/high-availability-sla-local-zone-redundancy#next-gen-general-purpose-service-tier
+			if rd.Get("zone_redundant_enabled").(bool) && rd.Get("general_purpose_v2_enabled").(bool) {
+				return errors.New("`zone_redundant_enabled` cannot be set to `true` when `general_purpose_v2_enabled` is `true`")
+			}
+
+			return nil
+		},
+	}
+}

@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/site_recovery_replicated_vm
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotecteditems"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandDiskEncryption(diskEncryptionInfoList []any) *replicationprotecteditems.DiskEncryptionInfo {
+	if len(diskEncryptionInfoList) == 0 {
+		return &replicationprotecteditems.DiskEncryptionInfo{}
+	}
+	diskEncryptionInfoMap := diskEncryptionInfoList[0].(map[string]any)
+
+	dek := diskEncryptionInfoMap["disk_encryption_key"].([]any)[0].(map[string]any)
+	diskEncryptionInfo := &replicationprotecteditems.DiskEncryptionInfo{
+		DiskEncryptionKeyInfo: &replicationprotecteditems.DiskEncryptionKeyInfo{
+			SecretIdentifier:      pointer.To(dek["secret_url"].(string)),
+			KeyVaultResourceArmId: pointer.To(dek["vault_id"].(string)),
+		},
+	}
+
+	if keyEncryptionKey := diskEncryptionInfoMap["key_encryption_key"].([]any); len(keyEncryptionKey) > 0 {
+		kek := keyEncryptionKey[0].(map[string]any)
+		diskEncryptionInfo.KeyEncryptionKeyInfo = &replicationprotecteditems.KeyEncryptionKeyInfo{
+			KeyIdentifier:         pointer.To(kek["key_url"].(string)),
+			KeyVaultResourceArmId: pointer.To(kek["vault_id"].(string)),
+		}
+	}
+
+	return diskEncryptionInfo
+}

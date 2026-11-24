@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/site_recovery_replicated_vm
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/capacityreservationgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2022-03-01/proximityplacementgroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/compute/2024-03-01/virtualmachines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotecteditems"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenTargetDiskEncryption(disk replicationprotecteditems.A2AProtectedManagedDiskDetails) []any {
+	secretUrl := ""
+	dekVaultId := ""
+	keyUrl := ""
+	kekVaultId := ""
+
+	if disk.SecretIdentifier != nil {
+		secretUrl = *disk.SecretIdentifier
+	}
+	if disk.DekKeyVaultArmId != nil {
+		dekVaultId = *disk.DekKeyVaultArmId
+	}
+	if disk.KeyIdentifier != nil {
+		keyUrl = *disk.KeyIdentifier
+	}
+	if disk.KekKeyVaultArmId != nil {
+		kekVaultId = *disk.KekKeyVaultArmId
+	}
+
+	if secretUrl == "" && dekVaultId == "" && keyUrl == "" && kekVaultId == "" {
+		return []any{}
+	}
+
+	diskEncryptionKeys := make([]any, 0)
+	if secretUrl != "" || dekVaultId != "" {
+		diskEncryptionKeys = append(diskEncryptionKeys, map[string]any{
+			"secret_url": secretUrl,
+			"vault_id":   dekVaultId,
+		})
+	}
+
+	keyEncryptionKeys := make([]any, 0)
+	if keyUrl != "" || kekVaultId != "" {
+		keyEncryptionKeys = append(keyEncryptionKeys, map[string]any{
+			"key_url":  keyUrl,
+			"vault_id": kekVaultId,
+		})
+	}
+
+	return []any{
+		map[string]any{
+			"disk_encryption_key": diskEncryptionKeys,
+			"key_encryption_key":  keyEncryptionKeys,
+		},
+	}
+}

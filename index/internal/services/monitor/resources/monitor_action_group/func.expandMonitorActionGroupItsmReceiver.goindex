@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_action_group
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2023-01-01/actiongroupsapis"
+)
+func expandMonitorActionGroupItsmReceiver(v []any) (*[]actiongroupsapis.ItsmReceiver, error) {
+	receivers := make([]actiongroupsapis.ItsmReceiver, 0)
+	for _, receiverValue := range v {
+		val := receiverValue.(map[string]any)
+		ticketConfiguration := val["ticket_configuration"].(string)
+		receiver := actiongroupsapis.ItsmReceiver{
+			Name:                val["name"].(string),
+			WorkspaceId:         val["workspace_id"].(string),
+			ConnectionId:        val["connection_id"].(string),
+			TicketConfiguration: ticketConfiguration,
+			Region:              location.Normalize(val["region"].(string)),
+		}
+
+		// https://github.com/Azure/azure-rest-api-specs/issues/20488 ticket_configuration should have `PayloadRevision` and `WorkItemType` keys
+
+		j := make(map[string]any)
+		if err := json.Unmarshal([]byte(ticketConfiguration), &j); err != nil {
+			return nil, fmt.Errorf("`itsm_receiver.ticket_configuration` %s unmarshall json error: %+v", ticketConfiguration, err)
+		}
+
+		_, existKeyPayloadRevision := j["PayloadRevision"]
+		_, existKeyWorkItemType := j["WorkItemType"]
+		if !existKeyPayloadRevision || !existKeyWorkItemType {
+			return nil, fmt.Errorf("`itsm_receiver.ticket_configuration` should be JSON blob with `PayloadRevision` and `WorkItemType` keys")
+		}
+		receivers = append(receivers, receiver)
+	}
+	return &receivers, nil
+}

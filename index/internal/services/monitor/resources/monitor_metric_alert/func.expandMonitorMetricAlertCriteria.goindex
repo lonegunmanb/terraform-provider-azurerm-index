@@ -1,0 +1,27 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_metric_alert
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2018-03-01/metricalerts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandMonitorMetricAlertCriteria(d *pluginsdk.ResourceData, isLegacy bool) (metricalerts.MetricAlertCriteria, error) {
+	switch {
+	case len(d.Get("criteria").([]any)) != 0:
+		if isLegacy {
+			return expandMonitorMetricAlertSingleResourceMultiMetricCriteria(d.Get("criteria").([]any)), nil
+		}
+		return expandMonitorMetricAlertMultiResourceMultiMetricForStaticMetricCriteria(d.Get("criteria").([]any)), nil
+	case len(d.Get("dynamic_criteria").([]any)) != 0:
+		return expandMonitorMetricAlertMultiResourceMultiMetricForDynamicMetricCriteria(d.Get("dynamic_criteria").([]any)), nil
+	case len(d.Get("application_insights_web_test_location_availability_criteria").([]any)) != 0:
+		return expandMonitorMetricAlertWebtestLocAvailCriteria(d.Get("application_insights_web_test_location_availability_criteria").([]any)), nil
+	default:
+		// Guaranteed by schema `AtLeastOne` constraint
+		return nil, fmt.Errorf("unknown criteria type")
+	}
+}

@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/backup_policy_vm_workload
+import (
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2024-10-01/protectionpolicies"
+)
+func flattenBackupProtectionPolicyVMWorkloadSchedulePolicy(input protectionpolicies.SchedulePolicy, policyType protectionpolicies.PolicyType) []Backup {
+	if input == nil {
+		return []Backup{}
+	}
+
+	backupBlock := Backup{}
+
+	if policyType == protectionpolicies.PolicyTypeLog {
+		logSchedulePolicy, _ := input.(protectionpolicies.LogSchedulePolicy)
+
+		if v := logSchedulePolicy.ScheduleFrequencyInMins; v != nil {
+			backupBlock.FrequencyInMinutes = *v
+		}
+	} else {
+		simpleSchedulePolicy, _ := input.(protectionpolicies.SimpleSchedulePolicy)
+
+		backupBlock.Frequency = pointer.FromEnum(simpleSchedulePolicy.ScheduleRunFrequency)
+
+		if times := simpleSchedulePolicy.ScheduleRunTimes; times != nil && len(*times) > 0 {
+			policyTime, _ := time.Parse(time.RFC3339, (*times)[0])
+			backupBlock.Time = policyTime.Format("15:04")
+		}
+
+		if days := simpleSchedulePolicy.ScheduleRunDays; days != nil {
+			weekdays := make([]string, 0)
+			for _, d := range *days {
+				weekdays = append(weekdays, string(d))
+			}
+			backupBlock.Weekdays = weekdays
+		}
+	}
+
+	return []Backup{backupBlock}
+}

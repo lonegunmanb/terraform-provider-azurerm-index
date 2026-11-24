@@ -1,0 +1,177 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appservice/helpers
+import (
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func WindowsApplicationStackSchema() *pluginsdk.Schema {
+	return &pluginsdk.Schema{
+		Type:     pluginsdk.TypeList,
+		Optional: true,
+		Computed: true, // azignore:AZS007 - pre-existing violation
+		MaxItems: 1,
+		Elem: &pluginsdk.Resource{
+			Schema: map[string]*pluginsdk.Schema{
+				"dotnet_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true, // azignore:AZS007 - pre-existing violation
+					ValidateFunc: validation.StringInSlice([]string{ // Note: DotNet versions are abstracted between API and Portal displayed values, so do not match 1:1. A table of the converted values is provided in the resource doc.
+						"v2.0",
+						"v3.0",
+						"v4.0",
+						"v5.0",
+						"v6.0",
+						"v7.0",
+						"v8.0",
+						"v9.0",
+						"v10.0",
+						"v11.0",
+					}, false),
+					AtLeastOneOf: WindowsApplicationStackConstraint,
+				},
+
+				"dotnet_core_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"v4.0",
+					}, false),
+					AtLeastOneOf: WindowsApplicationStackConstraint,
+					Description:  "The version of DotNetCore to use.",
+				},
+
+				"php_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					Computed: true, // azignore:AZS007 - pre-existing violation
+					ValidateFunc: validation.StringInSlice([]string{
+						PhpVersionSevenPointOne,  // Deprecated
+						PhpVersionSevenPointFour, // Deprecated
+						PhpVersionOff,            // Portal displays `Off` for `""` meaning use latest available
+					}, false),
+					AtLeastOneOf: WindowsApplicationStackConstraint,
+				},
+
+				"python": {
+					Type:         pluginsdk.TypeBool,
+					Optional:     true,
+					Default:      false,
+					AtLeastOneOf: WindowsApplicationStackConstraint,
+				},
+
+				"node_version": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"~14",
+						"~16",
+						"~18",
+						"~20",
+						"~22",
+						"~24",
+					}, false),
+					AtLeastOneOf: WindowsApplicationStackConstraint,
+				},
+
+				"java_version": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.StringIsNotEmpty,
+					AtLeastOneOf: WindowsApplicationStackConstraint,
+				},
+
+				"java_embedded_server_enabled": {
+					Type:     pluginsdk.TypeBool,
+					Optional: true,
+					Computed: true, // azignore:AZS007 - pre-existing violation
+					ConflictsWith: []string{
+						"site_config.0.application_stack.0.tomcat_version",
+					},
+					RequiredWith: []string{
+						"site_config.0.application_stack.0.java_version",
+					},
+					Description: "Should the application use the embedded web server for the version of Java in use?",
+				},
+
+				"tomcat_version": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.StringIsNotEmpty, // This is a long list of regularly changing values, not all valid values of which are made known in the portal/docs
+					ConflictsWith: []string{
+						"site_config.0.application_stack.0.java_embedded_server_enabled",
+					},
+					RequiredWith: []string{
+						"site_config.0.application_stack.0.java_version",
+					},
+				},
+
+				"java_container": {
+					Type:       pluginsdk.TypeString,
+					Optional:   true,
+					Deprecated: "this property has been deprecated in favour of `tomcat_version` and `java_embedded_server_enabled`",
+					ValidateFunc: validation.StringInSlice([]string{
+						"JAVA",
+						"JETTY", // No longer supported / offered - Java SE or Tomcat (10, 9.5, 8) only
+						"TOMCAT",
+					}, false),
+					RequiredWith: []string{
+						"site_config.0.application_stack.0.java_container_version",
+					},
+					ConflictsWith: []string{
+						"site_config.0.application_stack.0.tomcat_version",
+					},
+				},
+
+				"java_container_version": {
+					Type:       pluginsdk.TypeString,
+					Optional:   true,
+					Deprecated: "This property has been deprecated in favour of `tomcat_version` and `java_embedded_server_enabled`",
+					RequiredWith: []string{
+						"site_config.0.application_stack.0.java_container",
+					},
+				},
+
+				"docker_image_name": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					AtLeastOneOf: WindowsApplicationStackConstraint,
+					ValidateFunc: validation.StringIsNotEmpty,
+				},
+
+				"docker_registry_url": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.IsURLWithHTTPorHTTPS,
+					RequiredWith: []string{"site_config.0.application_stack.0.docker_image_name"},
+				},
+
+				"docker_registry_username": {
+					Type:         pluginsdk.TypeString,
+					Optional:     true,
+					ValidateFunc: validation.StringIsNotEmpty,
+				},
+
+				"docker_registry_password": {
+					Type:      pluginsdk.TypeString,
+					Optional:  true,
+					Sensitive: true,
+				},
+
+				"current_stack": {
+					Type:     pluginsdk.TypeString,
+					Optional: true,
+					// Note: O+C because This will be set to the configured type from above if not explicitly set
+					Computed: true,
+					ValidateFunc: validation.StringInSlice([]string{
+						"dotnet",
+						"dotnetcore",
+						"node",
+						"python",
+						"php",
+						"java",
+					}, false),
+				},
+			},
+		},
+	}
+}

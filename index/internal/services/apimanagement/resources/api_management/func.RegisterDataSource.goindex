@@ -1,0 +1,249 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/resources/api_management
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2024-05-01/apimanagementservice"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func RegisterDataSource() *pluginsdk.Resource {
+	return &pluginsdk.Resource{
+		Description: "Use this data source to access information about an existing API Management Service.",
+		Read:        dataSourceApiManagementRead,
+
+		Timeouts: &pluginsdk.ResourceTimeout{
+			Read: pluginsdk.DefaultTimeout(5 * time.Minute),
+		},
+
+		Schema: map[string]*pluginsdk.Schema{
+			"name": schemaz.SchemaApiManagementDataSourceName(),
+
+			"resource_group_name": commonschema.ResourceGroupNameForDataSource(),
+
+			"location": commonschema.LocationComputed(),
+
+			"public_ip_addresses": {
+				Description: "The Public IP addresses of the API Management Service.",
+				Type:        pluginsdk.TypeList,
+				Computed:    true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"public_ip_address_id": {
+				Description: "ID of the standard SKU IPv4 Public IP. Available only for Premium and Developer SKU deployed in a Virtual Network.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"private_ip_addresses": {
+				Description: "The Private IP addresses of the API Management Service.",
+				Type:        pluginsdk.TypeList,
+				Computed:    true,
+				Elem: &pluginsdk.Schema{
+					Type: pluginsdk.TypeString,
+				},
+			},
+
+			"publisher_name": {
+				Description: "The name of the Publisher/Company of the API Management Service.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"publisher_email": {
+				Description: "The email of Publisher/Company of the API Management Service.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"sku_name": {
+				Description: "The SKU of the API Management Service consisting of the name and capacity, separated by an underscore.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"identity": commonschema.SystemAssignedUserAssignedIdentityComputed(),
+
+			"notification_sender_email": {
+				Description: "The email address from which the notification will be sent.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"gateway_url": {
+				Description: "The URL for the API Management Service's Gateway.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"gateway_regional_url": {
+				Description: "The URL for the Gateway in the Default Region.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"portal_url": {
+				Description: "The URL of the Publisher Portal.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"developer_portal_url": {
+				Description: "The URL for the Developer Portal associated with this API Management service.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"management_api_url": {
+				Description: "The URL for the Management API.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"scm_url": {
+				Description: "The SCM (Source Code Management) endpoint.",
+				Type:        pluginsdk.TypeString,
+				Computed:    true,
+			},
+
+			"additional_location": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"location": commonschema.LocationComputed(),
+
+						"capacity": {
+							Description: "The number of compute units in this region.",
+							Type:        pluginsdk.TypeInt,
+							Computed:    true,
+						},
+
+						"zones": commonschema.ZonesMultipleComputed(),
+
+						"gateway_regional_url": {
+							Description: "Gateway URL of the API Management service in the Region.",
+							Type:        pluginsdk.TypeString,
+							Computed:    true,
+						},
+
+						"public_ip_addresses": {
+							Description: "Public Static Load Balanced IP addresses of the API Management service in the additional location. Available only for Basic, Standard and Premium SKU.",
+							Type:        pluginsdk.TypeList,
+							Computed:    true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+
+						"public_ip_address_id": {
+							Description: "ID of the standard SKU IPv4 Public IP. Available only for Premium SKU deployed in a Virtual Network.",
+							Type:        pluginsdk.TypeString,
+							Computed:    true,
+						},
+
+						"private_ip_addresses": {
+							Description: "Private IP addresses of the API Management service in the additional location, for instances using Virtual Network mode.",
+							Type:        pluginsdk.TypeList,
+							Computed:    true,
+							Elem: &pluginsdk.Schema{
+								Type: pluginsdk.TypeString,
+							},
+						},
+					},
+				},
+			},
+
+			"hostname_configuration": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"management": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: apiManagementDataSourceHostnameSchema(),
+							},
+						},
+						"portal": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: apiManagementDataSourceHostnameSchema(),
+							},
+						},
+						"developer_portal": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: apiManagementDataSourceHostnameSchema(),
+							},
+						},
+						"proxy": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: apiManagementDataSourceHostnameProxySchema(),
+							},
+						},
+						"scm": {
+							Type:     pluginsdk.TypeList,
+							Computed: true,
+							Elem: &pluginsdk.Resource{
+								Schema: apiManagementDataSourceHostnameSchema(),
+							},
+						},
+					},
+				},
+			},
+
+			"tenant_access": {
+				Type:     pluginsdk.TypeList,
+				Computed: true,
+				Elem: &pluginsdk.Resource{
+					Schema: map[string]*pluginsdk.Schema{
+						"enabled": {
+							Description: "Is access to the Management API enabled (presumably \"for this Tenant\")?",
+							Type:        pluginsdk.TypeBool,
+							Computed:    true,
+						},
+						"tenant_id": {
+							Description: "The ID of the Tenant which has access to this API Management instance.",
+							Type:        pluginsdk.TypeString,
+							Computed:    true,
+						},
+						"primary_key": {
+							Description: "Primary access key for the tenant access information contract.",
+							Type:        pluginsdk.TypeString,
+							Computed:    true,
+							Sensitive:   true,
+						},
+						"secondary_key": {
+							Description: "Secondary access key for the tenant access information contract.",
+							Type:        pluginsdk.TypeString,
+							Computed:    true,
+							Sensitive:   true,
+						},
+					},
+				},
+			},
+
+			"tags": commonschema.Tags(),
+		},
+	}
+}

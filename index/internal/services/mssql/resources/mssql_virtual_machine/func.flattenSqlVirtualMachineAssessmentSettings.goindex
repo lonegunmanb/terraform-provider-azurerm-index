@@ -1,0 +1,68 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/resources/mssql_virtual_machine
+import (
+	"context"
+	"fmt"
+	"math"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachinegroups"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenSqlVirtualMachineAssessmentSettings(assessmentSettings *sqlvirtualmachines.AssessmentSettings) []any {
+	if assessmentSettings == nil || assessmentSettings.Enable == nil || !*assessmentSettings.Enable {
+		return []any{}
+	}
+
+	var (
+		runImmediately bool
+		enabled        bool
+	)
+	if assessmentSettings.RunImmediately != nil {
+		runImmediately = *assessmentSettings.RunImmediately
+	}
+
+	if assessmentSettings.Enable != nil {
+		enabled = *assessmentSettings.Enable
+	}
+
+	var attr map[string]any
+	if schedule := assessmentSettings.Schedule; schedule != nil {
+		var (
+			weeklyInterval    int64
+			monthlyOccurrence int64
+			dayOfWeek         string
+			startTime         string
+		)
+
+		if schedule.WeeklyInterval != nil {
+			weeklyInterval = *schedule.WeeklyInterval
+		}
+		if schedule.MonthlyOccurrence != nil {
+			monthlyOccurrence = *schedule.MonthlyOccurrence
+		}
+		if schedule.DayOfWeek != nil {
+			dayOfWeek = string(*schedule.DayOfWeek)
+		}
+		if schedule.StartTime != nil {
+			startTime = *schedule.StartTime
+		}
+
+		attr = map[string]any{
+			"weekly_interval":    weeklyInterval,
+			"monthly_occurrence": monthlyOccurrence,
+			"day_of_week":        dayOfWeek,
+			"start_time":         startTime,
+		}
+	}
+
+	return []any{
+		map[string]any{
+			"run_immediately": runImmediately,
+			"enabled":         enabled,
+			"schedule":        []any{attr},
+		},
+	}
+}

@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/resources/redhat_openshift_cluster
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2025-07-25/openshiftclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenOpenShiftPlatformWorkloadIdentityProfile(profile *openshiftclusters.PlatformWorkloadIdentityProfile) ([]PlatformWorkloadIdentityProfile, error) {
+	if profile == nil {
+		return []PlatformWorkloadIdentityProfile{}, nil
+	}
+
+	identities := make([]PlatformWorkloadIdentity, 0)
+	if profile.PlatformWorkloadIdentities != nil {
+		for name, item := range *profile.PlatformWorkloadIdentities {
+			resourceId := pointer.From(item.ResourceId)
+			parsed, err := commonids.ParseUserAssignedIdentityIDInsensitively(resourceId)
+			if err != nil {
+				return nil, err
+			}
+			identities = append(identities, PlatformWorkloadIdentity{
+				Name:       name,
+				IdentityId: parsed.ID(),
+				ClientId:   pointer.From(item.ClientId),
+				ObjectId:   pointer.From(item.ObjectId),
+			})
+		}
+	}
+
+	return []PlatformWorkloadIdentityProfile{
+		{
+			UpgradeableTo:            pointer.From(profile.UpgradeableTo),
+			PlatformWorkloadIdentity: identities,
+		},
+	}, nil
+}

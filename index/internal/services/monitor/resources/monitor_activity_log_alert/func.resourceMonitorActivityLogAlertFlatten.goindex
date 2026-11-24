@@ -1,0 +1,41 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_activity_log_alert
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2020-10-01/activitylogalertsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func resourceMonitorActivityLogAlertFlatten(d *pluginsdk.ResourceData, id *activitylogalertsapis.ActivityLogAlertId, model *activitylogalertsapis.ActivityLogAlertResource) error {
+	d.Set("name", id.ActivityLogAlertName)
+	d.Set("resource_group_name", id.ResourceGroupName)
+
+	if model != nil {
+		d.Set("location", location.NormalizeNilable(model.Location))
+		if props := model.Properties; props != nil {
+			d.Set("enabled", props.Enabled)
+			d.Set("description", props.Description)
+
+			var scopes []any
+			if props.Scopes != nil {
+				scopes = pluginsdk.FlattenSlice(&props.Scopes)
+			}
+			if err := d.Set("scopes", scopes); err != nil {
+				return fmt.Errorf("setting `scopes`: %+v", err)
+			}
+
+			if err := d.Set("criteria", flattenMonitorActivityLogAlertCriteria(props.Condition)); err != nil {
+				return fmt.Errorf("setting `criteria`: %+v", err)
+			}
+			if err := d.Set("action", flattenMonitorActivityLogAlertAction(props.Actions)); err != nil {
+				return fmt.Errorf("setting `action`: %+v", err)
+			}
+		}
+		if err := d.Set("tags", pluginsdk.FlattenPtrMapStringString(model.Tags)); err != nil {
+			return err
+		}
+	}
+
+	return pluginsdk.SetResourceIdentityData(d, id)
+}

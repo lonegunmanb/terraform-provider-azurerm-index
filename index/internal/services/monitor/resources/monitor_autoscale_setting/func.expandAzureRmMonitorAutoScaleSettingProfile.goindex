@@ -1,0 +1,52 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_autoscale_setting
+import (
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2022-10-01/autoscalesettings"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/helpers"
+)
+func expandAzureRmMonitorAutoScaleSettingProfile(input []any) ([]autoscalesettings.AutoscaleProfile, error) {
+	results := make([]autoscalesettings.AutoscaleProfile, 0)
+
+	for _, v := range input {
+		raw := v.(map[string]any)
+
+		name := raw["name"].(string)
+
+		// this is Required, so we don't need to check for optionals here
+		capacitiesRaw := raw["capacity"].([]any)
+		capacityRaw := capacitiesRaw[0].(map[string]any)
+		capacity := autoscalesettings.ScaleCapacity{
+			Minimum: strconv.Itoa(capacityRaw["minimum"].(int)),
+			Maximum: strconv.Itoa(capacityRaw["maximum"].(int)),
+			Default: strconv.Itoa(capacityRaw["default"].(int)),
+		}
+
+		recurrencesRaw := raw["recurrence"].([]any)
+		recurrence := expandAzureRmMonitorAutoScaleSettingRecurrence(recurrencesRaw)
+
+		rulesRaw := raw["rule"].([]any)
+		rules := expandAzureRmMonitorAutoScaleSettingRule(rulesRaw)
+
+		fixedDatesRaw := raw["fixed_date"].([]any)
+		fixedDate, err := expandAzureRmMonitorAutoScaleSettingFixedDate(fixedDatesRaw)
+		if err != nil {
+			return nil, fmt.Errorf("expanding `fixed_date`: %+v", err)
+		}
+
+		result := autoscalesettings.AutoscaleProfile{
+			Name:       name,
+			Capacity:   capacity,
+			FixedDate:  fixedDate,
+			Recurrence: recurrence,
+			Rules:      rules,
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}

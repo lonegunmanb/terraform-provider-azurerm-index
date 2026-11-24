@@ -1,0 +1,73 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/resources/api_management
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2024-05-01/apimanagementservice"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenDataSourceApiManagementHostnameConfigurations(input *[]apimanagementservice.HostnameConfiguration) []any {
+	if input == nil {
+		return []any{}
+	}
+
+	// management, portal, proxy, scm
+	managementResults := make([]any, 0)
+	proxyResults := make([]any, 0)
+	portalResults := make([]any, 0)
+	developerPortalResults := make([]any, 0)
+	scmResults := make([]any, 0)
+
+	for _, config := range *input {
+		output := make(map[string]any)
+
+		output["host_name"] = config.HostName
+
+		output["negotiate_client_certificate"] = pointer.From(config.NegotiateClientCertificate)
+
+		output["key_vault_certificate_id"] = pointer.From(config.KeyVaultId)
+
+		switch strings.ToLower(string(config.Type)) {
+		case strings.ToLower(string(apimanagementservice.HostnameTypeProxy)):
+			// only set SSL binding for proxy types
+			if config.DefaultSslBinding != nil {
+				output["default_ssl_binding"] = *config.DefaultSslBinding
+			}
+			proxyResults = append(proxyResults, output)
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeManagement)):
+			managementResults = append(managementResults, output)
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypePortal)):
+			portalResults = append(portalResults, output)
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeDeveloperPortal)):
+			developerPortalResults = append(developerPortalResults, output)
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeScm)):
+			scmResults = append(scmResults, output)
+		}
+	}
+
+	return []any{
+		map[string]any{
+			"management":       managementResults,
+			"portal":           portalResults,
+			"developer_portal": developerPortalResults,
+			"proxy":            proxyResults,
+			"scm":              scmResults,
+		},
+	}
+}

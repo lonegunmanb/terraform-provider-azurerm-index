@@ -1,0 +1,43 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_smart_detector_alert_rule
+import (
+	"fmt"
+	"log"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/alertsmanagement/2019-06-01/smartdetectoralertrules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2023-01-01/actiongroupsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func flattenMonitorSmartDetectorAlertRuleActionGroup(input *smartdetectoralertrules.ActionGroupsInformation) ([]any, error) {
+	if input == nil {
+		return []any{}, nil
+	}
+
+	var customEmailSubject, CustomWebhookPayload string
+	if input.CustomEmailSubject != nil {
+		customEmailSubject = *input.CustomEmailSubject
+	}
+	if input.CustomWebhookPayload != nil {
+		CustomWebhookPayload = *input.CustomWebhookPayload
+	}
+
+	groupIds := make([]string, 0)
+	for _, idRaw := range input.GroupIds {
+		id, err := actiongroupsapis.ParseActionGroupIDInsensitively(idRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %v", idRaw, err)
+		}
+		groupIds = append(groupIds, id.ID())
+	}
+
+	return []any{
+		map[string]any{
+			"ids":             groupIds,
+			"email_subject":   customEmailSubject,
+			"webhook_payload": CustomWebhookPayload,
+		},
+	}, nil
+}

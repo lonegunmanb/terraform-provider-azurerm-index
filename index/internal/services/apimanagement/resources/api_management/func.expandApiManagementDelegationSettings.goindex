@@ -1,0 +1,56 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/resources/api_management
+import (
+	"errors"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/delegationsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signinsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signupsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2024-05-01/apimanagementservice"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandApiManagementDelegationSettings(input []any) delegationsettings.PortalDelegationSettings {
+	if len(input) == 0 {
+		return delegationsettings.PortalDelegationSettings{}
+	}
+
+	vs := input[0].(map[string]any)
+
+	props := delegationsettings.PortalDelegationSettingsProperties{
+		UserRegistration: &delegationsettings.RegistrationDelegationSettingsProperties{
+			Enabled: pointer.To(vs["user_registration_enabled"].(bool)),
+		},
+		Subscriptions: &delegationsettings.SubscriptionsDelegationSettingsProperties{
+			Enabled: pointer.To(vs["subscriptions_enabled"].(bool)),
+		},
+	}
+
+	validationKey := vs["validation_key"].(string)
+	if !vs["user_registration_enabled"].(bool) && !vs["subscriptions_enabled"].(bool) && validationKey == "" {
+		// for some reason we cannot leave this empty
+		props.ValidationKey = pointer.To("cGxhY2Vob2xkZXIxCg==")
+	}
+	if validationKey != "" {
+		props.ValidationKey = pointer.To(validationKey)
+	}
+
+	url := vs["url"].(string)
+	if !vs["user_registration_enabled"].(bool) && !vs["subscriptions_enabled"].(bool) && url == "" {
+		// for some reason we cannot leave this empty
+		props.Url = pointer.To("https://www.placeholder.com")
+	}
+	if url != "" {
+		props.Url = pointer.To(url)
+	}
+
+	return delegationsettings.PortalDelegationSettings{
+		Properties: &props,
+	}
+}

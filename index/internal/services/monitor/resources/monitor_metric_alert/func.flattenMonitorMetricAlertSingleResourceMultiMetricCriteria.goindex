@@ -1,0 +1,46 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_metric_alert
+import (
+	"fmt"
+	"maps"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2018-03-01/metricalerts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenMonitorMetricAlertSingleResourceMultiMetricCriteria(input *[]metricalerts.MetricCriteria) []any {
+	if input == nil || len(*input) == 0 {
+		return []any{}
+	}
+	criteria := (*input)[0]
+	metricName := criteria.MetricName
+	metricNamespace := criteria.MetricNamespace
+	timeAggregation := criteria.TimeAggregation
+
+	dimResult := make([]map[string]any, 0)
+	if criteria.Dimensions != nil {
+		for _, dimension := range *criteria.Dimensions {
+			dVal := make(map[string]any)
+			dVal["name"] = dimension.Name
+			dVal["operator"] = dimension.Operator
+			dVal["values"] = dimension.Values
+			dimResult = append(dimResult, dVal)
+		}
+	}
+
+	operator := string(criteria.Operator)
+	threshold := criteria.Threshold
+
+	skipMetricValidation := pointer.From(criteria.SkipMetricValidation)
+
+	return []any{
+		map[string]any{
+			"metric_namespace":       metricNamespace,
+			"metric_name":            metricName,
+			"aggregation":            timeAggregation,
+			"dimension":              dimResult,
+			"operator":               operator,
+			"threshold":              threshold,
+			"skip_metric_validation": skipMetricValidation,
+		},
+	}
+}

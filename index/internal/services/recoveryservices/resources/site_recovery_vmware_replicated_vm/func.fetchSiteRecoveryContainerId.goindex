@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/site_recovery_vmware_replicated_vm
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/machines"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/migrate/2020-01-01/runasaccounts"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationpolicies"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotecteditems"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotectioncontainers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/azuresdkhacks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func fetchSiteRecoveryContainerId(ctx context.Context, containerClient *replicationprotectioncontainers.ReplicationProtectionContainersClient, vaultId string) (string, error) {
+	vId, err := replicationprotectioncontainers.ParseVaultID(vaultId)
+	if err != nil {
+		return "", fmt.Errorf("parse %s: %+v", vaultId, err)
+	}
+
+	resp, err := containerClient.ListComplete(ctx, *vId)
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Items) != 1 {
+		return "", fmt.Errorf("there should be only 1 protection container in Recovery Vault, get: %v", len(resp.Items))
+	}
+
+	parsedID, err := replicationprotectioncontainers.ParseReplicationProtectionContainerIDInsensitively(*resp.Items[0].Id)
+	if err != nil {
+		return "", fmt.Errorf("parse %s: %+v", *resp.Items[0].Id, err)
+	}
+
+	return parsedID.ID(), nil
+}

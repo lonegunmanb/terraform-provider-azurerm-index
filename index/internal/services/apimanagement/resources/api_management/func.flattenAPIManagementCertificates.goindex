@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/resources/api_management
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/delegationsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signinsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signupsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2024-05-01/apimanagementservice"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenAPIManagementCertificates(d *pluginsdk.ResourceData, inputs *[]apimanagementservice.CertificateConfiguration) []any {
+	if inputs == nil || len(*inputs) == 0 {
+		return []any{}
+	}
+
+	outputs := []any{}
+	for i, input := range *inputs {
+		var pwd, encodedCertificate string
+		if v, ok := d.GetOk(fmt.Sprintf("certificate.%d.certificate_password", i)); ok {
+			pwd = v.(string)
+		}
+
+		if v, ok := d.GetOk(fmt.Sprintf("certificate.%d.encoded_certificate", i)); ok {
+			encodedCertificate = v.(string)
+		}
+
+		output := map[string]any{
+			"certificate_password": pwd,
+			"encoded_certificate":  encodedCertificate,
+			"store_name":           string(input.StoreName),
+			"expiry":               input.Certificate.Expiry,
+			"subject":              input.Certificate.Subject,
+			"thumbprint":           input.Certificate.Thumbprint,
+		}
+		outputs = append(outputs, output)
+	}
+	return outputs
+}

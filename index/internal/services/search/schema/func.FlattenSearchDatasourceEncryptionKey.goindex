@@ -1,0 +1,30 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/search/schema
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
+	"github.com/hashicorp/go-azure-sdk/data-plane/search/2025-09-01/datasources"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func FlattenSearchDatasourceEncryptionKey(input *datasources.SearchResourceEncryptionKey, d *pluginsdk.ResourceData) ([]SearchDatasourceEncryptionKeyModel, error) {
+	if input == nil {
+		return []SearchDatasourceEncryptionKeyModel{}, nil
+	}
+
+	keyVaultKeyId, err := keyvault.NewNestedItemID(input.KeyVaultUri, keyvault.NestedItemTypeKey, input.KeyVaultKeyName, input.KeyVaultKeyVersion)
+	if err != nil {
+		return []SearchDatasourceEncryptionKeyModel{}, err
+	}
+
+	ekModel := SearchDatasourceEncryptionKeyModel{
+		KeyVaultKeyId: keyVaultKeyId.ID(),
+	}
+	if ac := input.AccessCredentials; ac != nil {
+		ekModel.ClientId = ac.ApplicationId
+		if v, ok := d.GetOk("encryption_key.0.client_secret"); ok {
+			ekModel.ClientSecret = v.(string)
+		}
+	}
+
+	return []SearchDatasourceEncryptionKeyModel{ekModel}, nil
+}

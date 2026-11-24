@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/resources/api_management
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/delegationsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signinsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signupsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2024-05-01/apimanagementservice"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenApiManagementAdditionalLocations(input *[]apimanagementservice.AdditionalLocation) ([]any, error) {
+	results := make([]any, 0)
+	if input == nil {
+		return results, nil
+	}
+
+	for _, prop := range *input {
+		virtualNetworkConfiguration, err := flattenApiManagementVirtualNetworkConfiguration(prop.VirtualNetworkConfiguration)
+		if err != nil {
+			return results, err
+		}
+
+		results = append(results, map[string]any{
+			"capacity":                      int32(prop.Sku.Capacity),
+			"gateway_regional_url":          pointer.From(prop.GatewayRegionalURL),
+			"location":                      location.NormalizeNilable(pointer.To(prop.Location)),
+			"private_ip_addresses":          pointer.From(prop.PrivateIPAddresses),
+			"public_ip_address_id":          pointer.From(prop.PublicIPAddressId),
+			"public_ip_addresses":           pointer.From(prop.PublicIPAddresses),
+			"virtual_network_configuration": virtualNetworkConfiguration,
+			"zones":                         zones.FlattenUntyped(prop.Zones),
+			"gateway_disabled":              pointer.From(prop.DisableGateway),
+		})
+	}
+
+	return results, nil
+}

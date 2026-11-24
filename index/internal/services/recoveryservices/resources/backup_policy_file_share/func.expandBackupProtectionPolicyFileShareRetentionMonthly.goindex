@@ -1,0 +1,38 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/backup_policy_file_share
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2024-10-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandBackupProtectionPolicyFileShareRetentionMonthly(d *pluginsdk.ResourceData, times []string) *protectionpolicies.MonthlyRetentionSchedule {
+	if rb, ok := d.Get("retention_monthly").([]any); ok && len(rb) > 0 {
+		block := rb[0].(map[string]any)
+
+		scheduleFormat := protectionpolicies.RetentionScheduleFormatWeekly
+		var weekly *protectionpolicies.WeeklyRetentionFormat = nil
+		var daily *protectionpolicies.DailyRetentionFormat = nil
+		if v, ok := block["days"]; ok && v.(*pluginsdk.Set).Len() > 0 || block["include_last_days"].(bool) {
+			scheduleFormat = protectionpolicies.RetentionScheduleFormatDaily
+			daily = expandBackupProtectionPolicyFileShareRetentionDailyFormat(block)
+		} else {
+			weekly = expandBackupProtectionPolicyFileShareRetentionWeeklyFormat(block)
+		}
+
+		retention := protectionpolicies.MonthlyRetentionSchedule{
+			RetentionScheduleFormatType: &scheduleFormat,
+			RetentionScheduleDaily:      daily,
+			RetentionScheduleWeekly:     weekly,
+			RetentionTimes:              &times,
+			RetentionDuration: &protectionpolicies.RetentionDuration{
+				Count:        pointer.To(int64(block["count"].(int))),
+				DurationType: pointer.To(protectionpolicies.RetentionDurationTypeMonths),
+			},
+		}
+
+		return &retention
+	}
+
+	return nil
+}

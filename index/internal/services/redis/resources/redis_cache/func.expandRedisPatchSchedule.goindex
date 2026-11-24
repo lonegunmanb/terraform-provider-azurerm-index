@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redis/resources/redis_cache
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redis/2024-11-01/redispatchschedules"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redis/2024-11-01/redisresources"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandRedisPatchSchedule(d *pluginsdk.ResourceData) *redispatchschedules.RedisPatchSchedule {
+	v, ok := d.GetOk("patch_schedule")
+	if !ok {
+		return nil
+	}
+
+	scheduleValues := v.([]any)
+	entries := make([]redispatchschedules.ScheduleEntry, 0)
+	for _, scheduleValue := range scheduleValues {
+		vals := scheduleValue.(map[string]any)
+		dayOfWeek := vals["day_of_week"].(string)
+		maintenanceWindow := vals["maintenance_window"].(string)
+		startHourUtc := vals["start_hour_utc"].(int)
+
+		entries = append(entries, redispatchschedules.ScheduleEntry{
+			DayOfWeek:         redispatchschedules.DayOfWeek(dayOfWeek),
+			MaintenanceWindow: pointer.To(maintenanceWindow),
+			StartHourUtc:      int64(startHourUtc),
+		})
+	}
+
+	schedule := redispatchschedules.RedisPatchSchedule{
+		Properties: redispatchschedules.ScheduleEntries{
+			ScheduleEntries: entries,
+		},
+	}
+	return &schedule
+}

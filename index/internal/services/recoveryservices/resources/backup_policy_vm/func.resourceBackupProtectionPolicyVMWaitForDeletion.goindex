@@ -1,0 +1,28 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/backup_policy_vm
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2024-10-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func resourceBackupProtectionPolicyVMWaitForDeletion(ctx context.Context, client *protectionpolicies.ProtectionPoliciesClient, id protectionpolicies.BackupPolicyId, d *pluginsdk.ResourceData) error {
+	state := &pluginsdk.StateChangeConf{
+		MinTimeout: 30 * time.Second,
+		Delay:      10 * time.Second,
+		Pending:    []string{"Found"},
+		Target:     []string{"NotFound"},
+		Refresh:    resourceBackupProtectionPolicyVMRefreshFunc(ctx, client, id),
+		Timeout:    d.Timeout(pluginsdk.TimeoutDelete),
+	}
+
+	if _, err := state.WaitForStateContext(ctx); err != nil {
+		return fmt.Errorf("waiting for %s to provision: %+v", id, err)
+	}
+
+	return nil
+}

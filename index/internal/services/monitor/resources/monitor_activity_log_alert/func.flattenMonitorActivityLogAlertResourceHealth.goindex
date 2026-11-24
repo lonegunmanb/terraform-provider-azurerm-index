@@ -1,0 +1,33 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_activity_log_alert
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2020-10-01/activitylogalertsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenMonitorActivityLogAlertResourceHealth(input activitylogalertsapis.AlertRuleAllOfCondition, result map[string]any) {
+	rhResult := make(map[string]any)
+
+	for _, condition := range input.AllOf {
+		if condition.Field == nil && condition.AnyOf != nil && len(*condition.AnyOf) > 0 {
+			values := []string{}
+			for _, cond := range *condition.AnyOf {
+				if cond.Field != nil && cond.Equals != nil {
+					values = append(values, *cond.Equals)
+				}
+				switch strings.ToLower(*cond.Field) {
+				case "properties.currenthealthstatus":
+					rhResult["current"] = values
+				case "properties.previoushealthstatus":
+					rhResult["previous"] = values
+				case "properties.cause":
+					rhResult["reason"] = values
+				}
+			}
+		}
+	}
+
+	result["resource_health"] = []any{rhResult}
+}

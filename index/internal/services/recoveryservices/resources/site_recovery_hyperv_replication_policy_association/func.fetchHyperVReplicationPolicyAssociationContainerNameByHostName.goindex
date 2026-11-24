@@ -1,0 +1,34 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/site_recovery_hyperv_replication_policy_association
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationfabrics"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotectioncontainermappings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicessiterecovery/2024-04-01/replicationprotectioncontainers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/helpers"
+)
+func fetchHyperVReplicationPolicyAssociationContainerNameByHostName(ctx context.Context, containerClient *replicationprotectioncontainers.ReplicationProtectionContainersClient, fabricId replicationfabrics.ReplicationFabricId) (string, error) {
+	id, err := replicationprotectioncontainers.ParseReplicationFabricID(fabricId.ID())
+	if err != nil {
+		return "", fmt.Errorf("parsing %s: %+v", fabricId.ID(), err)
+	}
+
+	resp, err := containerClient.ListByReplicationFabricsComplete(ctx, *id)
+	if err != nil {
+		return "", fmt.Errorf("listing containers: %+v", err)
+	}
+
+	if len(resp.Items) == 0 || len(resp.Items) > 1 {
+		return "", fmt.Errorf("expected one container but got %d", len(resp.Items))
+	}
+
+	if resp.Items[0].Id == nil {
+		return "", fmt.Errorf("container id is nil")
+	}
+
+	return helpers.HandleAzureSdkForGoBug2824(*resp.Items[0].Id), nil
+}

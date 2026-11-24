@@ -1,0 +1,40 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/resources/mssql_job_step
+import (
+	"context"
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2025-01-01/jobcredentials"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2025-01-01/jobsteps"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2025-01-01/jobtargetgroups"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func (r Resource) CustomizeDiff() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 10 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			var model MsSqlJobStepResourceModel
+			if err := metadata.DecodeDiff(&model); err != nil {
+				return fmt.Errorf("decoding: %+v", err)
+			}
+
+			if model.MaximumRetryIntervalSeconds <= model.InitialRetryIntervalSeconds {
+				return fmt.Errorf("`maximum_retry_interval_seconds` must be greater than `initial_retry_interval_seconds`")
+			}
+
+			// Once set, `job_credential_id` cannot be removed
+			// https://github.com/Azure/azure-rest-api-specs/issues/35881
+			if o, n := metadata.ResourceDiff.GetChange("job_credential_id"); o.(string) != "" && n.(string) == "" {
+				if err := metadata.ResourceDiff.ForceNew("job_credential_id"); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+	}
+}

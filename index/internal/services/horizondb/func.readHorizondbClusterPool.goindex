@@ -1,0 +1,44 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/horizondb
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/passwordauthentications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/pools"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func readHorizondbClusterPool(ctx context.Context, metadata sdk.ResourceMetaData, id clusters.ClusterId, cluster *clusters.Cluster) (*pools.Pool, error) {
+	if cluster == nil || cluster.Properties == nil {
+		return nil, fmt.Errorf("retrieving %s: cluster properties are missing", id)
+	}
+
+	poolId, err := pools.ParsePoolIDInsensitively(pointer.From(cluster.Properties.ReadWritePool.DesignatedPoolResourceId))
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := metadata.Client.HorizonDB.PoolsClient.Get(ctx, *poolId)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving designated read/write pool %s: %+v", poolId, err)
+	}
+
+	if _, err := flattenHorizondbClusterPool(result.Model); err != nil {
+		return nil, err
+	}
+	return result.Model, nil
+}

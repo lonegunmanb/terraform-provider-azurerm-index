@@ -1,0 +1,59 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/horizondb
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/passwordauthentications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/pools"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func validateHorizondbClusterPoolConfig(config cty.Value) error {
+	if !config.IsKnown() || config.IsNull() {
+		return nil
+	}
+
+	block := config.GetAttr("read_write_pool")
+	if !block.IsKnown() || block.IsNull() || block.LengthInt() == 0 {
+		return nil
+	}
+
+	pool := block.AsValueSlice()[0]
+	if !pool.IsKnown() || pool.IsNull() {
+		return nil
+	}
+
+	name, clusterName := pool.GetAttr("name"), config.GetAttr("name")
+	if name.IsKnown() && !name.IsNull() && clusterName.IsKnown() && !clusterName.IsNull() && strings.EqualFold(name.AsString(), clusterName.AsString()) {
+		return errors.New("`read_write_pool.name` must differ from the cluster `name`")
+	}
+
+	count, mode := pool.GetAttr("node_count"), pool.GetAttr("high_availability_mode")
+	if count.IsKnown() && !count.IsNull() && mode.IsKnown() && !mode.IsNull() {
+		nodes, _ := count.AsBigFloat().Int64()
+
+		if nodes == 1 && mode.AsString() != string(pools.PoolHighAvailabilityModeDisabled) {
+			return errors.New("`read_write_pool.high_availability_mode` must be `Disabled` for one node")
+		}
+
+		if nodes > 1 && mode.AsString() == string(pools.PoolHighAvailabilityModeDisabled) {
+			return errors.New("`read_write_pool.high_availability_mode` must not be `Disabled` for two or more nodes")
+		}
+	}
+
+	return nil
+}

@@ -1,0 +1,45 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_activity_log_alert
+import (
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2020-10-01/activitylogalertsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandServiceHealth(serviceHealth []any, conditions []activitylogalertsapis.AlertRuleAnyOfOrLeafCondition) []activitylogalertsapis.AlertRuleAnyOfOrLeafCondition {
+	for _, serviceItem := range serviceHealth {
+		if serviceItem == nil {
+			continue
+		}
+		vs := serviceItem.(map[string]any)
+		rv := vs["locations"].(*pluginsdk.Set)
+		if len(rv.List()) > 0 {
+			conditions = append(conditions, activitylogalertsapis.AlertRuleAnyOfOrLeafCondition{
+				Field:       pointer.To("properties.impactedServices[*].ImpactedRegions[*].RegionName"),
+				ContainsAny: pluginsdk.ExpandStringSlice(rv.List()),
+			})
+		}
+
+		ev := vs["events"].(*pluginsdk.Set)
+		if len(ev.List()) > 0 {
+			ruleLeafCondition := make([]activitylogalertsapis.AlertRuleLeafCondition, 0)
+			for _, e := range ev.List() {
+				event := e.(string)
+				ruleLeafCondition = append(ruleLeafCondition, activitylogalertsapis.AlertRuleLeafCondition{
+					Field:  pointer.To("properties.incidentType"),
+					Equals: pointer.To(event),
+				})
+			}
+			conditions = append(conditions, activitylogalertsapis.AlertRuleAnyOfOrLeafCondition{
+				AnyOf: &ruleLeafCondition,
+			})
+		}
+
+		sv := vs["services"].(*pluginsdk.Set)
+		if len(sv.List()) > 0 {
+			conditions = append(conditions, activitylogalertsapis.AlertRuleAnyOfOrLeafCondition{
+				Field:       pointer.To("properties.impactedServices[*].ServiceName"),
+				ContainsAny: pluginsdk.ExpandStringSlice(sv.List()),
+			})
+		}
+	}
+	return conditions
+}

@@ -1,0 +1,35 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/backup_policy_file_share
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2024-10-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenBackupProtectionPolicyFileShareSchedule(schedule protectionpolicies.SimpleSchedulePolicy) ([]any, error) {
+	block := map[string]any{}
+
+	block["frequency"] = pointer.FromEnum(schedule.ScheduleRunFrequency)
+
+	if times := schedule.ScheduleRunTimes; times != nil && len(*times) > 0 {
+		policyTime, _ := time.Parse(time.RFC3339, (*times)[0])
+		block["time"] = policyTime.Format("15:04")
+	}
+
+	if hourly := schedule.HourlySchedule; hourly != nil {
+		hourlyBlock := make(map[string]any, 0)
+		if hourly.ScheduleWindowStartTime != nil {
+			startTime, err := time.Parse(time.RFC3339, *hourly.ScheduleWindowStartTime)
+			if err != nil {
+				return nil, fmt.Errorf("error parsing schedule window start time: %s", err)
+			}
+			hourlyBlock["start_time"] = startTime.Format("15:04")
+		}
+		hourlyBlock["interval"] = pointer.From(hourly.Interval)
+		hourlyBlock["window_duration"] = pointer.From(hourly.ScheduleWindowDuration)
+		block["hourly"] = []any{hourlyBlock}
+	}
+
+	return []any{block}, nil
+}

@@ -1,0 +1,71 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_autoscale_setting
+import (
+	"fmt"
+	"maps"
+	"strconv"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2022-10-01/autoscalesettings"
+)
+func flattenAzureRmMonitorAutoScaleSettingRules(input []autoscalesettings.ScaleRule) ([]any, error) {
+	if input == nil {
+		return []any{}, nil
+	}
+
+	results := make([]any, 0)
+	for _, rule := range input {
+		result := make(map[string]any)
+
+		metricTriggers := make([]any, 0)
+		var metricNamespace string
+		var dividePerInstance bool
+
+		if v := rule.MetricTrigger.MetricNamespace; v != nil {
+			metricNamespace = *v
+		}
+
+		if rule.MetricTrigger.DividePerInstance != nil {
+			dividePerInstance = *rule.MetricTrigger.DividePerInstance
+		}
+
+		metricTriggers = append(metricTriggers, map[string]any{
+			"metric_name":              rule.MetricTrigger.MetricName,
+			"metric_namespace":         metricNamespace,
+			"metric_resource_id":       rule.MetricTrigger.MetricResourceUri,
+			"time_grain":               rule.MetricTrigger.TimeGrain,
+			"statistic":                string(rule.MetricTrigger.Statistic),
+			"time_window":              rule.MetricTrigger.TimeWindow,
+			"time_aggregation":         string(rule.MetricTrigger.TimeAggregation),
+			"operator":                 string(rule.MetricTrigger.Operator),
+			"threshold":                rule.MetricTrigger.Threshold,
+			"dimensions":               flattenAzureRmMonitorAutoScaleSettingRulesDimensions(rule.MetricTrigger.Dimensions),
+			"divide_by_instance_count": dividePerInstance,
+		})
+
+		result["metric_trigger"] = metricTriggers
+
+		scaleActions := make([]any, 0)
+		v := rule.ScaleAction
+		action := make(map[string]any)
+
+		action["direction"] = string(v.Direction)
+		action["type"] = string(v.Type)
+		action["cooldown"] = v.Cooldown
+
+		if val := v.Value; val != nil && *val != "" {
+			i, err := strconv.Atoi(*val)
+			if err != nil {
+				return nil, fmt.Errorf("`value` %q was not convertible to an int: %s", *val, err)
+			}
+			action["value"] = i
+		}
+
+		scaleActions = append(scaleActions, action)
+
+		result["scale_action"] = scaleActions
+
+		results = append(results, result)
+	}
+
+	return results, nil
+}

@@ -1,0 +1,78 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/horizondb
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/resourceids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/clusters"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/passwordauthentications"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/horizondb/2026-10-01-preview/pools"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+)
+func updateHorizondbClusterPool(ctx context.Context, metadata sdk.ResourceMetaData, clusterId clusters.ClusterId, state HorizondbClusterPool) error {
+	id := pools.NewPoolID(clusterId.SubscriptionId, clusterId.ResourceGroupName, clusterId.ClusterName, state.Name)
+
+	client := metadata.Client.HorizonDB.PoolsClient
+	existing, err := client.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("retrieving %s: %+v", id, err)
+	}
+	if existing.Model == nil || existing.Model.Properties == nil {
+		return fmt.Errorf("retrieving %s: pool properties are missing", id)
+	}
+
+	props := existing.Model.Properties
+	payload := pools.Pool{
+		Properties: &pools.PoolProperties{
+			ComputeModel:     props.ComputeModel,
+			HighAvailability: props.HighAvailability,
+			NodeCount:        props.NodeCount,
+			// ParameterGroup.SyncStatus is read-only and cannot be sent in the update payload.
+			ParameterGroup: &pools.PoolParameterGroupReference{
+				ApplyMethod:              props.ParameterGroup.ApplyMethod,
+				ParameterGroupResourceId: props.ParameterGroup.ParameterGroupResourceId,
+			},
+			ScheduledMaintenance: props.ScheduledMaintenance,
+		},
+	}
+
+	// Compute is in separate change group and cannot be updated with HA/node count.
+	if metadata.ResourceData.HasChange("read_write_pool.0.compute") {
+		compute := state.Compute[0]
+		payload.Properties.ComputeModel = pools.PoolComputeModel{
+			Type:              pools.PoolComputeModelTypeProvisioned,
+			ComputeProcessor:  pools.ComputeProcessorType(compute.Processor),
+			ComputeGeneration: compute.Generation,
+			VCores:            compute.VCores,
+		}
+		if err := client.CreateOrReplaceThenPoll(ctx, id, payload); err != nil {
+			return fmt.Errorf("updating compute for %s: %+v", id, err)
+		}
+	}
+
+	if metadata.ResourceData.HasChange("read_write_pool.0.high_availability_mode") {
+		payload.Properties.HighAvailability.Mode = pools.PoolHighAvailabilityMode(state.HighAvailabilityMode)
+	}
+
+	if metadata.ResourceData.HasChange("read_write_pool.0.node_count") {
+		payload.Properties.NodeCount = state.NodeCount
+	}
+
+	if err := client.CreateOrReplaceThenPoll(ctx, id, payload); err != nil {
+		return fmt.Errorf("updating %s: %+v", id, err)
+	}
+	return nil
+}

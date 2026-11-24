@@ -1,0 +1,98 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/resources/api_management
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/zones"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/delegationsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signinsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/signupsettings"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2022-08-01/tenantaccess"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/apimanagement/2024-05-01/apimanagementservice"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/apimanagement/schemaz"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenApiManagementHostnameConfigurations(input *[]apimanagementservice.HostnameConfiguration, d *pluginsdk.ResourceData) []any {
+	results := make([]any, 0)
+	if input == nil {
+		return results
+	}
+
+	managementResults := make([]any, 0)
+	portalResults := make([]any, 0)
+	developerPortalResults := make([]any, 0)
+	proxyResults := make([]any, 0)
+	scmResults := make([]any, 0)
+
+	for _, config := range *input {
+		output := make(map[string]any)
+
+		output["host_name"] = config.HostName
+		output["negotiate_client_certificate"] = pointer.From(config.NegotiateClientCertificate)
+		output["key_vault_certificate_id"] = pointer.From(config.KeyVaultId)
+		output["ssl_keyvault_identity_client_id"] = pointer.From(config.IdentityClientId)
+
+		if config.Certificate != nil {
+			if config.Certificate.Expiry != "" {
+				output["expiry"] = config.Certificate.Expiry
+			}
+			output["thumbprint"] = config.Certificate.Thumbprint
+			output["subject"] = config.Certificate.Subject
+		}
+
+		output["certificate_source"] = pointer.From(config.CertificateSource)
+		output["certificate_status"] = pointer.From(config.CertificateStatus)
+
+		var configType string
+		switch strings.ToLower(string(config.Type)) {
+		case strings.ToLower(string(apimanagementservice.HostnameTypeProxy)):
+			// only set SSL binding for proxy types
+			output["default_ssl_binding"] = pointer.From(config.DefaultSslBinding)
+			proxyResults = append(proxyResults, output)
+			configType = "proxy"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeManagement)):
+			managementResults = append(managementResults, output)
+			configType = "management"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypePortal)):
+			portalResults = append(portalResults, output)
+			configType = "portal"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeDeveloperPortal)):
+			developerPortalResults = append(developerPortalResults, output)
+			configType = "developer_portal"
+
+		case strings.ToLower(string(apimanagementservice.HostnameTypeScm)):
+			scmResults = append(scmResults, output)
+			configType = "scm"
+		}
+
+		existingHostnames := d.Get("hostname_configuration").([]any)
+		if len(existingHostnames) > 0 && configType != "" {
+			v := existingHostnames[0].(map[string]any)
+
+			if valsRaw, ok := v[configType]; ok {
+				vals := valsRaw.([]any)
+				schemaz.CopyCertificateAndPassword(vals, config.HostName, output)
+			}
+		}
+	}
+
+	if len(managementResults) == 0 && len(portalResults) == 0 && len(developerPortalResults) == 0 && len(proxyResults) == 0 && len(scmResults) == 0 {
+		return []any{}
+	}
+
+	return []any{
+		map[string]any{
+			"management":       managementResults,
+			"portal":           portalResults,
+			"developer_portal": developerPortalResults,
+			"proxy":            proxyResults,
+			"scm":              scmResults,
+		},
+	}
+}

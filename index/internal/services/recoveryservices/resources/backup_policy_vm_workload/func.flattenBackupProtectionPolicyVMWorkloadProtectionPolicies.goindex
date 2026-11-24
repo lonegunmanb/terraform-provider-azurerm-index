@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/backup_policy_vm_workload
+import (
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2024-10-01/protectionpolicies"
+)
+func flattenBackupProtectionPolicyVMWorkloadProtectionPolicies(input *[]protectionpolicies.SubProtectionPolicy) []ProtectionPolicy {
+	results := make([]ProtectionPolicy, 0)
+	if input == nil {
+		return results
+	}
+
+	for _, item := range *input {
+		result := ProtectionPolicy{
+			PolicyType: pointer.FromEnum(item.PolicyType),
+			Backup:     flattenBackupProtectionPolicyVMWorkloadSchedulePolicy(item.SchedulePolicy, pointer.From(item.PolicyType)),
+		}
+
+		if retentionPolicy := item.RetentionPolicy; retentionPolicy != nil {
+			if longTermRetentionPolicy, ok := retentionPolicy.(protectionpolicies.LongTermRetentionPolicy); ok {
+				result.RetentionDaily = flattenBackupProtectionPolicyVMWorkloadRetentionDaily(longTermRetentionPolicy.DailySchedule)
+				result.RetentionWeekly = flattenBackupProtectionPolicyVMWorkloadRetentionWeekly(longTermRetentionPolicy.WeeklySchedule)
+				result.RetentionMonthly = flattenBackupProtectionPolicyVMWorkloadRetentionMonthly(longTermRetentionPolicy.MonthlySchedule)
+				result.RetentionYearly = flattenBackupProtectionPolicyVMWorkloadRetentionYearly(longTermRetentionPolicy.YearlySchedule)
+			} else {
+				simpleRetentionPolicy, _ := retentionPolicy.(protectionpolicies.SimpleRetentionPolicy)
+				result.SimpleRetention = flattenBackupProtectionPolicyVMWorkloadSimpleRetention(simpleRetentionPolicy.RetentionDuration)
+			}
+		}
+
+		results = append(results, result)
+	}
+
+	return results
+}

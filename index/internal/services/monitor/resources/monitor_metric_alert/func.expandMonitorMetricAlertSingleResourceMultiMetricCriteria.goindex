@@ -1,0 +1,31 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_metric_alert
+import (
+	"fmt"
+	"time"
+
+	"github.com/Azure/go-autorest/autorest/date"
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2018-03-01/metricalerts"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/helpers"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandMonitorMetricAlertSingleResourceMultiMetricCriteria(input []any) metricalerts.MetricAlertCriteria {
+	criteria := make([]metricalerts.MetricCriteria, 0)
+	for i, item := range input {
+		v := item.(map[string]any)
+		dimensions := expandMonitorMetricDimension(v["dimension"].([]any))
+		criteria = append(criteria, metricalerts.MetricCriteria{
+			Name:                 fmt.Sprintf("Metric%d", i+1),
+			MetricNamespace:      pointer.To(v["metric_namespace"].(string)),
+			MetricName:           v["metric_name"].(string),
+			TimeAggregation:      metricalerts.AggregationTypeEnum(v["aggregation"].(string)),
+			Dimensions:           &dimensions,
+			Operator:             metricalerts.Operator(v["operator"].(string)),
+			Threshold:            v["threshold"].(float64),
+			SkipMetricValidation: pointer.To(v["skip_metric_validation"].(bool)),
+		})
+	}
+	return &metricalerts.MetricAlertSingleResourceMultipleMetricCriteria{
+		AllOf: &criteria,
+	}
+}

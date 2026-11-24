@@ -1,0 +1,63 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/resources/mssql_virtual_machine
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandSqlVirtualMachineAutoBackupSettings(input []any) (*sqlvirtualmachines.AutoBackupSettings, error) {
+	ret := sqlvirtualmachines.AutoBackupSettings{
+		Enable: pointer.To(false),
+	}
+
+	if len(input) > 0 {
+		config := input[0].(map[string]any)
+		ret.Enable = pointer.To(true)
+
+		if v, ok := config["retention_period_in_days"]; ok {
+			ret.RetentionPeriod = pointer.To(int64(v.(int)))
+		}
+		if v, ok := config["storage_blob_endpoint"]; ok {
+			ret.StorageAccountURL = pointer.To(v.(string))
+		}
+		if v, ok := config["storage_account_access_key"]; ok {
+			ret.StorageAccessKey = pointer.To(v.(string))
+		}
+
+		if v, ok := config["encryption_password"]; ok && v.(string) != "" {
+			ret.EnableEncryption = pointer.To(true)
+			ret.Password = pointer.To(v.(string))
+		} else {
+			ret.EnableEncryption = pointer.To(false)
+		}
+
+		if v, ok := config["system_databases_backup_enabled"]; ok {
+			ret.BackupSystemDbs = pointer.To(v.(bool))
+		}
+
+		ret.BackupScheduleType = pointer.To(sqlvirtualmachines.BackupScheduleTypeAutomated)
+		if v, ok := config["manual_schedule"]; ok && len(v.([]any)) > 0 {
+			manualSchedule := v.([]any)[0].(map[string]any)
+			ret.BackupScheduleType = pointer.To(sqlvirtualmachines.BackupScheduleTypeManual)
+
+			fullBackupFrequency := sqlvirtualmachines.FullBackupFrequencyType(manualSchedule["full_backup_frequency"].(string))
+
+			daysOfWeek := manualSchedule["days_of_week"].(*pluginsdk.Set).List()
+			if len(daysOfWeek) > 0 {
+				if !strings.EqualFold(string(fullBackupFrequency), string(sqlvirtualmachines.FullBackupFrequencyTypeWeekly)) {
+					return nil, fmt.Errorf("`manual_schedule.0.days_of_week` can only be specified when `manual_schedule.0.full_backup_frequency` is set to `Weekly`")
+				}
+				ret.DaysOfWeek = expandSqlVirtualMachineAutoBackupSettingsDaysOfWeek(daysOfWeek)
+			}
+
+			ret.FullBackupFrequency = &fullBackupFrequency
+			ret.FullBackupStartTime = pointer.To(int64(manualSchedule["full_backup_start_hour"].(int)))
+			ret.FullBackupWindowHours = pointer.To(int64(manualSchedule["full_backup_window_in_hours"].(int)))
+			ret.LogBackupFrequency = pointer.To(int64(manualSchedule["log_backup_frequency_in_minutes"].(int)))
+		}
+	}
+
+	return &ret, nil
+}

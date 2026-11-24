@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssql/resources/mssql_virtual_machine_availability_group_listener
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/loadbalancers"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/availabilitygrouplisteners"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sqlvirtualmachine/2023-10-01/sqlvirtualmachines"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func expandMsSqlVirtualMachineAvailabilityGroupListenerReplicas(replicas []ReplicaMsSqlVirtualMachineAvailabilityGroupListener) (*[]availabilitygrouplisteners.AgReplica, error) {
+	results := make([]availabilitygrouplisteners.AgReplica, 0)
+
+	for _, rep := range replicas {
+		replica := availabilitygrouplisteners.AgReplica{
+			Role:              pointer.ToEnum[availabilitygrouplisteners.Role](rep.Role),
+			Commit:            pointer.ToEnum[availabilitygrouplisteners.Commit](rep.Commit),
+			Failover:          pointer.ToEnum[availabilitygrouplisteners.Failover](rep.FailoverMode),
+			ReadableSecondary: pointer.ToEnum[availabilitygrouplisteners.ReadableSecondary](rep.ReadableSecondary),
+		}
+
+		sqlVirtualMachineId := rep.SqlVirtualMachineId
+		if sqlVirtualMachineId != "" {
+			id, err := sqlvirtualmachines.ParseSqlVirtualMachineID(sqlVirtualMachineId)
+			if err != nil {
+				return nil, err
+			}
+			sqlVirtualMachineId = id.ID()
+		}
+		replica.SqlVirtualMachineInstanceId = pointer.To(sqlVirtualMachineId)
+
+		results = append(results, replica)
+	}
+	return &results, nil
+}

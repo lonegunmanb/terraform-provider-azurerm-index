@@ -1,0 +1,27 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/rules
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tools/pr-guide-suggestions/schematree"
+)
+func avoidSingularTimeSuffix(n *schematree.Node, report ReportFunc) {
+	for _, unit := range timeDurationSuffixes {
+		singularSuffix := "_" + strings.TrimSuffix(unit, "s")
+		if !strings.HasSuffix(n.Name, singularSuffix) {
+			continue
+		}
+		prefix := strings.TrimSuffix(n.Name, singularSuffix)
+		if prefix == "" {
+			break
+		}
+		prefix = strings.TrimSuffix(prefix, "_in")
+		preferred := prefix + "_in_" + unit
+		report(n,
+			fmt.Sprintf("property %q uses a singular time suffix; prefer %q", n.Path, preferred),
+			&Fix{Suggestion: fmt.Sprintf("rename %q to %q", n.Name, preferred), Rename: preferred},
+		)
+		break
+	}
+}

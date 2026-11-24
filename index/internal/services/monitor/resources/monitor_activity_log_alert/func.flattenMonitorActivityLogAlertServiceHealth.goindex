@@ -1,0 +1,33 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/monitor/resources/monitor_activity_log_alert
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/insights/2020-10-01/activitylogalertsapis"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenMonitorActivityLogAlertServiceHealth(input activitylogalertsapis.AlertRuleAllOfCondition, result map[string]any) {
+	shResult := make(map[string]any)
+	for _, condition := range input.AllOf {
+		if condition.Field != nil && condition.ContainsAny != nil && len(*condition.ContainsAny) > 0 {
+			switch strings.ToLower(*condition.Field) {
+			case "properties.impactedservices[*].impactedregions[*].regionname":
+				shResult["locations"] = *condition.ContainsAny
+			case "properties.impactedservices[*].servicename":
+				shResult["services"] = *condition.ContainsAny
+			}
+		}
+		if condition.Field == nil && condition.AnyOf != nil && len(*condition.AnyOf) > 0 {
+			events := []string{}
+			for _, evCond := range *condition.AnyOf {
+				if evCond.Field != nil && evCond.Equals != nil {
+					events = append(events, *evCond.Equals)
+				}
+			}
+			shResult["events"] = events
+		}
+	}
+
+	result["service_health"] = []any{shResult}
+}

@@ -1,0 +1,36 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/recoveryservices/resources/backup_policy_vm
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/recoveryservicesbackup/2024-10-01/protectionpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func flattenBackupProtectionPolicyVMRetentionYearly(yearly *protectionpolicies.YearlyRetentionSchedule) []any {
+	block := map[string]any{}
+
+	if duration := yearly.RetentionDuration; duration != nil {
+		if v := duration.Count; v != nil {
+			block["count"] = *v
+		}
+	}
+
+	if weekly := yearly.RetentionScheduleWeekly; weekly != nil {
+		block["weekdays"], block["weeks"] = flattenBackupProtectionPolicyVMRetentionWeeklyFormat(weekly)
+	}
+
+	if months := yearly.MonthsOfYear; months != nil {
+		slice := make([]any, 0)
+		for _, d := range *months {
+			slice = append(slice, string(d))
+		}
+		block["months"] = pluginsdk.NewSet(pluginsdk.HashString, slice)
+	}
+
+	if daily := yearly.RetentionScheduleDaily; daily != nil {
+		block["days"], block["include_last_days"] = flattenBackupProtectionPolicyVMRetentionDailyFormat(daily)
+	}
+
+	return []any{block}
+}

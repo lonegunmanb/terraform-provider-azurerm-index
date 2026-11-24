@@ -1,0 +1,65 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/resources/redhat_openshift_cluster
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/identity"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2025-07-25/openshiftclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+)
+func (Resource) flatten(metadata sdk.ResourceMetaData, id openshiftclusters.OpenShiftClusterId, model *openshiftclusters.OpenShiftCluster, config RedHatOpenShiftClusterModel) error {
+	state := RedHatOpenShiftClusterModel{
+		Name:          id.OpenShiftClusterName,
+		ResourceGroup: id.ResourceGroupName,
+	}
+
+	if model != nil {
+		state.Location = location.Normalize(model.Location)
+		state.Tags = pointer.From(model.Tags)
+
+		flattenedIdentity, err := identity.FlattenUserAssignedMapToModel(model.Identity)
+		if err != nil {
+			return fmt.Errorf("flattening `identity`: %+v", err)
+		}
+		state.Identity = pointer.From(flattenedIdentity)
+
+		if props := model.Properties; props != nil {
+			clusterProfile, err := flattenOpenShiftClusterProfile(props.ClusterProfile, config)
+			if err != nil {
+				return fmt.Errorf("flatten cluster profile: %+v", err)
+			}
+			state.ClusterProfile = *clusterProfile
+
+			state.ServicePrincipal = flattenOpenShiftServicePrincipalProfile(props.ServicePrincipalProfile, config)
+			state.NetworkProfile = flattenOpenShiftNetworkProfile(props.NetworkProfile)
+			state.MainProfile = flattenOpenShiftMainProfile(props.MasterProfile)
+			state.ApiServerProfile = flattenOpenShiftAPIServerProfile(props.ApiserverProfile)
+			state.IngressProfile = flattenOpenShiftIngressProfiles(props.IngressProfiles)
+
+			platformWorkloadIdentityProfile, err := flattenOpenShiftPlatformWorkloadIdentityProfile(props.PlatformWorkloadIdentityProfile)
+			if err != nil {
+				return fmt.Errorf("flattening `platform_workload_identity_profile`: %+v", err)
+			}
+			state.PlatformWorkloadIdentityProfile = platformWorkloadIdentityProfile
+
+			workerProfiles, err := flattenOpenShiftWorkerProfiles(props.WorkerProfiles)
+			if err != nil {
+				return fmt.Errorf("flattening worker profiles: %+v", err)
+			}
+			state.WorkerProfile = workerProfiles
+
+			if props.ConsoleProfile != nil {
+				state.ConsoleUrl = pointer.From(props.ConsoleProfile.Url)
+			}
+		}
+	}
+
+	if err := pluginsdk.SetResourceIdentityData(metadata.ResourceData, &id); err != nil {
+		return err
+	}
+
+	return metadata.Encode(&state)
+}

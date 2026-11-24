@@ -1,0 +1,49 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonschema"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/location"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/tags"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/network/2025-07-01/webapplicationfirewallpolicies"
+	"github.com/hashicorp/go-version"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/azure"
+	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway/migration"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/appgateway/validate"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/validation"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandWebApplicationFirewallPolicyExceptions(input []any) *[]webapplicationfirewallpolicies.ExceptionEntry {
+	results := make([]webapplicationfirewallpolicies.ExceptionEntry, 0)
+	for _, item := range input {
+		v := item.(map[string]any)
+		result := webapplicationfirewallpolicies.ExceptionEntry{
+			MatchVariable:      webapplicationfirewallpolicies.ExceptionEntryMatchVariable(v["match_variable"].(string)),
+			ValueMatchOperator: webapplicationfirewallpolicies.ExceptionEntryValueMatchOperator(v["value_match_operator"].(string)),
+		}
+		if managedRuleSets := v["exception_rule_set"].([]any); len(managedRuleSets) > 0 {
+			result.ExceptionManagedRuleSets = expandWebApplicationFirewallPolicyExceptionManagedRuleSets(managedRuleSets)
+		}
+		if selector := v["selector"].(string); selector != "" {
+			result.Selector = pointer.To(selector)
+		}
+		if selectorMatchOperator := v["selector_match_operator"].(string); selectorMatchOperator != "" {
+			result.SelectorMatchOperator = pointer.ToEnum[webapplicationfirewallpolicies.ExceptionEntrySelectorMatchOperator](selectorMatchOperator)
+		}
+		if values := v["values"].([]any); len(values) > 0 {
+			result.Values = pluginsdk.ExpandStringSlice(values)
+		}
+		results = append(results, result)
+	}
+	return &results
+}

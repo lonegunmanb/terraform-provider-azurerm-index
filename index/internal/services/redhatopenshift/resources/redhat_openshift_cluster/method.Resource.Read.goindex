@@ -1,0 +1,39 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/redhatopenshift/resources/redhat_openshift_cluster
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/redhatopenshift/2025-07-25/openshiftclusters"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/sdk"
+)
+func (r Resource) Read() sdk.ResourceFunc {
+	return sdk.ResourceFunc{
+		Timeout: 5 * time.Minute,
+		Func: func(ctx context.Context, metadata sdk.ResourceMetaData) error {
+			client := metadata.Client.RedHatOpenShift.OpenShiftClustersClient
+
+			id, err := openshiftclusters.ParseOpenShiftClusterID(metadata.ResourceData.Id())
+			if err != nil {
+				return err
+			}
+
+			resp, err := client.Get(ctx, *id)
+			if err != nil {
+				if response.WasNotFound(resp.HttpResponse) {
+					return metadata.MarkAsGone(id)
+				}
+
+				return fmt.Errorf("retrieving %s: %+v", id, err)
+			}
+
+			var config RedHatOpenShiftClusterModel
+			if err := metadata.Decode(&config); err != nil {
+				return fmt.Errorf("decoding %+v", err)
+			}
+
+			return r.flatten(metadata, *id, resp.Model, config)
+		},
+	}
+}

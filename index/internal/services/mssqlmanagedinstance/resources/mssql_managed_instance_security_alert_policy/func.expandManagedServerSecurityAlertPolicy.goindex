@@ -1,0 +1,61 @@
+package github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/resources/mssql_managed_instance_security_alert_policy
+import (
+	"fmt"
+
+	"github.com/hashicorp/go-azure-helpers/lang/pointer"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/commonids"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/sql/2025-01-01/managedserversecurityalertpolicies"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/services/mssqlmanagedinstance/parse"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
+	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
+)
+func expandManagedServerSecurityAlertPolicy(d *pluginsdk.ResourceData) *managedserversecurityalertpolicies.ManagedServerSecurityAlertPolicy {
+	state := managedserversecurityalertpolicies.SecurityAlertsPolicyStateDisabled
+
+	if d.Get("enabled").(bool) {
+		state = managedserversecurityalertpolicies.SecurityAlertsPolicyStateEnabled
+	}
+
+	policy := managedserversecurityalertpolicies.ManagedServerSecurityAlertPolicy{
+		Properties: &managedserversecurityalertpolicies.SecurityAlertsPolicyProperties{
+			State: state,
+		},
+	}
+
+	props := policy.Properties
+
+	if v, ok := d.GetOk("disabled_alerts"); ok {
+		disabledAlerts := make([]string, 0)
+		for _, v := range v.(*pluginsdk.Set).List() {
+			disabledAlerts = append(disabledAlerts, v.(string))
+		}
+		props.DisabledAlerts = &disabledAlerts
+	}
+
+	if v, ok := d.GetOk("email_addresses"); ok {
+		emailAddresses := make([]string, 0)
+		for _, v := range v.(*pluginsdk.Set).List() {
+			emailAddresses = append(emailAddresses, v.(string))
+		}
+		props.EmailAddresses = &emailAddresses
+	}
+
+	if v, ok := d.GetOk("email_account_admins_enabled"); ok {
+		props.EmailAccountAdmins = pointer.To(v.(bool))
+	}
+
+	if v, ok := d.GetOk("retention_days"); ok {
+		props.RetentionDays = pointer.To(int64(v.(int)))
+	}
+
+	if v, ok := d.GetOk("storage_account_access_key"); ok {
+		props.StorageAccountAccessKey = pointer.To(v.(string))
+	}
+
+	if v, ok := d.GetOk("storage_endpoint"); ok {
+		props.StorageEndpoint = pointer.To(v.(string))
+	}
+
+	return &policy
+}
